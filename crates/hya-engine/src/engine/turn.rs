@@ -35,12 +35,6 @@ use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
 pub use route::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
 use route::{core_route_failure_class, provider_route_failure_class};
 
-/// Tool availability hook point: both `ask_user` (`hya/coding-extras`) and
-/// `plan_exit` (`hya/plan`) are now governed by `tool.visibility` native hooks.
-pub(super) fn tool_available(_name: &str, _interaction_available: bool) -> bool {
-    true
-}
-
 struct TurnExecution<'a> {
     router: Arc<ProviderRouter>,
     ran_known_tool: Option<&'a mut bool>,
@@ -1245,7 +1239,6 @@ impl SessionEngine {
             .await;
         let mut tools = filtered_tool_schemas(
             resources,
-            self.interaction.is_available(),
             &visibility,
             depth,
             self.exclusive_tool.as_deref(),

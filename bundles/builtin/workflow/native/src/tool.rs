@@ -6,7 +6,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_proto::{ToolSchema, WorkflowRevision, WorkflowRunId};
 use hya_tool::tool::obj_schema;
-use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError, WorkflowCommand, WorkflowDelivery};
+use hya_tool::{
+    Action, Resource, Tool, ToolCtx, ToolError, WorkflowCommand, WorkflowDelivery, WorkflowPlane,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -155,7 +157,11 @@ impl Tool for WorkflowTool {
                     message: error.to_string(),
                 })?
         } else {
-            ctx.workflows
+            let workflows = ctx
+                .extension::<WorkflowPlane>()
+                .cloned()
+                .unwrap_or_else(WorkflowPlane::disconnected);
+            workflows
                 .execute(ctx.operation, command, ctx.cancel.clone())
                 .await?
         };

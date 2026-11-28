@@ -38,10 +38,9 @@ use hya_tool::extension::{
     ExtensionEvent, projection_reducers, team_projection, workflow_projection,
 };
 use hya_tool::{
-    AgentDef, ArchiveReason, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane,
-    Mode, PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnMember,
-    SpawnerPlane, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, WorkflowRunStatus,
-    WorkflowStagePlan, handle::ArtifactPlane,
+    AgentDef, ArchiveReason, InlineAgent, InteractionPlane, Mode, PermissionModel, PermissionPlane,
+    PermissionRules, Rule, SpawnMember, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
+    WorkflowRunStatus, WorkflowStagePlan,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -444,28 +443,14 @@ fn sidecar_test_ctx(root: &Path) -> ToolCtx {
         Mode::Allow,
     )]));
     let (interaction, _interaction_rx) = InteractionPlane::new();
-    let (spawner, _spawner_rx) = SpawnerPlane::new();
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission: permission.for_session(session),
-        interaction: interaction.for_session(session),
-        spawner,
-        operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected(),
-        lifecycle: LifecyclePlane::disconnected(),
-        session: Some(session),
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        formatter: FormatterPlane::default(),
-        agents: Default::default(),
-        lsp: LspPlane::default(),
-        workdir: root.to_path_buf(),
-        roots: vec![root.to_path_buf()],
-        cancel: Default::default(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+    let mut ctx = ToolCtx::new(
+        root.to_path_buf(),
+        permission.for_session(session),
+        Default::default(),
+    );
+    ctx.interaction = interaction.for_session(session);
+    ctx.session = Some(session);
+    ctx
 }
 
 fn materialized_resource(

@@ -44,7 +44,7 @@ use clap::Parser;
 use hya_app::{
     HeadlessEvaluatorRoute, LoopRunOptions, prepare_goal_driver, prepare_loop, run_headless_lead,
 };
-use hya_engine::completion::render_transcript;
+use hya_engine::render_transcript;
 use hya_proto::{ProjectId, SessionId};
 use hya_runtime_abi::DriverRunOutcome;
 use hya_store::SessionStore;

@@ -69,7 +69,7 @@ mod tests {
     };
     use hya_proto::{
         ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, ModelRef,
-        Projection, SessionId, ToolCallId,
+        Projection, SessionId,
     };
     use hya_runtime_abi::{
         BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
@@ -80,12 +80,9 @@ mod tests {
         SessionListFilter, SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome,
         TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
     };
-    use hya_tool::handle::ArtifactPlane;
     use hya_tool::{
-        Action, AgentDef, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane,
-        Mode, NestedToolPlane, PermissionPlane, PermissionRules, ProjectActivityPlane, Resource,
-        Rule, SkillCatalogEntry, SkillPlane, SpawnerPlane, ToolCtx, ToolError, ToolOperation,
-        WorkflowPlane,
+        Action, AgentDef, Mode, PermissionPlane, PermissionRules, Resource, Rule,
+        SkillCatalogEntry, ToolCtx, ToolError,
     };
     use serde_json::{Value, json};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -422,29 +419,9 @@ mod tests {
 
     fn ctx_with(rules: Vec<Rule>, session: Option<SessionId>) -> ToolCtx {
         let (permission, _rx) = PermissionPlane::new(PermissionRules::new(rules));
-        let (interaction, _irx) = InteractionPlane::new();
-        let (spawner, _srx) = SpawnerPlane::new();
-        ToolCtx {
-            nested: NestedToolPlane::disconnected(),
-            workflows: WorkflowPlane::disconnected(),
-            permission,
-            interaction,
-            spawner,
-            operation: ToolOperation::from_tool_call(ToolCallId::new()),
-            mailbox: MailboxPlane::disconnected(),
-            lifecycle: LifecyclePlane::disconnected(),
-            session,
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            lsp: LspPlane::default(),
-            formatter: FormatterPlane::default(),
-            agents: Default::default(),
-            roots: vec![PathBuf::from(".")],
-            workdir: PathBuf::from("."),
-            cancel: CancellationToken::new(),
-            project_activity: ProjectActivityPlane::disconnected(),
-        }
+        let mut ctx = ToolCtx::new(PathBuf::from("."), permission, CancellationToken::new());
+        ctx.session = session;
+        ctx
     }
 
     async fn serve_bytes(body: &'static [u8], content_type: &'static str) -> String {

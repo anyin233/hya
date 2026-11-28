@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,16 +10,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::agents::AgentDef;
-use crate::formatter::FormatterPlane;
-use crate::handle::{ArtifactPlane, HandleRouter};
+use crate::handle::{ArtifactPlane, HandleRouter, UriSchemaPlane};
 use crate::interaction::InteractionPlane;
-use crate::lsp_plane::LspPlane;
-use crate::mailbox::MailboxPlane;
 use crate::permission::{Invocation, Mode, PermissionPlane};
 use crate::skill::SkillPlane;
-use crate::spawn::SpawnerPlane;
-use crate::workflow_plane::WorkflowPlane;
 
 pub use hya_tool_error::ToolError;
 
@@ -44,43 +38,145 @@ pub struct DuplicateName {
     pub name: String,
 }
 
+/// Parent session identity attached to [`ToolCtx::extensions`] for nested or
+/// subagent turns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct ParentSession(pub SessionId);
+
+/// Lockstep-ABI-safe type-erased plane entry owned behind [`Arc`].
+///
+/// Keyed by [`std::any::type_name`] rather than [`std::any::TypeId`] so host
+/// binaries and native `cdylib` bundles compiled in separate Cargo invocations
+/// (which can produce distinct crate SVH hashes and thus distinct `TypeId`s)
+/// still share extension planes safely across the lockstep ABI v2 boundary.
+struct ErasedPlane {
+    ptr: *mut (),
+    drop_fn: unsafe fn(*mut ()),
+    size: usize,
+    align: usize,
+}
+
+// SAFETY: `ErasedPlane::new` only accepts `T: Send + Sync + 'static`, and
+// lookups only expose shared references `&T` while the `Arc<ErasedPlane>` is alive.
+unsafe impl Send for ErasedPlane {}
+// SAFETY: same as `Send` above (`T: Sync` and no interior mutation through `ptr`).
+unsafe impl Sync for ErasedPlane {}
+
+impl Drop for ErasedPlane {
+    fn drop(&mut self) {
+        // SAFETY: `self.ptr` was created by `Box::into_raw(Box::new(plane))` in
+        // `ErasedPlane::new::<T>`, `self.drop_fn` reconstructs that exact
+        // `Box<T>` in the allocating side's allocator, and `Drop` runs once.
+        unsafe { (self.drop_fn)(self.ptr) };
+    }
+}
+
+impl ErasedPlane {
+    fn new<T: Send + Sync + 'static>(plane: T) -> Self {
+        unsafe fn drop_erased<T>(ptr: *mut ()) {
+            // SAFETY: `ptr` was produced by `Box::into_raw(Box::new::<T>(...))`.
+            unsafe { drop(Box::from_raw(ptr.cast::<T>())) };
+        }
+        Self {
+            ptr: Box::into_raw(Box::new(plane)).cast::<()>(),
+            drop_fn: drop_erased::<T>,
+            size: std::mem::size_of::<T>(),
+            align: std::mem::align_of::<T>(),
+        }
+    }
+
+    fn downcast_ref<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        if self.size != std::mem::size_of::<T>() || self.align != std::mem::align_of::<T>() {
+            return None;
+        }
+        // SAFETY: the caller already matched `std::any::type_name::<T>()` under
+        // the lockstep ABI and verified `size` and `align`; `self.ptr` remains
+        // valid and immutable for the borrow lifetime of `&self`.
+        Some(unsafe { &*self.ptr.cast::<T>() })
+    }
+}
+
+/// Type-indexed container of optional domain planes attached to [`ToolCtx`].
+///
+/// Core `hya-bare` passes an empty [`ExtensionPlanes`]. Extension bundles and
+/// host adapters attach domain planes (such as [`crate::SpawnerPlane`],
+/// [`crate::MailboxPlane`], [`crate::LifecyclePlane`], [`crate::WorkflowPlane`],
+/// [`crate::ProjectActivityPlane`], [`crate::LspPlane`], [`crate::FormatterPlane`],
+/// agent rosters, or [`ParentSession`]) without coupling [`ToolCtx`] to domain
+/// subsystems (ADR-0039).
+#[derive(Clone, Default)]
+pub struct ExtensionPlanes {
+    planes: Option<Arc<BTreeMap<String, Arc<ErasedPlane>>>>,
+}
+
+impl std::fmt::Debug for ExtensionPlanes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtensionPlanes")
+            .field("count", &self.len())
+            .finish()
+    }
+}
+
+impl ExtensionPlanes {
+    /// Create an empty extension plane set.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of registered extension planes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.planes.as_ref().map_or(0, |map| map.len())
+    }
+
+    /// Whether no extension planes are attached.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Insert or replace an extension plane of type `T`.
+    pub fn insert<T: Send + Sync + 'static>(&mut self, plane: T) {
+        let map = Arc::make_mut(self.planes.get_or_insert_with(|| Arc::new(BTreeMap::new())));
+        map.insert(
+            std::any::type_name::<T>().to_string(),
+            Arc::new(ErasedPlane::new(plane)),
+        );
+    }
+
+    /// Builder-style variant of [`Self::insert`].
+    #[must_use]
+    pub fn with<T: Send + Sync + 'static>(mut self, plane: T) -> Self {
+        self.insert(plane);
+        self
+    }
+
+    /// Borrow an attached extension plane of type `T`, if present.
+    #[must_use]
+    pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.planes
+            .as_ref()?
+            .get(std::any::type_name::<T>())
+            .and_then(|entry| entry.downcast_ref::<T>())
+    }
+
+    /// Whether an extension plane of type `T` is attached.
+    #[must_use]
+    pub fn contains<T: Send + Sync + 'static>(&self) -> bool {
+        self.planes
+            .as_ref()
+            .is_some_and(|map| map.contains_key(std::any::type_name::<T>()))
+    }
+}
+
 /// Per-call runtime context passed to every [`Tool::execute`].
 ///
-/// Planes are session-scoped services; tools assert permissions and call planes
-/// without holding the session engine itself.
+/// Contains only single-agent v2 core planes plus [`ExtensionPlanes`] for
+/// optional bundle/domain planes (ADR-0039); tools assert permissions and call
+/// planes without holding the session engine itself.
 #[derive(Clone)]
 pub struct ToolCtx {
-    /// Call-scoped permission plane (after invocation authorization).
-    pub permission: PermissionPlane,
-    /// Channel for human questions (`question` / `ask_user`).
-    pub interaction: InteractionPlane,
-    /// Subagent spawn plane for the `task` tool.
-    pub spawner: SpawnerPlane,
-    /// User-authored workflow plane for the `workflow` tool (disconnected
-    /// unless a workflow host is wired; see `workflow_plane`).
-    pub workflows: WorkflowPlane,
-    /// Persisted operation identity for this tool call.
-    pub operation: ToolOperation,
-    /// Team mailbox plane (disconnected outside a running team).
-    pub mailbox: MailboxPlane,
-    /// Read-only activity query for sessions sharing the caller's Project.
-    pub project_activity: crate::ProjectActivityPlane,
-    /// Subagent lifecycle plane for `report`/`archive`/`wait` (ADR-0015).
-    pub lifecycle: crate::lifecycle::LifecyclePlane,
-    /// Active session id when the tool runs inside a session.
-    pub session: Option<SessionId>,
-    /// Parent session id for nested/subagent turns, when applicable.
-    pub parent_session: Option<SessionId>,
-    /// Skill catalog plane for the `skill` tool.
-    pub skills: SkillPlane,
-    /// Post-processing chain applied when an `artifact://` handle is retrieved.
-    pub artifacts: ArtifactPlane,
-    /// Immutable caller-reachable agent roster for spawn authorization and listing.
-    pub agents: Arc<[AgentDef]>,
-    /// Language-server plane for `lsp` and post-edit diagnostics.
-    pub lsp: LspPlane,
-    /// External formatter plane for write/edit/patch post-processing.
-    pub formatter: FormatterPlane,
     /// Session working directory used for path resolution.
     pub workdir: PathBuf,
     /// Workspace roots of the session (ADR-0024), resolved fresh at each
@@ -91,12 +187,62 @@ pub struct ToolCtx {
     pub roots: Vec<PathBuf>,
     /// Cancellation token for cooperative abort.
     pub cancel: CancellationToken,
+    /// Active session id when the tool runs inside a session.
+    pub session: Option<SessionId>,
+    /// Persisted operation identity for this tool call.
+    pub operation: ToolOperation,
+    /// Call-scoped permission plane (after invocation authorization).
+    pub permission: PermissionPlane,
+    /// Channel for human questions (`question` / `ask_user` / `plan_exit`).
+    pub interaction: InteractionPlane,
+    /// Skill catalog plane for the `skill` tool.
+    pub skills: SkillPlane,
+    /// Spilled tool-output artifact store (`artifact://`).
+    pub artifacts: ArtifactPlane,
+    /// Dynamic URI scheme handlers registered on this context's handle router.
+    pub schemas: UriSchemaPlane,
     /// The calling agent's other tools, callable as part of this call
     /// (disconnected inside a nested call; see [`crate::nested`]).
     pub nested: crate::NestedToolPlane,
+    /// Optional domain planes attached by extension bundles and host adapters.
+    pub extensions: ExtensionPlanes,
 }
 
 impl ToolCtx {
+    /// Build a minimal single-agent [`ToolCtx`] with disconnected optional
+    /// planes and empty [`ExtensionPlanes`].
+    #[must_use]
+    pub fn new(workdir: PathBuf, permission: PermissionPlane, cancel: CancellationToken) -> Self {
+        let roots = vec![workdir.clone()];
+        Self {
+            workdir,
+            roots,
+            cancel,
+            session: None,
+            operation: ToolOperation::from_tool_call(ToolCallId::new()),
+            permission,
+            interaction: InteractionPlane::new().0,
+            skills: SkillPlane::default(),
+            artifacts: ArtifactPlane,
+            schemas: UriSchemaPlane::default(),
+            nested: crate::NestedToolPlane::disconnected(),
+            extensions: ExtensionPlanes::default(),
+        }
+    }
+
+    /// Attach or replace a typed domain plane in [`Self::extensions`].
+    #[must_use]
+    pub fn with_extension<T: Send + Sync + 'static>(mut self, plane: T) -> Self {
+        self.extensions.insert(plane);
+        self
+    }
+
+    /// Borrow a typed domain plane from [`Self::extensions`], if attached.
+    #[must_use]
+    pub fn extension<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.extensions.get::<T>()
+    }
+
     /// Internal resource URLs reachable from this call.
     ///
     /// Built from the call's own `workdir` and skill catalog rather than stored
@@ -112,7 +258,7 @@ impl ToolCtx {
             .with_skills(self.skills.clone())
             .with_artifacts(self.artifacts.store(&self.workdir))
             .with_actor_claim(self.operation.actor_claim())
-            .with_uri_handlers(Arc::clone(self.artifacts.uri_handlers()))
+            .with_uri_handlers(Arc::clone(self.schemas.uri_handlers()))
     }
 
     /// Register a dynamic URI scheme handler on this context's handle router.
@@ -125,7 +271,7 @@ impl ToolCtx {
         mut self,
         handler: Arc<dyn crate::handle::DynamicUriHandler>,
     ) -> Result<Self, crate::handle::SchemeRegistryError> {
-        self.artifacts = self.artifacts.with_uri_handler(handler)?;
+        self.schemas = self.schemas.with_uri_handler(handler)?;
         Ok(self)
     }
 }
@@ -323,6 +469,57 @@ mod result_policy_tests {
         };
         assert_eq!(named.name(), "alias");
         assert_eq!(named.result_policy(), ToolResultPolicy::CodingWithDiff);
+    }
+
+    #[test]
+    fn extension_planes_insert_get_replace_and_clone() {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct TestPlane(&'static str);
+
+        let mut planes = ExtensionPlanes::new();
+        assert!(planes.is_empty());
+        assert_eq!(planes.len(), 0);
+        assert!(!planes.contains::<TestPlane>());
+        assert_eq!(planes.get::<TestPlane>(), None);
+
+        planes.insert(TestPlane("first"));
+        assert!(!planes.is_empty());
+        assert_eq!(planes.len(), 1);
+        assert!(planes.contains::<TestPlane>());
+        assert_eq!(planes.get::<TestPlane>(), Some(&TestPlane("first")));
+
+        let cloned = planes.clone();
+        planes.insert(TestPlane("second"));
+        assert_eq!(planes.get::<TestPlane>(), Some(&TestPlane("second")));
+        assert_eq!(cloned.get::<TestPlane>(), Some(&TestPlane("first")));
+
+        let session = SessionId::new();
+        let (permission, _rx) = PermissionPlane::new(crate::PermissionRules::default());
+        let ctx = ToolCtx::new(PathBuf::from("."), permission, CancellationToken::new())
+            .with_extension(ParentSession(session))
+            .with_extension(TestPlane("ctx"));
+        assert_eq!(
+            ctx.extension::<ParentSession>(),
+            Some(&ParentSession(session))
+        );
+        assert_eq!(ctx.extension::<TestPlane>(), Some(&TestPlane("ctx")));
+
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        struct DropCounter(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        {
+            let p1 = ExtensionPlanes::new().with(DropCounter(Arc::clone(&drops)));
+            let p2 = p1.clone();
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+            drop(p1);
+            assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+            drop(p2);
+        }
+        assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
 

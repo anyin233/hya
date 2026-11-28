@@ -166,42 +166,56 @@ impl TurnToolGate<'_> {
                             let channel_policy = crate::channel_policy::from_binding(binding)
                                 .map_err(CoreError::bundle)?
                                 .snapshot_for(live_agent.name.as_str());
+                            let mut extensions = hya_tool::ExtensionPlanes::new()
+                                .with(
+                                    engine
+                                        .spawner
+                                        .for_binding(binding)
+                                        .for_session_with_agents_and_guidance(
+                                            session,
+                                            agents.clone(),
+                                            guidance.clone(),
+                                        ),
+                                )
+                                .with(
+                                    engine
+                                        .mailbox
+                                        .for_session_with_actor(session, actor_claim.copied())
+                                        .with_channel_policy(channel_policy),
+                                )
+                                .with(
+                                    engine
+                                        .lifecycle
+                                        .for_session_with_actor(session, actor_claim.copied())
+                                        .with_channel_policy(channel_policy)
+                                        .with_report_latch(report_latch.clone())
+                                        .with_wait_ack(wait_ack.clone()),
+                                )
+                                .with(engine.project_activity.for_session(session))
+                                .with(agents.clone());
+                            if let Some(parent) = parent_session {
+                                extensions.insert(hya_tool::ParentSession(parent));
+                            }
+                            if engine.lsp.is_configured() {
+                                extensions.insert(engine.lsp.clone());
+                            }
+                            if engine.formatter.is_configured() {
+                                extensions.insert(engine.formatter.clone());
+                            }
                             let mut ctx = ToolCtx {
-                                nested: hya_tool::NestedToolPlane::disconnected(),
-                                workflows: hya_tool::WorkflowPlane::disconnected(),
-                                permission,
-                                interaction: engine.interaction.for_session(session),
-                                spawner: engine
-                                    .spawner
-                                    .for_binding(binding)
-                                    .for_session_with_agents_and_guidance(
-                                        session,
-                                        agents.clone(),
-                                        guidance.clone(),
-                                    ),
-                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
-                                    .with_actor_claim(actor_claim.copied()),
-                                mailbox: engine
-                                    .mailbox
-                                    .for_session_with_actor(session, actor_claim.copied())
-                                    .with_channel_policy(channel_policy),
-                                lifecycle: engine
-                                    .lifecycle
-                                    .for_session_with_actor(session, actor_claim.copied())
-                                    .with_channel_policy(channel_policy)
-                                    .with_report_latch(report_latch.clone())
-                                    .with_wait_ack(wait_ack.clone()),
-                                project_activity: engine.project_activity.for_session(session),
-                                session: Some(session),
-                                parent_session,
-                                skills: resources.skill_plane(),
-                                artifacts: engine.artifacts.clone(),
-                                agents: agents.clone(),
-                                lsp: engine.lsp.clone(),
-                                formatter: engine.formatter.clone(),
                                 workdir: binding.workdir().to_path_buf(),
                                 roots: workspace.roots.clone(),
                                 cancel: cancel.clone(),
+                                session: Some(session),
+                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
+                                    .with_actor_claim(actor_claim.copied()),
+                                permission,
+                                interaction: engine.interaction.for_session(session),
+                                skills: resources.skill_plane(),
+                                artifacts: engine.artifacts,
+                                schemas: engine.schemas.clone(),
+                                nested: hya_tool::NestedToolPlane::disconnected(),
+                                extensions,
                             };
                             let visibility = engine
                                 .tool_visibility_outcome(session, Some(&live_agent.name), resources)

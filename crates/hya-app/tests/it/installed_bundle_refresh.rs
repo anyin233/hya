@@ -35,27 +35,13 @@ fn temp_path(suffix: &str) -> PathBuf {
 }
 
 fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        permission: PermissionPlane::new(PermissionRules::default()).0,
-        interaction: hya_tool::InteractionPlane::new().0,
-        spawner: hya_tool::SpawnerPlane::new().0,
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: Some(hya_proto::SessionId::new()),
-        parent_session: None,
-        skills: hya_tool::SkillPlane::default(),
-        artifacts: hya_tool::handle::ArtifactPlane::default(),
-        lsp: hya_tool::LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        agents: Default::default(),
-        workdir: workdir.to_path_buf(),
-        roots: vec![workdir.to_path_buf()],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+    let mut ctx = ToolCtx::new(
+        workdir.to_path_buf(),
+        PermissionPlane::new(PermissionRules::default()).0,
+        tokio_util::sync::CancellationToken::new(),
+    );
+    ctx.session = Some(hya_proto::SessionId::new());
+    ctx
 }
 
 async fn install(

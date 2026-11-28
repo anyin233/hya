@@ -55,27 +55,14 @@ async fn mail_auth_non_member_rejected_across_engine_plane_and_send_tool() {
     );
 
     let (permission, _) = PermissionPlane::new(PermissionRules::default());
-    let ctx = hya_tool::ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
+    let mut ctx = hya_tool::ToolCtx::new(
+        PathBuf::from("."),
         permission,
-        interaction: hya_tool::InteractionPlane::new().0,
-        spawner: hya_tool::SpawnerPlane::new().0,
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: sp,
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: Some(o.lead_2.session),
-        parent_session: Some(o.root),
-        skills: Default::default(),
-        artifacts: Default::default(),
-        agents: Default::default(),
-        lsp: Default::default(),
-        formatter: Default::default(),
-        workdir: PathBuf::from("."),
-        roots: vec![PathBuf::from(".")],
-        cancel: tokio_util::sync::CancellationToken::new(),
-    };
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .with_extension(sp)
+    .with_extension(hya_tool::ParentSession(o.root));
+    ctx.session = Some(o.lead_2.session);
     let tool_res = hya_tool_loader::builtins()
         .get("send")
         .unwrap()

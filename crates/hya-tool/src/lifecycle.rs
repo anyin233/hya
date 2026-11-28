@@ -227,7 +227,11 @@ impl Tool for WaitTool {
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let spec = WaitSpec::parse(&input, self.wake_on_mail)?;
-        let outcome = ctx.lifecycle.wait(spec, &ctx.cancel).await?;
+        let lifecycle = ctx
+            .extension::<LifecyclePlane>()
+            .cloned()
+            .unwrap_or_else(LifecyclePlane::disconnected);
+        let outcome = lifecycle.wait(spec, &ctx.cancel).await?;
         Ok(outcome.to_tool_result())
     }
 }

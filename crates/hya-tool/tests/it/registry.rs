@@ -249,8 +249,8 @@ fn builtin_bundle_ownership_and_removed_kill_tool() {
 async fn requested_mail_wake(registry: &ToolRegistry) -> bool {
     let tool = registry.get("wait").expect("wait registered");
     let (plane, mut rx) = LifecyclePlane::new();
-    let mut ctx = ctx_with(vec![], std::path::PathBuf::from("."));
-    ctx.lifecycle = plane.for_session(SessionId::new());
+    let ctx = ctx_with(vec![], std::path::PathBuf::from("."))
+        .with_extension(plane.for_session(SessionId::new()));
     let call = tokio::spawn(async move { tool.execute(&ctx, json!({"timeout_secs": 5})).await });
     let Some(LifecycleRequest::Wait { spec, reply, .. }) = rx.recv().await else {
         panic!("wait must send lifecycle wait request");

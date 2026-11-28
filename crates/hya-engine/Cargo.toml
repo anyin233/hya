@@ -42,7 +42,6 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }
-libc = { workspace = true }
 
 [dev-dependencies]
 hya-provider = { workspace = true, features = ["test-support"] }
@@ -50,4 +49,5 @@ hya-store = { workspace = true, features = ["lifecycle-bench"] }
 hya-hashline = { workspace = true }
 hya-coding-extras = { workspace = true }
 hya-network = { workspace = true }
+libc = { workspace = true }
 sqlx = { workspace = true }

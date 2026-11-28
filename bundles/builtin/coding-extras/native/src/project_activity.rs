@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
-use hya_tool::{ProjectActivityRequest, Tool, ToolCtx, ToolError};
+use hya_tool::{ProjectActivityPlane, ProjectActivityRequest, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -39,8 +39,11 @@ impl Tool for ProjectActivityTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: Input =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let result = ctx
-            .project_activity
+        let plane = ctx
+            .extension::<ProjectActivityPlane>()
+            .cloned()
+            .unwrap_or_else(ProjectActivityPlane::disconnected);
+        let result = plane
             .query(ProjectActivityRequest {
                 since_ms: input.since_ms,
                 limit: input.limit,

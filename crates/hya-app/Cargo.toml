@@ -30,7 +30,6 @@ hya-coding-extras = { workspace = true }
 hya-workflow-bundle = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
-hya-api = { workspace = true }
 hya-proto = { workspace = true }
 hya-child-io = { workspace = true }
 hya-mcp = { workspace = true }
@@ -56,6 +55,7 @@ futures = { workspace = true }
 semver = "1"
 
 [dev-dependencies]
+hya-api = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 libsqlite3-sys = "=0.30.1"
 tonic = { workspace = true }

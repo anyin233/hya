@@ -82,6 +82,7 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(std::mem::size_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(std::mem::align_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(include_bytes!("tool.rs"));
+    hash.update(include_bytes!("handle/plane.rs"));
     hash.update(include_bytes!("deadline.rs"));
     hash.update(include_bytes!("lifecycle.rs"));
     hash.update(include_bytes!("skill.rs"));

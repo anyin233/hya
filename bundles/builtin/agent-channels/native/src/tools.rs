@@ -6,7 +6,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_proto::{ChannelKind, MailEndpoint, MailKind, ToolSchema};
 use hya_tool::tool::obj_schema;
-use hya_tool::{MailboxError, ReportOutcome, Tool, ToolCtx, ToolError};
+use hya_tool::{
+    LifecyclePlane, MailboxError, MailboxPlane, ReportOutcome, Tool, ToolCtx, ToolError,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -96,11 +98,15 @@ impl Tool for SendTool {
         if input.body.trim().is_empty() {
             return Err(ToolError::Input("message body is empty".to_string()));
         }
+        let mailbox = ctx
+            .extension::<MailboxPlane>()
+            .cloned()
+            .unwrap_or_else(MailboxPlane::disconnected);
         let receipt = if let Ok(runtime) = self.service.runtime() {
             let session = ctx.session.ok_or_else(|| {
                 ToolError::Other("mailbox is only available inside a running team".to_string())
             })?;
-            let policy = ctx.mailbox.channel_policy().ok_or_else(|| {
+            let policy = mailbox.channel_policy().ok_or_else(|| {
                 ToolError::Input("channel policy snapshot missing for admitted send".to_string())
             })?;
             let claim = ctx.operation.actor_claim();
@@ -129,12 +135,8 @@ impl Tool for SendTool {
             }
         } else {
             match send_endpoint(&input.channel) {
-                Some(endpoint) => {
-                    ctx.mailbox
-                        .send(endpoint, MailKind::Message, input.body)
-                        .await
-                }
-                None => ctx.mailbox.send_default(input.body).await,
+                Some(endpoint) => mailbox.send(endpoint, MailKind::Message, input.body).await,
+                None => mailbox.send_default(input.body).await,
             }
             .map_err(channel_error)?
         };
@@ -205,8 +207,12 @@ impl Tool for ListChannelTool {
                 .map_err(host_error_to_tool_error)?;
             (rows, team)
         } else {
-            let rows = ctx.mailbox.list_channels().await.map_err(channel_error)?;
-            let team = ctx.mailbox.team_status().await.map_err(channel_error)?;
+            let mailbox = ctx
+                .extension::<MailboxPlane>()
+                .cloned()
+                .unwrap_or_else(MailboxPlane::disconnected);
+            let rows = mailbox.list_channels().await.map_err(channel_error)?;
+            let team = mailbox.team_status().await.map_err(channel_error)?;
             (rows, team)
         };
         let rendered: Vec<String> = rows
@@ -328,7 +334,11 @@ impl Tool for ReportTool {
             Some("failed") => ReportOutcome::Failed,
             _ => ReportOutcome::Done,
         };
-        ctx.lifecycle.report(outcome, result).await?;
+        let lifecycle = ctx
+            .extension::<LifecyclePlane>()
+            .cloned()
+            .unwrap_or_else(LifecyclePlane::disconnected);
+        lifecycle.report(outcome, result).await?;
         Ok(json!({
             "title": "Report submitted",
             "output": "Report submitted; it takes effect when this turn ends. If new mail or a live subagent prevents it, you will receive a harness notice and must report again. After archive, mail from your parent can wake you for a new episode with your state handoff.",

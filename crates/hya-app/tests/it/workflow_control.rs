@@ -21,11 +21,9 @@ use hya_engine::{
 use hya_proto::{SessionId, ToolCallId, WorkflowAvailability, WorkflowRunId};
 use hya_store::SessionStore;
 use hya_tool::extension::ExtensionEvent;
-use hya_tool::handle::ArtifactPlane;
 use hya_tool::{
-    FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, NestedToolPlane,
-    PermissionModel, PermissionPlane, PermissionRules, ProjectActivityPlane, SkillPlane,
-    SpawnerPlane, ToolCtx, ToolOperation, WorkflowPlane, WorkflowProjection, WorkflowRunStatus,
+    InteractionPlane, PermissionModel, PermissionPlane, PermissionRules, ToolCtx, ToolOperation,
+    WorkflowProjection, WorkflowRunStatus,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -298,28 +296,15 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
             InvocationPolicy::default().with_model(PermissionModel::Danger),
         );
         let (interaction, _interaction_rx) = InteractionPlane::new();
-        let (spawner, _spawner_rx) = SpawnerPlane::new();
-        ToolCtx {
-            permission: permission.for_session(session),
-            interaction: interaction.for_session(session),
-            spawner,
-            workflows: WorkflowPlane::disconnected(),
-            operation: op,
-            mailbox: MailboxPlane::disconnected(),
-            project_activity: ProjectActivityPlane::disconnected(),
-            lifecycle: LifecyclePlane::disconnected(),
-            session: Some(session),
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            agents: Default::default(),
-            lsp: LspPlane::default(),
-            formatter: FormatterPlane::default(),
-            workdir: root.clone(),
-            roots: vec![root.clone()],
-            cancel: CancellationToken::new(),
-            nested: NestedToolPlane::disconnected(),
-        }
+        let mut ctx = ToolCtx::new(
+            root.clone(),
+            permission.for_session(session),
+            CancellationToken::new(),
+        );
+        ctx.interaction = interaction.for_session(session);
+        ctx.operation = op;
+        ctx.session = Some(session);
+        ctx
     };
 
     let input = json!({

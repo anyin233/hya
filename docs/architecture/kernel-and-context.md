@@ -72,7 +72,7 @@ Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec
   - `todo`: `{ "ops": Array<Add | Edit | Status | Remove> }`
   - `rewrite`: `{ "summary": string }`
 - **Dynamic URI scheme dispatch (`HandleRouter` + `UriSchemaHandler`):**
-  - `ToolCtx::handles()` returns a `hya_tool::handle::HandleRouter` resolving internal `artifact://`, `skill://`, and `local://` handles (with projections `?lines=N[-M]`, `?head=N`, `?tail=N`, `?grep=<pattern>`, `?q=<.path>`).
+  - `ToolCtx::handles()` returns a `hya_tool::handle::HandleRouter` resolving internal `artifact://`, `skill://`, and `local://` handles (with projections `?lines=N[-M]`, `?head=N`, `?tail=N`, `?grep=<pattern>`, `?q=<.path>`) plus any dynamic URI scheme handlers carried on `ToolCtx::schemas` (`hya_tool::handle::UriSchemaPlane`).
   - Bundles implementing ABI v2 `hya_runtime_abi::UriSchemaHandler` plug into `HandleRouter` via `hya_runtime_abi::adapt_uri_schema_handler(handler, runtime)` and `ToolCtx::with_uri_handler(...)` (or `HandleRouter::with_uri_handler(...)`). Internal schemes (`artifact`, `skill`, `local`) are protected (`SchemeRegistryError::ProtectedScheme`), and `hya-core` itself carries zero hardcoded domain schemes (such as `channel://`).
   - Example:
     ```rust

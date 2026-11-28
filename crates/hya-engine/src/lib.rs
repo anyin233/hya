@@ -6,8 +6,8 @@
 //!   compact/summarize, and emit canonical events through the store and bus.
 //! - **[`EventBus`]** — in-process broadcast of [`hya_proto::Envelope`] for SSE/TUI.
 //! - **Extension traits** implemented by the app/plugin layers:
-//!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`], goal/loop
-//!   gates and verifiers, and [`RuntimeSourceOwner`].
+//!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`],
+//!   and [`RuntimeSourceOwner`].
 //! - **Team/subagent orchestration** — admission, governors, resident supervisors,
 //!   and mailbox delivery over the same event-sourced log.
 //!
@@ -41,8 +41,6 @@ pub mod category;
 pub mod channel_policy;
 /// Combined compaction configuration and handoff types.
 pub mod compaction;
-/// Transitional iteration primitives for loop mode and workflow loop stages.
-pub mod completion;
 /// Harness coordination tools injected into every agent view at startup.
 pub(crate) use hya_agent_channels::coordination;
 /// Effective reasoning effort resolution shared by request and display layers.
@@ -104,7 +102,6 @@ pub use category::{
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::CompactionConfig;
-pub use completion::{GateOutcome, IterationDriver, IterationGate, RunOutcome, SafetyCaps};
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{
@@ -154,3 +151,23 @@ pub use terminal_handoff::{
 pub use tokens::{
     CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
 };
+
+/// Render a simple role-tagged transcript string from a session projection.
+#[must_use]
+pub fn render_transcript(projection: &hya_proto::Projection) -> String {
+    let mut s = String::new();
+    for m in &projection.session.messages {
+        let mut text = String::new();
+        for p in &m.parts {
+            match p {
+                hya_proto::PartProjection::Text { text: t, .. } => text.push_str(t),
+                hya_proto::PartProjection::Tool { name, state, .. } => {
+                    text.push_str(&format!("[tool:{name}:{state:?}]"));
+                }
+                hya_proto::PartProjection::Reasoning { .. } => {}
+            }
+        }
+        s.push_str(&format!("[{:?}] {}\n", m.role, text));
+    }
+    s
+}

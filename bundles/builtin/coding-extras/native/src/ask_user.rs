@@ -221,36 +221,15 @@ fn option_labels(question: &QuestionInput) -> Vec<String> {
 mod tests {
     use super::*;
     use hya_proto::SessionId;
-    use hya_tool::{
-        InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane, SpawnerPlane,
-        handle::ArtifactPlane,
-    };
+    use hya_tool::{InteractionPlane, PermissionPlane, PermissionRules};
     use std::path::PathBuf;
     use tokio_util::sync::CancellationToken;
     fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
         let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-        let (spawner, _srx) = SpawnerPlane::new();
-        ToolCtx {
-            nested: hya_tool::NestedToolPlane::disconnected(),
-            workflows: hya_tool::WorkflowPlane::disconnected(),
-            permission,
-            interaction: interaction.for_session(session),
-            spawner,
-            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            mailbox: hya_tool::MailboxPlane::disconnected(),
-            lifecycle: hya_tool::LifecyclePlane::disconnected(),
-            session: Some(session),
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            lsp: LspPlane::default(),
-            formatter: hya_tool::FormatterPlane::default(),
-            agents: Default::default(),
-            workdir: PathBuf::from("."),
-            roots: vec![PathBuf::from(".")],
-            cancel: CancellationToken::new(),
-            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-        }
+        let mut ctx = ToolCtx::new(PathBuf::from("."), permission, CancellationToken::new());
+        ctx.interaction = interaction.for_session(session);
+        ctx.session = Some(session);
+        ctx
     }
     #[tokio::test]
     async fn cancelled_question_is_an_error() {

@@ -238,7 +238,7 @@ impl HostCapabilityHandler for BundleCapability {
                     Grant::ToolCall(ctx) => json!({
                         "request": "tool_call",
                         "session": ctx.session,
-                        "parent_session": ctx.parent_session,
+                        "parent_session": ctx.extension::<hya_tool::ParentSession>().map(|parent| parent.0),
                         "workdir": ctx.workdir,
                         "source_tool_call_id": ctx.operation.source_tool_call_id(),
                         "operation_id": ctx.operation.operation_id(),

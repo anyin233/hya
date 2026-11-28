@@ -319,29 +319,11 @@ for line in sys.stdin:
             hya_tool::PermissionPlane::new(hya_tool::PermissionRules::new(vec![
                 hya_tool::Rule::new(hya_tool::Action::Mcp, resource, hya_tool::Mode::Allow),
             ]));
-        let (interaction, _irx) = hya_tool::InteractionPlane::new();
-        let (spawner, _srx) = hya_tool::SpawnerPlane::new();
-        hya_tool::ToolCtx {
-            nested: hya_tool::NestedToolPlane::disconnected(),
+        hya_tool::ToolCtx::new(
+            std::path::PathBuf::from("."),
             permission,
-            interaction,
-            spawner,
-            workflows: hya_tool::WorkflowPlane::disconnected(),
-            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-            mailbox: hya_tool::MailboxPlane::disconnected(),
-            lifecycle: hya_tool::LifecyclePlane::disconnected(),
-            project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-            session: None,
-            parent_session: None,
-            skills: hya_tool::SkillPlane::default(),
-            artifacts: hya_tool::handle::ArtifactPlane::default(),
-            lsp: hya_tool::LspPlane::default(),
-            formatter: hya_tool::FormatterPlane::default(),
-            agents: Default::default(),
-            workdir: std::path::PathBuf::from("."),
-            roots: vec![std::path::PathBuf::from(".")],
-            cancel: CancellationToken::new(),
-        }
+            CancellationToken::new(),
+        )
     }
 
     #[tokio::test]

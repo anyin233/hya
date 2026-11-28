@@ -255,11 +255,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::BuiltinBundleProfile;
-    use hya_proto::{SessionId, ToolCallId, ToolName, ToolSchema};
+    use hya_proto::{SessionId, ToolName, ToolSchema};
     use hya_tool::{
-        InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, NestedToolPlane, NestedTools,
-        PermissionModel, PermissionPlane, PermissionRules, ProjectActivityPlane, SkillPlane,
-        SpawnerPlane, ToolCtx, ToolError, ToolOperation, WorkflowPlane, handle::ArtifactPlane,
+        NestedToolPlane, NestedTools, PermissionModel, PermissionPlane, PermissionRules, ToolCtx,
+        ToolError,
     };
     use serde_json::{Value, json};
     use std::sync::Mutex;
@@ -325,27 +324,10 @@ mod tests {
         let permission = PermissionPlane::new(PermissionRules::new(Vec::new()))
             .0
             .with_invocation_model(PermissionModel::Danger);
-        ToolCtx {
-            nested: NestedToolPlane::new(nested),
-            workflows: WorkflowPlane::disconnected(),
-            permission,
-            interaction: InteractionPlane::new().0,
-            spawner: SpawnerPlane::new().0,
-            operation: ToolOperation::from_tool_call(ToolCallId::new()),
-            mailbox: MailboxPlane::disconnected(),
-            lifecycle: LifecyclePlane::disconnected(),
-            session: Some(SessionId::new()),
-            parent_session: None,
-            skills: SkillPlane::default(),
-            artifacts: ArtifactPlane::default(),
-            agents: Arc::default(),
-            lsp: LspPlane::default(),
-            formatter: hya_tool::FormatterPlane::default(),
-            workdir: workdir.clone(),
-            roots: vec![workdir],
-            cancel: CancellationToken::new(),
-            project_activity: ProjectActivityPlane::disconnected(),
-        }
+        let mut ctx = ToolCtx::new(workdir, permission, CancellationToken::new());
+        ctx.nested = NestedToolPlane::new(nested);
+        ctx.session = Some(SessionId::new());
+        ctx
     }
 
     fn tempdir(label: &str) -> PathBuf {

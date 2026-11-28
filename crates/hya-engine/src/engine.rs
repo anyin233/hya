@@ -5,7 +5,7 @@ use std::time::Duration;
 use hya_proto::{MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
-use hya_tool::handle::ArtifactPlane;
+use hya_tool::handle::{ArtifactPlane, UriSchemaPlane};
 use hya_tool::{
     FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, PermissionPlane,
     ResolvedTool, ToolError,
@@ -176,8 +176,10 @@ pub struct SessionEngine {
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
     handle_namer: Arc<crate::handle_naming::HandleNamer>,
-    /// User-registered `artifact://` post-processing, carried to every tool call.
+    /// Spilled tool-output artifact store carried to every tool call.
     artifacts: ArtifactPlane,
+    /// Dynamic URI scheme handlers carried to every tool call.
+    schemas: UriSchemaPlane,
     formatter: FormatterPlane,
     lsp: LspPlane,
     bus: EventBus,
@@ -238,7 +240,8 @@ impl Clone for SessionEngine {
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
-            artifacts: self.artifacts.clone(),
+            artifacts: self.artifacts,
+            schemas: self.schemas.clone(),
             formatter: self.formatter.clone(),
             lsp: self.lsp.clone(),
             bus: self.bus.clone(),
@@ -414,7 +417,8 @@ impl SessionEngine {
         let reviver = Arc::new(RwLock::new(None));
         let runtime_owner = hya_proto::OwnerRunId::new();
         let turn_gate = Arc::new(turn_gate::TurnGate::default());
-        let mut artifacts = ArtifactPlane::default();
+        let artifacts = ArtifactPlane;
+        let mut schemas = UriSchemaPlane::default();
 
         if use_tool_family_prompts {
             let channels_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
@@ -439,14 +443,14 @@ impl SessionEngine {
                 hya_agent_channels::ChannelUriSchemaHandler::new(channels_service),
             );
             if let Ok(updated) =
-                artifacts
+                schemas
                     .clone()
                     .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
                         channel_uri,
                         Some(Arc::clone(&channels_runtime)),
                     ))
             {
-                artifacts = updated;
+                schemas = updated;
             }
             store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
                 inner: Arc::new(hya_agent_channels::AgentChannelsProjectionReducer),
@@ -498,6 +502,7 @@ impl SessionEngine {
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             artifacts,
+            schemas,
             formatter,
             lsp,
             bus,
@@ -643,7 +648,7 @@ impl SessionEngine {
         self
     }
 
-    /// Replace dynamic URI scheme handlers on this engine's [`ArtifactPlane`]
+    /// Replace dynamic URI scheme handlers on this engine's [`UriSchemaPlane`]
     /// with the given ABI v2 [`hya_runtime_abi::UriSchemaHandler`] list.
     ///
     /// Passing an empty list clears any default URI handlers (e.g. when
@@ -654,18 +659,18 @@ impl SessionEngine {
         handlers: Vec<Arc<dyn hya_runtime_abi::UriSchemaHandler>>,
         runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
     ) -> Self {
-        let mut artifacts = self.artifacts.clear_uri_handlers();
+        let mut schemas = self.schemas.clear_uri_handlers();
         for handler in handlers {
             let adapted =
                 hya_runtime_abi::adapt_uri_schema_handler(handler, Some(Arc::clone(&runtime)));
-            match artifacts.clone().with_uri_handler(adapted) {
-                Ok(updated) => artifacts = updated,
+            match schemas.clone().with_uri_handler(adapted) {
+                Ok(updated) => schemas = updated,
                 Err(error) => {
                     tracing::warn!(%error, "skipping duplicate or protected ABI v2 URI handler");
                 }
             }
         }
-        self.artifacts = artifacts;
+        self.schemas = schemas;
         self
     }
 

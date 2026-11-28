@@ -60,10 +60,6 @@ impl NestedTools for TurnNestedTools {
                     .resolve_tool(schema.name.as_str())
                     .is_none_or(|resolved| {
                         resolved.tool.name() != self.caller
-                            && super::turn::tool_available(
-                                resolved.tool.name(),
-                                self.engine.interaction.is_available(),
-                            )
                             && super::turn::messages::tool_visible_by_outcome(
                                 schema.name.as_str(),
                                 resolved.tool.name(),

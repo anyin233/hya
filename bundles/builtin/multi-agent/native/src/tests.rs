@@ -22,10 +22,8 @@ use hya_runtime_abi::{
 };
 use hya_tool::extension::{BUNDLE_MULTI_AGENT, ExtensionEvent, MultiAgentExtensionState};
 use hya_tool::{
-    AgentDef, ArchiveReason, ArchiveReceipt, InteractionPlane, LifecyclePlane, LspPlane,
-    MailReceipt, MailboxPlane, NestedToolPlane, PermissionModel, PermissionPlane, PermissionRules,
-    ProjectActivityPlane, ReportOutcome, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolOperation,
-    WaitMode, WaitSpec, WaitWake, WorkflowPlane, handle::ArtifactPlane,
+    AgentDef, ArchiveReason, ArchiveReceipt, MailReceipt, PermissionModel, PermissionPlane,
+    PermissionRules, ReportOutcome, Tool, ToolCtx, WaitMode, WaitSpec, WaitWake,
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -1176,34 +1174,16 @@ async fn native_tools_validate_schemas_and_execute() {
     let permission = PermissionPlane::new(PermissionRules::new(Vec::new()))
         .0
         .with_invocation_model(PermissionModel::Danger);
-    let ctx = ToolCtx {
-        nested: NestedToolPlane::disconnected(),
-        workflows: WorkflowPlane::disconnected(),
-        permission,
-        interaction: InteractionPlane::new().0,
-        spawner: SpawnerPlane::new().0,
-        operation: ToolOperation::from_tool_call(ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected(),
-        lifecycle: LifecyclePlane::disconnected(),
-        session: Some(SessionId::new()),
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        agents: Arc::from([AgentDef {
+    let mut ctx = ToolCtx::new(std::env::temp_dir(), permission, CancellationToken::new())
+        .with_extension(Arc::<[AgentDef]>::from([AgentDef {
             name: "hya-scout".into(),
             description: Some("Read-only scout".into()),
             category: None,
             mode: "subagent".into(),
             effort: None,
             effort_source: None,
-        }]),
-        lsp: LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        workdir: std::env::temp_dir(),
-        roots: vec![std::env::temp_dir()],
-        cancel: CancellationToken::new(),
-        project_activity: ProjectActivityPlane::disconnected(),
-    };
+        }]));
+    ctx.session = Some(SessionId::new());
 
     let listed = list.execute(&ctx, json!({})).await.unwrap();
     assert_eq!(listed["metadata"]["count"], json!(1));

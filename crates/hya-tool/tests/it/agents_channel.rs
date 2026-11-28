@@ -275,9 +275,9 @@ async fn send_and_list_channel_routing_team_status_and_hash_read() {
     });
 
     let session = SessionId::new();
-    let mut ctx = ctx_with(vec![], PathBuf::from("."));
+    let mailbox = plane.for_session(session);
+    let mut ctx = ctx_with(vec![], PathBuf::from(".")).with_extension(mailbox.clone());
     ctx.session = Some(session);
-    ctx.mailbox = plane.for_session(session);
     let send = reg.get("send").unwrap();
 
     for (input, expected) in [
@@ -362,12 +362,11 @@ async fn send_and_list_channel_routing_team_status_and_hash_read() {
             })
         }
     }
-    let mut read_ctx = ctx_with(vec![allow(Action::Read, "*")], PathBuf::from("."));
-    read_ctx.session = Some(session);
-    read_ctx.mailbox = ctx.mailbox.clone();
-    read_ctx = read_ctx
-        .with_uri_handler(Arc::new(TestChannelHandler(ctx.mailbox.clone())))
+    let mut read_ctx = ctx_with(vec![allow(Action::Read, "*")], PathBuf::from("."))
+        .with_extension(mailbox.clone())
+        .with_uri_handler(Arc::new(TestChannelHandler(mailbox)))
         .unwrap();
+    read_ctx.session = Some(session);
     let read_out = reg
         .get("read")
         .unwrap()
@@ -393,9 +392,8 @@ async fn send_and_list_channel_routing_team_status_and_hash_read() {
             }
         }
     });
-    let mut ctx2 = ctx_with(vec![], PathBuf::from("."));
+    let mut ctx2 = ctx_with(vec![], PathBuf::from(".")).with_extension(p2.for_session(session));
     ctx2.session = Some(session);
-    ctx2.mailbox = p2.for_session(session);
     let empty_lc = list_channel.execute(&ctx2, json!({})).await.unwrap();
     assert!(empty_lc.get("team").is_none());
     svc2.abort();
@@ -464,11 +462,11 @@ async fn workflow_commands_route_fields_defaults_and_host_errors() {
         state,
         ..Default::default()
     });
-    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir());
-    ctx.session = Some(session);
-    ctx.workflows =
+    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir()).with_extension(
         WorkflowPlane::from_sink(Arc::clone(&sink) as Arc<dyn hya_tool::WorkflowRequestSink>)
-            .for_session(session);
+            .for_session(session),
+    );
+    ctx.session = Some(session);
 
     for input in [
         json!({}),
@@ -524,7 +522,8 @@ async fn workflow_commands_route_fields_defaults_and_host_errors() {
             .contains("expected list|info|select|run|state")
     );
 
-    ctx.workflows = WorkflowPlane::from_sink(Arc::new(RejectingWorkflowSink)).for_session(session);
+    ctx.extensions
+        .insert(WorkflowPlane::from_sink(Arc::new(RejectingWorkflowSink)).for_session(session));
     let err = tool
         .execute(&ctx, json!({"action": "state"}))
         .await
@@ -589,8 +588,8 @@ async fn task_single_nested_defaults_effort_and_identity() {
     let source_call = ToolCallId::new();
 
     // Missing session errors cleanly.
-    let mut no_sess = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir());
-    no_sess.parent_session = Some(parent);
+    let no_sess = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir())
+        .with_extension(hya_tool::ParentSession(parent));
     assert!(matches!(
         tool.execute(&no_sess, json!({ "prompt": "x", "subagent_type": "quick" }))
             .await,
@@ -599,10 +598,10 @@ async fn task_single_nested_defaults_effort_and_identity() {
 
     // Subagent nested spawn + operation identity + effort + inline empty description normalization.
     let (spawner, mut rx) = SpawnerPlane::new();
-    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir());
+    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir())
+        .with_extension(hya_tool::ParentSession(parent))
+        .with_extension(spawner.for_session(child));
     ctx.session = Some(child);
-    ctx.parent_session = Some(parent);
-    ctx.spawner = spawner.for_session(child);
     ctx.operation = ToolOperation::from_tool_call(source_call);
 
     let t = Arc::clone(&tool);
@@ -688,9 +687,9 @@ async fn task_batch_validation_removed_name_and_overload() {
 
     // Removed `name` parameter and invalid batch inputs are rejected before dispatch.
     let (spawner, mut rx) = SpawnerPlane::new();
-    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir());
+    let mut ctx = ctx_with(vec![allow(Action::Task, "*")], std::env::temp_dir())
+        .with_extension(spawner.for_session(session));
     ctx.session = Some(session);
-    ctx.spawner = spawner.for_session(session);
     for input in [
         json!({"description": "d", "prompt": "p", "name": "scout"}),
         json!({"members": [{"prompt": "scan", "subagent_type": "explore"}, {"prompt": "b", "subagent_type": "general", "name": "dev"}]}),
@@ -795,7 +794,7 @@ async fn task_batch_validation_removed_name_and_overload() {
     })
     .await
     .unwrap();
-    ctx.spawner = full_spawner.for_session(session);
+    ctx.extensions.insert(full_spawner.for_session(session));
     let err = tool
         .execute(
             &ctx,

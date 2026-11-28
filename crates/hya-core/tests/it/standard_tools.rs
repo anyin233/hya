@@ -23,7 +23,7 @@ use hya_proto::{
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_runtime_abi::{HostError, UriContent, UriResolveCtx, UriSchemaHandler};
 use hya_store::SessionStore;
-use hya_tool::handle::{ArtifactPlane, SchemeRegistryError};
+use hya_tool::handle::SchemeRegistryError;
 use hya_tool::{
     Action, Decision, Mode, PermissionError, PermissionPlane, PermissionRules, Rule,
     SkillCatalogEntry, SkillCatalogOrigin, SkillPlane, Tool, ToolCtx, ToolError, ToolPermission,
@@ -48,27 +48,9 @@ fn ctx_with(
     tokio::sync::mpsc::UnboundedReceiver<hya_tool::AskRequest>,
 ) {
     let (permission, asks) = PermissionPlane::new(PermissionRules::new(rules));
-    let ctx = ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission,
-        interaction: hya_tool::InteractionPlane::new().0,
-        spawner: hya_tool::SpawnerPlane::new().0,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: Some(SessionId::new()),
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        agents: Arc::default(),
-        lsp: hya_tool::LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        workdir: workdir.to_path_buf(),
-        roots,
-        cancel: CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    };
+    let mut ctx = ToolCtx::new(workdir.to_path_buf(), permission, CancellationToken::new());
+    ctx.session = Some(SessionId::new());
+    ctx.roots = roots;
     (ctx, asks)
 }
 

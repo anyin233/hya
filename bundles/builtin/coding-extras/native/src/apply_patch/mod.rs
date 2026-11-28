@@ -85,16 +85,16 @@ impl Tool for ApplyPatchTool {
             }
         }
 
-        let formatter = if ctx.formatter.is_configured() {
-            ctx.formatter.clone()
-        } else {
-            self.state.formatter()
-        };
-        let lsp = if ctx.lsp.is_configured() {
-            ctx.lsp.clone()
-        } else {
-            self.state.lsp()
-        };
+        let formatter = ctx
+            .extension::<hya_tool::FormatterPlane>()
+            .filter(|plane| plane.is_configured())
+            .cloned()
+            .unwrap_or_else(|| self.state.formatter());
+        let lsp = ctx
+            .extension::<hya_tool::LspPlane>()
+            .filter(|plane| plane.is_configured())
+            .cloned()
+            .unwrap_or_else(|| self.state.lsp());
         let mut summaries = Vec::with_capacity(hunks.len());
         let mut lsp_paths = Vec::new();
         for hunk in hunks {

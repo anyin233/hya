@@ -42,7 +42,7 @@ impl Tool for TestV2Tool {
         }
     }
 
-    async fn execute(&self, _ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         tokio::time::sleep(Duration::from_millis(2)).await;
         let written = self
             .runtime
@@ -57,11 +57,15 @@ impl Tool for TestV2Tool {
             .await
             .map_err(ToolError::from)?;
         let budget_secs = hya_tool::deadline::current().map(|d| d.budget().as_secs());
+        let parent_session = ctx
+            .extension::<hya_tool::ParentSession>()
+            .map(|parent| parent.0.to_string());
         Ok(json!({
             "bundle_id": self.bundle_id,
             "written_version": written.version,
             "read_value": read_back.map(|e| e.value),
             "budget_secs": budget_secs,
+            "parent_session": parent_session,
         }))
     }
 }

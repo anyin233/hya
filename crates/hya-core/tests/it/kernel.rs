@@ -220,27 +220,7 @@ fn tool_ctx(workdir: &Path, cancel: &CancellationToken) -> ToolCtx {
         Rule::new(Action::Bash, "*", Mode::Allow),
         Rule::new(Action::Grep, "*", Mode::Allow),
     ]));
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission,
-        interaction: hya_tool::InteractionPlane::new().0,
-        spawner: hya_tool::SpawnerPlane::new().0,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills: hya_tool::SkillPlane::default(),
-        artifacts: hya_tool::handle::ArtifactPlane::default(),
-        agents: Arc::default(),
-        lsp: hya_tool::LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        workdir: workdir.to_path_buf(),
-        roots: vec![workdir.to_path_buf()],
-        cancel: cancel.clone(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+    ToolCtx::new(workdir.to_path_buf(), permission, cancel.clone())
 }
 
 fn builtin_tool(name: &str) -> Arc<dyn Tool> {

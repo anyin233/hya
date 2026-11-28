@@ -129,13 +129,12 @@ pub(in crate::engine) fn tool_visible_by_outcome(
 
 pub(super) fn filtered_tool_schemas(
     resources: &CompiledResourceView,
-    interaction_available: bool,
     visibility: &ToolVisibilityOutcome,
     depth: u32,
     exclusive: Option<&str>,
     model: &ModelRef,
 ) -> Vec<hya_proto::ToolSchema> {
-    let offered = offered_tool_schemas(resources, depth, interaction_available, visibility, model);
+    let offered = offered_tool_schemas(resources, depth, visibility, model);
     let Some(exclusive) = exclusive_in_effect(&offered, exclusive) else {
         return offered;
     };
@@ -154,7 +153,6 @@ pub(super) fn filtered_tool_schemas(
 pub(super) fn offered_tool_schemas(
     resources: &CompiledResourceView,
     depth: u32,
-    interaction_available: bool,
     visibility: &ToolVisibilityOutcome,
     model: &ModelRef,
 ) -> Vec<hya_proto::ToolSchema> {
@@ -165,8 +163,7 @@ pub(super) fn offered_tool_schemas(
             let name = schema.name.as_str();
             advertise_tool_at_depth(name, depth, model)
                 && resources.resolve_tool(name).is_some_and(|resolved| {
-                    super::tool_available(resolved.tool.name(), interaction_available)
-                        && tool_visible_by_outcome(name, resolved.tool.name(), visibility)
+                    tool_visible_by_outcome(name, resolved.tool.name(), visibility)
                 })
                 && (resources.advertises(name) || (depth >= 1 && name == "report"))
         })
@@ -300,7 +297,6 @@ mod tests {
         let resources = agent_view("", agent)?;
         let mut tools = filtered_tool_schemas(
             &resources,
-            true,
             &ToolVisibilityOutcome::Preserve,
             depth,
             None,
@@ -374,7 +370,6 @@ mod tests {
         ] {
             let mut names: Vec<_> = filtered_tool_schemas(
                 &resources,
-                true,
                 &ToolVisibilityOutcome::Preserve,
                 depth,
                 None,
@@ -396,7 +391,6 @@ mod tests {
         )?;
         let names: Vec<_> = filtered_tool_schemas(
             &aliased,
-            true,
             &ToolVisibilityOutcome::Preserve,
             0,
             None,
@@ -417,7 +411,6 @@ mod tests {
                     .collect();
                 let actual: BTreeSet<_> = filtered_tool_schemas(
                     &view,
-                    true,
                     &ToolVisibilityOutcome::Preserve,
                     depth,
                     None,
@@ -466,7 +459,7 @@ mod tests {
         )?;
         for (depth, expected) in [(0, vec!["bash"]), (1, vec!["bash", "report"])] {
             let offered =
-                filtered_tool_schemas(&resources, true, &preserve, depth, Some("bash"), &model());
+                filtered_tool_schemas(&resources, &preserve, depth, Some("bash"), &model());
             let mut names: Vec<_> = offered.iter().map(|s| s.name.as_str()).collect();
             names.sort_unstable();
             assert_eq!(names, expected);
@@ -484,7 +477,7 @@ mod tests {
         }
         assert_eq!(
             hidden_behind(
-                &filtered_tool_schemas(&resources, true, &preserve, 0, Some("bash"), &model()),
+                &filtered_tool_schemas(&resources, &preserve, 0, Some("bash"), &model()),
                 Some("bash"),
                 "read"
             ),
@@ -492,7 +485,7 @@ mod tests {
         );
         assert_eq!(
             hidden_behind(
-                &filtered_tool_schemas(&resources, true, &preserve, 1, Some("bash"), &model()),
+                &filtered_tool_schemas(&resources, &preserve, 1, Some("bash"), &model()),
                 Some("bash"),
                 "report"
             ),
@@ -500,7 +493,7 @@ mod tests {
         );
         assert_eq!(
             hidden_behind(
-                &filtered_tool_schemas(&resources, true, &preserve, 0, Some("absent"), &model()),
+                &filtered_tool_schemas(&resources, &preserve, 0, Some("absent"), &model()),
                 Some("absent"),
                 "read"
             ),
@@ -514,8 +507,8 @@ mod tests {
         ] {
             let view = bundle_advertise_view(fields)?;
             assert_eq!(
-                filtered_tool_schemas(&view, true, &preserve, 0, Some("bash"), &model()),
-                filtered_tool_schemas(&view, true, &preserve, 0, None, &model())
+                filtered_tool_schemas(&view, &preserve, 0, Some("bash"), &model()),
+                filtered_tool_schemas(&view, &preserve, 0, None, &model())
             );
         }
 
@@ -535,7 +528,7 @@ mod tests {
                 ["ask", "approve"]
             };
             // Without visibility hooks hiding them, neither human tool is hardcoded out.
-            let without_hook = filtered_tool_schemas(&view, false, &preserve, 0, None, &model());
+            let without_hook = filtered_tool_schemas(&view, &preserve, 0, None, &model());
             for name in human {
                 assert!(
                     without_hook.iter().any(|t| t.name.as_str() == name),
@@ -551,16 +544,9 @@ mod tests {
                         tools: vec!["ask_user".to_string(), "plan_exit".to_string()],
                     }
                 };
-                let offered =
-                    filtered_tool_schemas(&view, interactive, &visibility, 0, None, &model());
-                let exclusive = filtered_tool_schemas(
-                    &view,
-                    interactive,
-                    &visibility,
-                    0,
-                    Some("bash"),
-                    &model(),
-                );
+                let offered = filtered_tool_schemas(&view, &visibility, 0, None, &model());
+                let exclusive =
+                    filtered_tool_schemas(&view, &visibility, 0, Some("bash"), &model());
                 let bash = exclusive
                     .iter()
                     .find(|t| t.name.as_str() == "bash")

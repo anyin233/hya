@@ -26,8 +26,8 @@ use hya_runtime_abi::{
 };
 use hya_tool::extension::{BUNDLE_CHANNELS, BUNDLE_MULTI_AGENT, ExtensionEvent, team_projection};
 use hya_tool::{
-    AgentDef, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane, PermissionRules,
-    SkillCatalogEntry, SkillPlane, SpawnerPlane, Tool, ToolCtx, ToolError, handle::ArtifactPlane,
+    AgentDef, InteractionPlane, MailboxPlane, PermissionPlane, PermissionRules, SkillCatalogEntry,
+    Tool, ToolCtx, ToolError,
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -586,29 +586,16 @@ impl HostRuntime for MockHost {
 
 fn tool_ctx(session: SessionId, policy: ChannelPolicySnapshot) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
-    let (spawner, _srx) = SpawnerPlane::new();
     let (interaction, _irx) = InteractionPlane::new();
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission: permission.for_session(session),
-        interaction: interaction.for_session(session),
-        spawner,
-        operation: hya_tool::ToolOperation::from_tool_call(ToolCallId::new()),
-        mailbox: MailboxPlane::disconnected().with_channel_policy(policy),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: Some(session),
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        lsp: LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        agents: Default::default(),
-        workdir: PathBuf::from("."),
-        roots: vec![PathBuf::from(".")],
-        cancel: CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+    let mut ctx = ToolCtx::new(
+        PathBuf::from("."),
+        permission.for_session(session),
+        CancellationToken::new(),
+    )
+    .with_extension(MailboxPlane::disconnected().with_channel_policy(policy));
+    ctx.session = Some(session);
+    ctx.interaction = interaction.for_session(session);
+    ctx
 }
 
 fn setup_team() -> (Arc<MockHost>, SessionId, SessionId, String, String) {

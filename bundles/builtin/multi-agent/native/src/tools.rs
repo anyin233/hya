@@ -1,10 +1,15 @@
 //! Model-facing multi-agent tools: `list_agents`, `task`, `search_agent`, and
 //! `archive` (plus `hya_tool::lifecycle::WaitTool::new(false)` for `wait`).
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
-use hya_tool::{Action, InlineAgent, Resource, SpawnError, SpawnMember, Tool, ToolCtx, ToolError};
+use hya_tool::{
+    Action, AgentDef, InlineAgent, LifecyclePlane, MailboxPlane, Resource, SpawnError, SpawnMember,
+    SpawnerPlane, Tool, ToolCtx, ToolError,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -27,7 +32,10 @@ impl Tool for ListAgentsTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let mut agents = ctx.agents.to_vec();
+        let mut agents = ctx
+            .extension::<Arc<[AgentDef]>>()
+            .map(|roster| roster.to_vec())
+            .unwrap_or_default();
         agents.sort_by(|left, right| left.name.cmp(&right.name));
         let rows: Vec<Value> = agents
             .iter()
@@ -346,8 +354,10 @@ impl Tool for TaskTool {
                 .await?;
         }
 
-        let outcomes = ctx
-            .spawner
+        let spawner = ctx
+            .extension::<SpawnerPlane>()
+            .ok_or_else(|| ToolError::Other(SpawnError::Unavailable.to_string()))?;
+        let outcomes = spawner
             .spawn(ctx.operation, members.clone(), ctx.cancel.clone())
             .await
             .map_err(|error| match error {
@@ -531,7 +541,11 @@ impl Tool for SearchAgentTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: SearchAgentInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let rows = ctx.mailbox.search_agents(input.query).await?;
+        let mailbox = ctx
+            .extension::<MailboxPlane>()
+            .cloned()
+            .unwrap_or_else(MailboxPlane::disconnected);
+        let rows = mailbox.search_agents(input.query).await?;
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -613,7 +627,11 @@ impl Tool for ArchiveTool {
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_default();
-        let receipt = ctx.lifecycle.archive(target, reason).await?;
+        let lifecycle = ctx
+            .extension::<LifecyclePlane>()
+            .cloned()
+            .unwrap_or_else(LifecyclePlane::disconnected);
+        let receipt = lifecycle.archive(target, reason).await?;
         let mut output = format!(
             "Archived `{}` (session {}).",
             receipt.handle, receipt.session

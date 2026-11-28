@@ -19,7 +19,7 @@ mod registry;
 mod router;
 
 pub use artifact::{ArtifactId, ArtifactMeta, ArtifactStore};
-pub use plane::ArtifactPlane;
+pub use plane::{ArtifactPlane, UriSchemaPlane};
 pub use reference::{HandleRef, HandleScheme, Projection};
 pub use registry::{
     SchemeBinding, SchemeDispatch, SchemeHandler, SchemeReadTool, SchemeRegistry,

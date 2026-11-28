@@ -391,27 +391,11 @@ fn dispatch_ctx(workdir: &Path) -> ToolCtx {
         "*",
         Mode::Allow,
     )]));
-    ToolCtx {
-        nested: hya_tool::NestedToolPlane::disconnected(),
-        workflows: hya_tool::WorkflowPlane::disconnected(),
+    ToolCtx::new(
+        workdir.to_path_buf(),
         permission,
-        interaction: hya_tool::InteractionPlane::new().0,
-        spawner: hya_tool::SpawnerPlane::new().0,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        skills: SkillPlane::default(),
-        artifacts: hya_tool::handle::ArtifactPlane::default(),
-        agents: Default::default(),
-        lsp: hya_tool::LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        workdir: workdir.to_path_buf(),
-        roots: vec![workdir.to_path_buf()],
-        cancel: tokio_util::sync::CancellationToken::new(),
-        project_activity: hya_tool::ProjectActivityPlane::disconnected(),
-    }
+        tokio_util::sync::CancellationToken::new(),
+    )
 }
 
 fn is_coord(name: &str) -> bool {
