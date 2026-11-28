@@ -335,7 +335,7 @@ impl OperationId {
         ))
     }
 
-    /// Underlying UUID used to derive durable Workflow identity.
+    /// Underlying UUID, for identities a bundle derives from this operation.
     #[must_use]
     pub fn as_uuid(&self) -> Uuid {
         self.0
@@ -350,28 +350,11 @@ impl std::fmt::Display for OperationId {
 
 uuid_id!(TeamRunId, "team", "Team-run identity (`team_` + UUIDv7).");
 uuid_id!(
-    WorkflowRunId,
-    "wfrun",
-    "Durable Workflow run identity (`wfrun_` + UUIDv7)."
-);
-uuid_id!(
     MemberId,
     "mbr",
     "Subagent member id on a parent log (`mbr_` + UUIDv7)."
 );
 
-const WORKFLOW_RUN_ID_NAMESPACE: Uuid = Uuid::from_u128(0x19aa_6124_335d_54fb_b7e1_c271_82d6_6638);
-
-impl WorkflowRunId {
-    /// Derive the single durable Workflow run id for one Tool operation.
-    #[must_use]
-    pub fn from_operation(operation: OperationId) -> Self {
-        Self::from_uuid(Uuid::new_v5(
-            &WORKFLOW_RUN_ID_NAMESPACE,
-            operation.as_uuid().as_bytes(),
-        ))
-    }
-}
 uuid_id!(
     ProjectId,
     "prj",

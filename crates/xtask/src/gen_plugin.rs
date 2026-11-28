@@ -204,12 +204,11 @@ impl Generator {
                 );
             }
         }
-        // These types implement serde manually instead of deriving it.
-        for name in ["SessionId", "WorkflowRevision"] {
-            generator
-                .definitions
-                .insert(name.to_owned(), format!("export type {name} = string\n"));
-        }
+        // SessionId implements serde manually instead of deriving it.
+        generator.definitions.insert(
+            "SessionId".to_owned(),
+            "export type SessionId = string\n".to_owned(),
+        );
         Ok(generator)
     }
 
