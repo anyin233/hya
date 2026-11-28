@@ -44,7 +44,7 @@ function catalog(cached: boolean): Record<string, unknown>[] {
   return Array.from({ length: count }, (_, index) => {
     const content = source(index)
     return {
-      bundleId: `bench/ext-${index}`, bundleVersion: "1.0.0", preparedDigest: sha(content), apiVersion: 1, entry: "tui/main.ts", sdk: "1.0.0",
+      bundleId: `bench/ext-${index}`, bundleVersion: "1.0.0", preparedDigest: sha(content), apiVersion: 2, entry: "tui/main.ts", sdk: "2.0.0",
       permissions: index % 2 === 0 ? ["tui.panel", "fs.read"] : ["tui.panel"],
       files: cached ? [] : [{ path: "tui/main.ts", sha256: sha(content), content }], cached,
     }
