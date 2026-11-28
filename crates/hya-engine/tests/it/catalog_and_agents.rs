@@ -8,9 +8,9 @@
 use crate::support;
 use support::resident::{ResidentTurn, run_residents};
 use support::{
-    MarkerTool, TestDir, ZERO_RETRY_WAITS, agent_spec, builtin_only_catalog, create_root_session,
-    discover_local_skills, engine_with_router_and_runtime, test_catalog, test_runtime,
-    test_runtime_with_catalog,
+    MarkerTool, TestDir, ZERO_RETRY_WAITS, agent_spec, builtin_only_catalog, builtin_test_runtime,
+    builtin_test_runtime_with_catalog, create_root_session, discover_local_skills,
+    engine_with_router_and_runtime, test_catalog, test_runtime,
 };
 
 use std::borrow::Cow;
@@ -29,23 +29,22 @@ use hya_bundle::{
     HandoffPolicy, ModelPolicy, PreparedAgent, PreparedCatalog, PreparedResource, ResourceView,
     SourceFile, prepare_package,
 };
-use hya_engine::builtin_agents::{builtin_agent_ids, core_agents_preset, preset_agent};
+use hya_engine::hooks::{
+    NativeChatParamsInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
+    NativeToolBeforeOutcome,
+};
 use hya_engine::runtime_registry::RuntimeSourceSkill;
 use hya_engine::{
     AgentCatalog, AgentDefinition, AgentEffortSource, AgentModelConfiguration, AgentOrigin,
     AgentSpec, ApiMethod, ApiPathTemplate, ApiScope, BoundSidecarFactory, BundleApiCall,
     BundleApiError, BundleApiProvider, BundleApiReply, BundleApiRequest, CatalogScope,
-    CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, ChatParamsInput, ChatParamsOutcome,
-    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, CompactionConfig, CoreError,
-    CreateSession, EventBus, HookChain, HookDispatcher, MAX_BUNDLE_API_BODY_BYTES,
-    MessageUserBeforeInput, MessageUserBeforeOutcome, ModelSummarizer, RuntimeCandidate,
+    CatalogScopeCacheConfig, CategoryEntry, CategoryRegistry, CoreError, CreateSession, EventBus,
+    HookChain, MAX_BUNDLE_API_BODY_BYTES, ModelSummarizer, NativeHook, RuntimeCandidate,
     RuntimeCatalogRefresh, RuntimePermissionMode, RuntimeRefreshError, RuntimeRegistry,
     RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind, RuntimeSourceOwner,
     ScopeKey, ScopeOverlay, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, TurnBinding, apply_agent_model_preference,
-    resolve_configured_agent_model,
+    SidecarStart, SourceApi, SourceApis, SourceSchema, Summarizer, TerminalHandoffOptions,
+    TurnBinding, apply_agent_model_preference, resolve_configured_agent_model,
 };
 use hya_proto::{
     AgentName, CompactionStrategy, ConfigGeneration, Envelope, Event, FinishReason, MessageId,
@@ -115,6 +114,9 @@ fn make_bundle(bundle_id: &str, agent: PreparedAgent, skills: Vec<PreparedResour
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
         overrides: None,
     }
 }
@@ -132,15 +134,24 @@ fn bundle_skill(bundle_id: &str, local_id: &str, desc: &str, body: &str) -> Prep
     }
 }
 
+/// The first-party `hya/core-agents` bundle (`hya-main`, `hya-title`).
+fn core_agents_bundle() -> Bundle {
+    support::core_agents().bundles()[0].clone()
+}
+
+/// `bundles` over the first-party `hya/core-agents`.
 fn catalog_from_bundles(bundles: &[Bundle]) -> Arc<AgentCatalog> {
-    let bc = BundleCatalog::from_prepared(bundles).expect("bundle catalog");
+    let mut all = bundles.to_vec();
+    all.push(core_agents_bundle());
+    let bc = BundleCatalog::from_prepared(&all).expect("bundle catalog");
     Arc::new(AgentCatalog::new(Arc::new(bc)).expect("agent catalog"))
 }
 
 fn catalog_from_agents(agents: Vec<PreparedAgent>) -> Arc<AgentCatalog> {
+    let core = core_agents_bundle();
     let bundles: Vec<Bundle> = agents
         .into_iter()
-        .filter(|a| preset_agent(a.id.as_str()).is_none())
+        .filter(|a| core.agents().iter().all(|core| core.id != a.id))
         .map(|a| {
             let id = format!("hya/test-fixture-{}", a.id.as_str());
             make_bundle(&id, a, Vec::new())
@@ -149,8 +160,11 @@ fn catalog_from_agents(agents: Vec<PreparedAgent>) -> Arc<AgentCatalog> {
     catalog_from_bundles(&bundles)
 }
 
+/// `catalogs` over the first-party `hya/core-agents`.
 fn catalog_from_verified(catalogs: &[&PreparedCatalog]) -> Arc<AgentCatalog> {
-    let bc = BundleCatalog::from_verified_catalogs(catalogs).expect("verified catalog");
+    let mut all = catalogs.to_vec();
+    all.push(support::core_agents());
+    let bc = BundleCatalog::from_verified_catalogs(&all).expect("verified catalog");
     Arc::new(AgentCatalog::new(Arc::new(bc)).expect("agent catalog"))
 }
 
@@ -236,7 +250,7 @@ fn allow_all() -> PermissionRules {
 async fn eng_with(cat: Arc<AgentCatalog>, provider: Arc<dyn Provider>) -> SessionEngine {
     engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new().with(provider)),
-        test_runtime_with_catalog(Arc::new(hya_tool_loader::builtins()), cat),
+        builtin_test_runtime_with_catalog(cat),
         allow_all(),
     )
     .await
@@ -482,15 +496,7 @@ impl RuntimeCatalogRefresh for FnRefresh {
 // ===========================================================================
 
 #[test]
-fn builtin_agents_preset_and_core_catalog_invariants() {
-    const EXPECTED: &[&str] = &["hya-main", "hya-title"];
-    assert_eq!(builtin_agent_ids(), EXPECTED);
-    assert!(builtin_agent_ids().windows(2).all(|p| p[0] < p[1]));
-    for id in EXPECTED {
-        assert!(preset_agent(id).is_some(), "missing builtin {id}");
-    }
-    assert!(preset_agent("no-such-agent").is_none());
-
+fn core_agents_bundle_and_roster_invariants() {
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let multi_agent_ids: Vec<_> = multi_agent.bundles()[0]
         .agents()
@@ -499,66 +505,105 @@ fn builtin_agents_preset_and_core_catalog_invariants() {
         .collect();
     assert_eq!(multi_agent_ids, ["hya-reviewer", "hya-scout", "hya-task"]);
 
-    let preset = core_agents_preset().unwrap();
-    let fp = hya_bundle::first_party_bundle("hya/core-agents").unwrap();
-    assert_eq!(preset.bundle_id(), "hya/core-agents");
-    assert!(!preset.prepared_bytes().is_empty() && preset.digest().len() == 64);
-    assert!(std::ptr::eq(preset.prepared_bytes(), fp.bytes()) && preset.digest() == fp.digest());
-
-    let mut ordinary = 0;
-    for a in preset.agents() {
-        let id = a.id.as_str();
-        assert!(id.starts_with("hya-"));
-        let reserved = id == "hya-title";
-        assert_eq!(preset.is_reserved(id), reserved);
+    // `hya/core-agents` is an ordinary bundle: `hya-main` is its default
+    // agent and spawns any non-private agent; `hya-title` is private.
+    let core = core_agents_bundle();
+    assert_eq!(
+        core.default_agent().map(AgentName::as_str),
+        Some("hya-main")
+    );
+    let ids: Vec<_> = core.agents().iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, ["hya-main", "hya-title"]);
+    for a in core.agents() {
+        let main = a.id.as_str() == "hya-main";
+        assert_eq!(a.private, !main);
         assert_eq!(
             a.role,
-            if id == "hya-main" {
+            if main {
                 AgentRole::Main
             } else {
                 AgentRole::Subagent
             }
         );
+        assert_eq!(
+            a.can_spawn
+                .iter()
+                .map(AgentName::as_str)
+                .collect::<Vec<_>>(),
+            if main { vec!["*"] } else { Vec::new() }
+        );
         assert!(a.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()));
-        if !reserved {
-            ordinary += 1;
-            assert!(
-                a.description
-                    .as_deref()
-                    .is_some_and(|d| !d.trim().is_empty())
-            );
-        }
-    }
-    assert_eq!(ordinary, 1);
-
-    let empty = catalog_from_bundles(&[]);
-    let preset_ids: Vec<_> = preset.agents().iter().map(|a| a.id.as_str()).collect();
-    let cat_ids: Vec<_> = empty.all().iter().map(|a| a.stable_id).collect();
-    assert_eq!(cat_ids, preset_ids);
-    for d in empty.all() {
-        assert_eq!(d.origin, AgentOrigin::Builtin);
         assert!(
-            d.model_policy.model.is_none()
-                && d.model_policy.category.is_none()
-                && d.model_policy.reasoning.is_none()
+            a.model_policy.model.is_none()
+                && a.model_policy.category.is_none()
+                && a.model_policy.reasoning.is_none()
+        );
+    }
+
+    // No bundle declares a default agent: the roster is the compiled-in `hya-bare`.
+    let bare = AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&[]).unwrap())).unwrap();
+    assert_eq!(bare.default_agent_id(), "hya-bare");
+    let bare_ids: Vec<_> = bare.all().iter().map(|a| a.stable_id).collect();
+    assert_eq!(bare_ids, ["hya-bare"]);
+    assert_eq!(
+        bare.resolve("hya-bare").unwrap().origin,
+        AgentOrigin::Builtin
+    );
+    assert!(bare.resolve("hya-main").is_none());
+
+    // With `hya/core-agents`, `hya-main` is the default and `hya-bare` is gone.
+    let full = catalog_from_bundles(&[]);
+    assert_eq!(full.default_agent_id(), "hya-main");
+    let full_ids: Vec<_> = full.all().iter().map(|a| a.stable_id).collect();
+    assert_eq!(full_ids, ["hya-main", "hya-title"]);
+    assert!(full.resolve("hya-bare").is_none());
+    for d in full.all() {
+        assert_eq!(
+            d.origin,
+            AgentOrigin::Bundle {
+                bundle_id: "hya/core-agents"
+            }
         );
     }
     assert_eq!(
-        empty.resolve("hya-main").unwrap(),
-        empty
-            .resolve("bundle:hya/core-agents/agent/hya-main")
+        full.resolve("hya-main").unwrap(),
+        full.resolve("bundle:hya/core-agents/agent/hya-main")
             .unwrap()
     );
+    let selectable: Vec<_> = full.selectable().iter().map(|a| a.stable_id).collect();
+    assert_eq!(selectable, ["hya-main"]);
 
-    let mut rev = prep_agent("acme-reviewer");
-    rev.role = AgentRole::Subagent;
-    let populated = catalog_from_bundles(&[make_bundle("acme/reviewer", rev, vec![])]);
-    assert_eq!(empty.builtin_digest(), populated.builtin_digest());
+    // The bare roster's identity keeps the `hya-bare` section; the full one
+    // carries the core-agents bundle in its bundle identity instead.
+    let verified_bare = AgentCatalog::new(Arc::new(
+        BundleCatalog::from_verified_catalogs(&[]).unwrap(),
+    ))
+    .unwrap();
+    let verified_full = catalog_from_verified(&[]);
+    assert_ne!(
+        verified_bare.semantic_identity_v1().unwrap(),
+        verified_full.semantic_identity_v1().unwrap()
+    );
+}
+
+#[test]
+fn two_default_agent_bundles_are_rejected() {
+    let mut other = core_agents_bundle();
+    other.identity.id = "acme/agents".into();
+    other.agents = vec![prep_agent("acme-main")];
+    other.default_agent = Some(AgentName::new("acme-main"));
+    assert_eq!(
+        BundleCatalog::from_prepared(&[core_agents_bundle(), other]).unwrap_err(),
+        BundleError::DuplicateDefaultAgent {
+            first: "hya/core-agents".into(),
+            second: "acme/agents".into(),
+        }
+    );
 }
 
 #[tokio::test]
 async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
-    let mut shadow = prep_agent("hya-main");
+    let mut shadow = prep_agent("hya-bare");
     shadow.role = AgentRole::Subagent;
     let shadow_bc =
         BundleCatalog::from_prepared(&[make_bundle("acme/impostor", shadow, vec![])]).unwrap();
@@ -566,7 +611,20 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
         AgentCatalog::new(Arc::new(shadow_bc)).unwrap_err(),
         BundleError::BuiltinAgentIdShadowed {
             bundle_id: "acme/impostor".into(),
-            agent_id: "hya-main".into(),
+            agent_id: "hya-bare".into(),
+        }
+    );
+    // `hya-main` is a bundle agent: a second claimer is a duplicate id.
+    let mut impostor = prep_agent("hya-main");
+    impostor.role = AgentRole::Subagent;
+    assert_eq!(
+        BundleCatalog::from_prepared(&[
+            core_agents_bundle(),
+            make_bundle("acme/impostor", impostor, vec![])
+        ])
+        .unwrap_err(),
+        BundleError::DuplicateStableAgentId {
+            stable_id: "hya-main".into(),
         }
     );
 
@@ -742,7 +800,7 @@ async fn agent_catalog_bundle_resolution_shadowing_and_spawn_authorization() {
 }
 
 #[test]
-fn agent_catalog_private_and_first_party_workflow_agents() {
+fn agent_catalog_private_and_first_party_agent_runs() {
     let mk = |bid, aid, priv_, spawn: &[&str]| {
         let mut a = prep_agent(aid);
         a.role = AgentRole::Subagent;
@@ -772,7 +830,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
                 cat.resolve_spawn(builtin, r),
                 Err(BundleError::AgentSpawnNotAllowed { .. })
             ));
-            assert!(cat.resolve_workflow_agent(builtin, r).unwrap().private);
+            assert!(cat.resolve_agent_run(builtin, r).unwrap().private);
         }
     }
     assert!(matches!(
@@ -794,24 +852,27 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         "acme-helper"
     );
     assert!(cat.resolve_spawn("acme-lead", "acme-helper").is_ok());
-    assert!(
-        cat.resolve_workflow_agent("acme-lead", "acme-helper")
-            .is_ok()
-    );
+    assert!(cat.resolve_agent_run("acme-lead", "acme-helper").is_ok());
     for (caller, target, unknown) in [
         ("acme-other", "acme-helper", false),
         ("hya-title", "acme-helper", false),
-        ("hya-main", "hya-title", false),
         ("hya-main", "missing", true),
         ("missing", "acme-helper", true),
     ] {
-        let err = cat.resolve_workflow_agent(caller, target).unwrap_err();
+        let err = cat.resolve_agent_run(caller, target).unwrap_err();
         assert_eq!(
             matches!(err, BundleError::UnknownAgentId { .. }),
             unknown,
             "{caller}->{target}: {err:?}"
         );
     }
+    // An all-agents caller may direct a private agent (as a workflow node),
+    // but never spawn it.
+    assert!(
+        cat.resolve_agent_run("hya-main", "hya-title")
+            .unwrap()
+            .private
+    );
 
     for bundle_id in ["hya/goal", "hya/workflow"] {
         let prepared = hya_bundle::first_party_bundle(bundle_id).unwrap();
@@ -820,11 +881,7 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
         assert!(!agents.is_empty());
         for a in agents {
             assert!(a.private && fp_cat.resolve_spawn("hya-main", a.id.as_str()).is_err());
-            assert!(
-                fp_cat
-                    .resolve_workflow_agent("hya-main", a.id.as_str())
-                    .is_ok()
-            );
+            assert!(fp_cat.resolve_agent_run("hya-main", a.id.as_str()).is_ok());
         }
         if bundle_id == "hya/goal" {
             assert!(
@@ -842,7 +899,10 @@ fn agent_catalog_private_and_first_party_workflow_agents() {
 
 #[tokio::test]
 async fn fixed_system_title_prompt_model_guidance_and_usage() {
-    let title_prompt = preset_agent("hya-title")
+    let title_prompt = support::core_agents().bundles()[0]
+        .agents()
+        .iter()
+        .find(|a| a.id.as_str() == "hya-title")
         .and_then(|a| a.prompt.as_deref())
         .unwrap();
     let dir = TestDir::new("fixed-title");
@@ -863,7 +923,12 @@ async fn fixed_system_title_prompt_model_guidance_and_usage() {
     let def = binding.resolve_agent("hya-title").unwrap();
     assert_eq!(
         (def.origin, def.prompt),
-        (AgentOrigin::Builtin, Some(title_prompt))
+        (
+            AgentOrigin::Bundle {
+                bundle_id: "hya/core-agents"
+            },
+            Some(title_prompt)
+        )
     );
     assert!(
         !engine
@@ -982,19 +1047,10 @@ async fn fixed_system_native_compact_and_manual_compaction_turn_lease() {
         router.clone(),
         ModelRef::new("summarizer-fallback"),
     ));
-    let engine = engine_with_router_and_runtime(
-        router,
-        test_runtime(Arc::new(hya_tool_loader::builtins())),
-        allow_all(),
-    )
-    .await
-    .with_compaction(
-        summarizer,
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
+    let engine = engine_with_router_and_runtime(router, builtin_test_runtime(), allow_all())
+        .await
+        .with_terminal_handoff(summarizer, TerminalHandoffOptions::default())
+        .with_rewriters(support::compaction_rewriters(1));
 
     let sess = create_root_session(&engine, "hya-main", "session-model", dir.path()).await;
     let tok = hya_engine::tokens::TokenAccounting::default();
@@ -1403,7 +1459,7 @@ async fn agent_effort_precedence_between_round_updates_and_corrupt_propagation()
     let roster_eng = SessionEngine::new(
         store.clone(),
         Arc::new(ProviderRouter::new()),
-        test_runtime(Arc::new(hya_tool_loader::builtins())),
+        builtin_test_runtime().runtime,
         perm,
         EventBus::default(),
     );
@@ -2169,8 +2225,8 @@ fn plugin_tool_source(id: &str, export: &str) -> RuntimeSource {
     )
 }
 
-fn empty_hooks() -> Arc<dyn HookDispatcher> {
-    Arc::new(HookChain::new(Vec::new()))
+fn probe_hooks() -> Arc<dyn NativeHook> {
+    Arc::new(HookProbe::healthy())
 }
 
 #[test]
@@ -2315,7 +2371,7 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
     let mut ov_a = scope_overlay("alpha-agent");
     ov_a.plugin_sources = vec![
         RuntimeSource::new(RuntimeSourceId::plugin("proj-a"), [4; 32], owner, vec![])
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
     ];
     let mut ov_b = scope_overlay("beta-agent");
     ov_b.plugin_sources = vec![
@@ -2325,7 +2381,7 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
             Arc::new(()),
             vec![],
         )
-        .with_hooks(empty_hooks()),
+        .with_hooks(probe_hooks()),
     ];
     registry.publish_scope(scope_a.key(), ov_a).unwrap();
     registry.publish_scope(scope_b.key(), ov_b).unwrap();
@@ -2334,26 +2390,27 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
     let chain_a = bind_a.bundle_hooks_for_agent("hya-main");
     assert_eq!(chain_a.len(), 1);
     assert!(Arc::ptr_eq(
-        &registry
+        registry
             .bind_scoped(&scope_a, root_a.path())
             .unwrap()
-            .bundle_hooks_for_agent("hya-main")[0],
-        &chain_a[0]
+            .bundle_hooks_for_agent("hya-main")[0]
+            .hook(),
+        chain_a[0].hook()
     ));
     assert!(
         bind_a
             .bundle_hooks_for_agent("alpha-agent")
             .iter()
-            .any(|h| Arc::ptr_eq(h, &chain_a[0]))
+            .any(|h| Arc::ptr_eq(h.hook(), chain_a[0].hook()))
     );
     let bind_b = registry.bind_scoped(&scope_b, root_b.path()).unwrap();
     let chain_b = bind_b.bundle_hooks_for_agent("hya-main");
-    assert!(chain_b.len() == 1 && !Arc::ptr_eq(&chain_b[0], &chain_a[0]));
+    assert!(chain_b.len() == 1 && !Arc::ptr_eq(chain_b[0].hook(), chain_a[0].hook()));
     assert!(
         !bind_b
             .bundle_hooks_for_agent("beta-agent")
             .iter()
-            .any(|h| Arc::ptr_eq(h, &chain_a[0]))
+            .any(|h| Arc::ptr_eq(h.hook(), chain_a[0].hook()))
     );
     assert!(
         registry
@@ -2419,6 +2476,28 @@ fn catalog_scope_failures_drop_hooks_and_model_shadowing() {
     assert_eq!(
         ScopeKey::Project(scope_a.project_id().unwrap()),
         scope_a.key()
+    );
+
+    // A `config.yaml` `agents.<id>.model` applies by Agent id whatever the
+    // Agent's origin, ahead of the owning bundle's file.
+    registry.publish_agent_model_configuration(AgentModelConfiguration {
+        builtin: BTreeMap::from([("alpha-agent".into(), ModelRef::new("global-alpha"))]),
+        bundles: BTreeMap::new(),
+    });
+    let bind = registry.bind_scoped(&scope_a, root_a.path()).unwrap();
+    assert_eq!(
+        bind.configured_agent_model("alpha-agent"),
+        Some(&ModelRef::new("global-alpha"))
+    );
+    assert_eq!(
+        bind.agent_model_file_origin("alpha-agent"),
+        Some(AgentOrigin::Builtin)
+    );
+    assert_eq!(
+        bind.agent_model_file_origin("hya-main"),
+        Some(AgentOrigin::Bundle {
+            bundle_id: "hya/core-agents"
+        })
     );
 }
 
@@ -3070,21 +3149,21 @@ fn runtime_registry_plugin_hook_order_and_schema_claims() {
                 Arc::new(()),
                 vec![],
             )
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
             RuntimeSource::new(
                 RuntimeSourceId::bundle("acme/owner"),
                 [5; 32],
                 Arc::new(()),
                 vec![],
             )
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
             RuntimeSource::new(
                 RuntimeSourceId::bundle("acme/plugin-a"),
                 [6; 32],
                 Arc::new(()),
                 vec![],
             )
-            .with_hooks(empty_hooks()),
+            .with_hooks(probe_hooks()),
         ])
     })
     .unwrap();
@@ -3095,16 +3174,27 @@ fn runtime_registry_plugin_hook_order_and_schema_claims() {
         hb.bundle_hooks("acme/owner").unwrap(),
     );
     let b_hooks = hb.bundle_hooks_for_agent("hya-main");
-    assert!(b_hooks.len() == 2 && Arc::ptr_eq(&b_hooks[0], &pa) && Arc::ptr_eq(&b_hooks[1], &pb));
+    assert!(
+        b_hooks.len() == 2
+            && Arc::ptr_eq(b_hooks[0].hook(), pa.hook())
+            && Arc::ptr_eq(b_hooks[1].hook(), pb.hook())
+    );
     let h_hooks = hb.bundle_hooks_for_agent("hooked-agent");
     assert!(
         h_hooks.len() == 3
-            && Arc::ptr_eq(&h_hooks[0], &pa)
-            && Arc::ptr_eq(&h_hooks[1], &pb)
-            && !Arc::ptr_eq(&h_hooks[2], &ow)
+            && Arc::ptr_eq(h_hooks[0].hook(), pa.hook())
+            && Arc::ptr_eq(h_hooks[1].hook(), pb.hook())
+            && Arc::ptr_eq(h_hooks[2].hook(), ow.hook())
     );
+    let owner_hooks = HookChain::new(vec![h_hooks[2].clone()]);
+    assert!(owner_hooks.handles(hya_engine::HookPoint::ChatParams));
+    assert!(!owner_hooks.handles(hya_engine::HookPoint::ToolExecuteBefore));
     let p_hooks = hb.bundle_hooks_for_agent("plain-agent");
-    assert!(p_hooks.len() == 2 && Arc::ptr_eq(&p_hooks[0], &pa) && Arc::ptr_eq(&p_hooks[1], &pb));
+    assert!(
+        p_hooks.len() == 2
+            && Arc::ptr_eq(p_hooks[0].hook(), pa.hook())
+            && Arc::ptr_eq(p_hooks[1].hook(), pb.hook())
+    );
     assert!(hb.bundle_hooks_for_agent("missing-agent").is_empty());
 
     // Part B & C: Scheme competition (greater source id wins) + grouped SchemaConflicts error.
@@ -3487,6 +3577,7 @@ async fn runtime_catalog_refresh_entry_points_and_loop_reuse() {
             .await;
         eng_l
             .admit_user_prompt_with_binding(
+                None,
                 child,
                 directive.to_string(),
                 &binding,
@@ -3959,8 +4050,20 @@ impl HookProbe {
 }
 
 #[async_trait]
-impl HookDispatcher for HookProbe {
-    fn dispatch_event(&self, env: &Envelope) {
+impl NativeHook for HookProbe {
+    fn id(&self) -> &str {
+        "HookProbe"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::EventObserve,
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::ToolExecuteBefore,
+            hya_runtime_abi::HookPoint::ToolExecuteAfter,
+        ]
+    }
+
+    fn on_event(&self, env: &Envelope) {
         self.events.lock().unwrap().push(env.clone());
         if let Some(c) = &self.fail_event {
             c.fetch_add(1, Ordering::SeqCst);
@@ -3970,37 +4073,34 @@ impl HookDispatcher for HookProbe {
     fn is_healthy(&self) -> bool {
         self.healthy.load(Ordering::SeqCst)
     }
-    async fn command_execute_before(
+    async fn chat_params(
         &self,
-        i: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: i.text }
-    }
-    async fn text_complete(&self, i: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: i.text }
-    }
-    async fn message_user_before(&self, i: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: i.text }
-    }
-    async fn chat_params(&self, mut i: ChatParamsInput) -> ChatParamsOutcome {
+        mut i: NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         if let Some(t) = self.temperature {
-            i.request.temperature = Some(t);
+            i.params["temperature"] = json!(t);
         }
-        ChatParamsOutcome::Continue { request: i.request }
+        Ok(i.params)
     }
-    async fn tool_execute_before(&self, i: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+    async fn tool_execute_before(
+        &self,
+        i: NativeToolBeforeInput,
+    ) -> Result<NativeToolBeforeOutcome, hya_runtime_abi::HostError> {
         if let Some(c) = &self.fail_before {
             c.fetch_add(1, Ordering::SeqCst);
             self.healthy.store(false, Ordering::SeqCst);
         }
-        ToolExecuteBeforeOutcome::Continue { input: i.input }
+        Ok(NativeToolBeforeOutcome::Continue { input: i.input })
     }
-    async fn tool_execute_after(&self, i: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+    async fn tool_execute_after(
+        &self,
+        i: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
         if let Some(c) = &self.fail_after {
             c.fetch_add(1, Ordering::SeqCst);
             self.healthy.store(false, Ordering::SeqCst);
         }
-        ToolExecuteAfterOutcome::Continue { result: i.result }
+        Ok(NativeToolAfterOutcome::Continue { result: i.result })
     }
 }
 
@@ -4017,7 +4117,7 @@ struct SidecarSpy {
     ready_gate: Option<(Arc<Notify>, Arc<Notify>)>,
     loss_token: Option<CancellationToken>,
     cancel_loss_on_ready: bool,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    hooks: Option<Arc<dyn NativeHook>>,
     shutdown_failure: Option<String>,
 }
 
@@ -4083,10 +4183,10 @@ impl SidecarHandle for SpyHandle {
         self.0.tool_bindings.fetch_add(1, Ordering::SeqCst);
         Arc::from([])
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn HookDispatcher>> {
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
         self.0.hooks.as_ref().map(|h| {
             self.0.hook_accessors.fetch_add(1, Ordering::SeqCst);
-            h.clone()
+            hya_engine::HookEntry::new(h.clone())
         })
     }
     fn loss_token(&self) -> Option<CancellationToken> {

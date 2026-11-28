@@ -1,11 +1,4 @@
-//! The full mode's [`Harness`]: what a full-mode turn adds around the kernel
-//! loop. Before each round it re-validates the actor claim, rebinds a Root
-//! activation to a new runtime generation, resolves the round's model, and
-//! runs the kernel's context reduction with the internal bundles' extensions
-//! (`hya/compaction`); the request carries the agent's prompt,
-//! tools, and effort through `chat.params`; streams open through model
-//! fallback or the Workflow route under a governor permit. The harness applies
-//! the provider round retry policy. An accepted `report` ends the turn.
+//! The engine state and round callbacks that drive the context kernel.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,9 +10,7 @@ use hya_proto::{
     SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter};
-use hya_runtime_abi::TurnRouteFailureClass;
-use hya_tool::{AgentDef, ReportLatch};
-use tokio::sync::OwnedSemaphorePermit;
+use hya_tool::AgentDef;
 use tokio_util::sync::CancellationToken;
 
 use super::super::roots::SessionWorkspace;
@@ -28,16 +19,16 @@ use super::super::{
     AgentSpec, SessionEngine, agent_roster, effective_agent_for_binding_with_sidecar_tools,
     session_workdir,
 };
+use super::hooks::{self as turn_hooks, OpenRequest, TurnHook};
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript, model_window};
-use super::route::{ExplicitTurnRoute, core_route_failure_class, provider_route_failure_class};
-use super::tool_gate::{TurnToolGate, can_report};
+use super::tool_gate::{ToolState, TurnToolGate};
 use super::{RequestLineage, TurnExecution, TurnRebindInputs};
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookChain, HookDispatcher, activation_hook_for,
-    replace_activation_hooks,
+    HookChain, HookPoint, NativeChatParamsInput, activation_hook_for, apply_chat_params,
+    chat_params_value, replace_activation_hooks,
 };
 use crate::kernel::{self, Failure, Harness, Round, ToolCall, ToolGate, View};
 use crate::prompt::{PromptEnv, discover_context_files, render_environment_and_context, today};
@@ -79,23 +70,20 @@ impl SessionEngine {
             workspace,
             actor_claim,
             guidance,
-            workflow_route,
+            explicit_route,
             ran_known_tool,
             explicit_model,
             rebind,
             effort_fallback,
         } = execution;
-        // Depth in the subagent tree, derived from the parent chain. Subagents use
-        // the general live provider-stream class; the root uses the independent
-        // reserved class so root progress never waits behind background work.
         let projection = self.store.read_projection_shared(session).await?;
-        let depth = match (&self.governor, projection.session.parent) {
-            (Some(_), Some(parent)) => self
+        let depth = match projection.session.parent {
+            Some(parent) => self
                 .session_lineage(parent)
                 .await
                 .map(|(_, depth)| depth + 1)
                 .unwrap_or(0),
-            _ => 0,
+            None => 0,
         };
         let mut events = Vec::with_capacity(2);
         let workdir = session_workdir(agent, &projection);
@@ -151,7 +139,7 @@ impl SessionEngine {
             Some(&initial_context),
             &tools,
             depth,
-            self.use_tool_family_prompts,
+            binding.tools(),
         );
         let recorded_digests = prompt_digests(&system, &tools)?;
         events.push(Event::TurnBindingRecorded {
@@ -184,7 +172,7 @@ impl SessionEngine {
             session,
             message,
         };
-        let mut harness = TurnHarness {
+        let mut harness = EngineHarness {
             engine: self,
             session,
             message,
@@ -196,7 +184,7 @@ impl SessionEngine {
             rebind,
             apply_default_overlays,
             explicit_model,
-            workflow_route,
+            entries: turn_hooks::entries(self, session, actor_claim, explicit_route, cancel, depth),
             ran_known_tool,
             guidance,
             external_dirs,
@@ -206,7 +194,7 @@ impl SessionEngine {
             depth,
             defer_steer: false,
             recorded_digests,
-            report_latch: ReportLatch::new(),
+            tool_state: ToolState::default(),
             nested_engine: None,
             root_session_cache: None,
             rounds: 0,
@@ -216,10 +204,8 @@ impl SessionEngine {
             attachments: AttachmentData::new(),
             parent_session: None,
             offered: Vec::new(),
-            permit: None,
             retries: 0,
             serving_model: None,
-            workflow_candidate: None,
             reasoning_tokens: None,
             empty_turns: 0,
             output_tokens: None,
@@ -243,8 +229,8 @@ impl SessionEngine {
     }
 }
 
-/// One full-mode turn's state across the kernel's rounds.
-struct TurnHarness<'a> {
+/// One turn's state across the kernel's rounds.
+struct EngineHarness<'a> {
     ran_known_tool: Option<&'a mut bool>,
     engine: &'a SessionEngine,
     session: SessionId,
@@ -260,7 +246,7 @@ struct TurnHarness<'a> {
     rebind: Option<TurnRebindInputs<'a>>,
     apply_default_overlays: bool,
     explicit_model: Option<&'a ModelRef>,
-    workflow_route: Option<&'a ExplicitTurnRoute>,
+    entries: Vec<Box<dyn TurnHook + 'a>>,
     guidance: Option<Arc<str>>,
     external_dirs: &'a [PathBuf],
     workspace: Arc<SessionWorkspace>,
@@ -270,9 +256,7 @@ struct TurnHarness<'a> {
     defer_steer: bool,
     /// Prompt digests last recorded in `TurnBindingRecorded`.
     recorded_digests: (String, String),
-    /// Set when a `report` of this turn is accepted: the turn ends right
-    /// after that tool round, and a second `report` is rejected.
-    report_latch: ReportLatch,
+    tool_state: ToolState,
     /// Engine handle for nested tool calls, cloned once per turn on first use.
     nested_engine: Option<Arc<SessionEngine>>,
     /// Root of this session's spawn tree, resolved on first hook use.
@@ -288,13 +272,9 @@ struct TurnHarness<'a> {
     parent_session: Option<SessionId>,
     /// Tool schemas the round's request offered.
     offered: Vec<ToolSchema>,
-    /// Live provider-stream permit, held only while a round streams: a member
-    /// blocked in the `task` tool (awaiting its children) holds none.
-    permit: Option<OwnedSemaphorePermit>,
     /// Retries of the current round.
     retries: usize,
     serving_model: Option<ModelRef>,
-    workflow_candidate: Option<usize>,
     reasoning_tokens: Option<u64>,
     empty_turns: usize,
     output_tokens: Option<u64>,
@@ -303,17 +283,7 @@ struct TurnHarness<'a> {
     effort_fallback: super::super::TurnEffortFallback,
 }
 
-impl TurnHarness<'_> {
-    async fn check_failure_cancelled(&self) -> Result<(), CoreError> {
-        if self.cancel.is_cancelled() {
-            if let Some(route) = self.workflow_route {
-                route.finalize(Some(TurnRouteFailureClass::Cancelled))?;
-            }
-            return Err(CoreError::Cancelled);
-        }
-        Ok(())
-    }
-
+impl EngineHarness<'_> {
     /// Swap in a new runtime generation when the registry has one.
     async fn rebind(
         &mut self,
@@ -392,7 +362,7 @@ impl TurnHarness<'_> {
         );
         let mut hooks = fresh.bundle_hooks_for_agent(stable_id);
         if let Some(sidecar_hooks) = &inputs.sidecar_hooks {
-            hooks.push(Arc::clone(sidecar_hooks));
+            hooks.extend(sidecar_hooks.entries().iter().cloned());
         }
         self.agents = engine
             .annotate_agent_efforts_with(
@@ -404,8 +374,7 @@ impl TurnHarness<'_> {
         self.binding = fresh;
         self.live_agent = materialized;
         self.resources = compiled;
-        let hooks =
-            (!hooks.is_empty()).then(|| Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>);
+        let hooks = (!hooks.is_empty()).then(|| Arc::new(HookChain::new(hooks)));
         replace_activation_hooks(session, hooks);
         let channel_policy = crate::channel_policy::from_binding(&self.binding)
             .map_err(CoreError::bundle)?
@@ -416,7 +385,7 @@ impl TurnHarness<'_> {
 }
 
 #[async_trait]
-impl ToolGate for TurnHarness<'_> {
+impl ToolGate for EngineHarness<'_> {
     async fn call(&mut self, call: ToolCall) -> Result<(), CoreError> {
         let mut gate = TurnToolGate {
             engine: self.engine,
@@ -431,32 +400,28 @@ impl ToolGate for TurnHarness<'_> {
             actor_claim: self.actor_claim,
             guidance: &self.guidance,
             cancel: self.cancel,
-            report_latch: &self.report_latch,
+            state: &mut self.tool_state,
             nested_engine: &mut self.nested_engine,
             defer_steer: self.defer_steer,
             parent_session: self.parent_session,
             offered: &self.offered,
+            depth: self.depth,
         };
         gate.call(call).await?;
         self.defer_steer = gate.defer_steer;
         Ok(())
     }
-
-    /// Unrun calls stay open; the turn end closes them as `CANCELLED`.
-    async fn cancelled(&mut self, _calls: Vec<ToolCall>) -> Result<(), CoreError> {
-        Ok(())
-    }
 }
 
 #[async_trait]
-impl Harness for TurnHarness<'_> {
-    /// Re-validate the actor claim, rebind (Root, after the first round),
-    /// resolve the round's model and attachments, then run the kernel's
-    /// context reduction with the engine's extensions (`hya/compaction`).
+impl Harness for EngineHarness<'_> {
+    /// Prepare the runtime and reduce context before the next model call.
     async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
         self.defer_steer = false;
         let engine = self.engine;
-        engine.validate_actor_claim(self.actor_claim).await?;
+        for entry in &mut self.entries {
+            entry.before_round().await?;
+        }
         if activation_hook_for(self.session).is_some_and(|hooks| !hooks.is_healthy()) {
             return Err(CoreError::Cancelled);
         }
@@ -502,13 +467,12 @@ impl Harness for TurnHarness<'_> {
                 projection.session.initial_context.as_deref(),
                 &tools,
                 self.depth,
-                engine.use_tool_family_prompts,
+                self.binding.tools(),
             )),
             &tools,
             self.router.reasoning_replay_policy(&self.model),
         );
         let errors = HostErrors::default();
-        let config = engine.rewriter_config();
         let log = TurnLog {
             engine,
             actor_claim: self.actor_claim,
@@ -532,7 +496,7 @@ impl Harness for TurnHarness<'_> {
             overhead_tokens,
             pressure: None,
             workdir: &workdir,
-            config: &config,
+            token_accounting: engine.token_accounting.mode(),
             log: &log,
             transcript: &transcript,
             models: Some(&models),
@@ -575,7 +539,7 @@ impl Harness for TurnHarness<'_> {
             view.projection.session.initial_context.as_deref(),
             &tools,
             self.depth,
-            engine.use_tool_family_prompts,
+            self.binding.tools(),
         );
         let digests = prompt_digests(&system, &tools)?;
         if digests != self.recorded_digests {
@@ -599,22 +563,25 @@ impl Harness for TurnHarness<'_> {
             &self.attachments,
             effort,
         );
-        let request = if let Some(hooks) = engine.active_hook_dispatcher(session) {
+        let request = if let Some(hooks) = engine
+            .active_hook_dispatcher(session)
+            .filter(|hooks| hooks.handles(HookPoint::ChatParams))
+        {
             let root_session = engine
                 .request_root_session(session, &mut self.root_session_cache)
                 .await;
-            match hooks
-                .chat_params(ChatParamsInput {
+            let params = hooks
+                .chat_params(NativeChatParamsInput {
                     session,
                     root_session,
                     agent: Some(AgentName::new(self.stable_id.as_str())),
                     message: self.message,
-                    request,
+                    params: chat_params_value(&request),
                 })
-                .await
-            {
-                ChatParamsOutcome::Continue { request } => request,
-            }
+                .await;
+            let mut request = request;
+            apply_chat_params(&mut request, params);
+            request
         } else {
             request
         };
@@ -628,56 +595,42 @@ impl Harness for TurnHarness<'_> {
     ) -> Result<Option<(EventStream, ModelRef)>, CoreError> {
         let engine = self.engine;
         let (session, message) = (self.session, self.message);
-        if self.permit.is_none() {
-            // These classes bound execution only; durable admission/order
-            // remains authoritative.
-            self.permit = match (&engine.governor, self.depth > 0) {
-                (Some(gov), true) => gov.acquire_general_stream().await,
-                (Some(gov), false) => gov.acquire_reserved_stream().await,
-                (None, _) => None,
-            };
+        for entry in &mut self.entries {
+            entry.before_open().await?;
         }
-        engine.validate_actor_claim(self.actor_claim).await?;
         let cancel = self.cancel;
-        let workflow_route = self.workflow_route;
-        let lineage = RequestLineage {
-            agent: self.stable_id.as_str(),
-            root_session_cache: &mut self.root_session_cache,
+        let input = OpenRequest {
+            router: &self.router,
+            request,
+            session,
+            message,
         };
         let open = async {
-            match (workflow_route, self.serving_model.as_ref()) {
-                (Some(route), _) => {
-                    let (stream, index) = engine
-                        .stream_with_workflow_route(
-                            &self.router,
-                            request,
-                            session,
-                            message,
-                            route,
-                            self.workflow_candidate,
-                        )
-                        .await?;
-                    self.workflow_candidate = Some(index);
-                    Ok((stream, route.route().candidates[index].model.clone()))
+            for entry in &mut self.entries {
+                if let Some(opened) = entry.open(&input).await? {
+                    return Ok(opened);
                 }
-                (None, Some(model)) => Ok((
+            }
+            if let Some(model) = &self.serving_model {
+                return Ok((
                     engine
                         .stream_model_candidate(&self.router, request, model, session, message)
                         .await?,
                     model.clone(),
-                )),
-                (None, None) => {
-                    engine
-                        .stream_with_model_fallback(
-                            &self.router,
-                            request,
-                            session,
-                            message,
-                            lineage,
-                        )
-                        .await
-                }
+                ));
             }
+            Ok(engine
+                .stream_with_model_fallback(
+                    &self.router,
+                    request,
+                    session,
+                    message,
+                    RequestLineage {
+                        agent: self.stable_id.as_str(),
+                        root_session_cache: &mut self.root_session_cache,
+                    },
+                )
+                .await?)
         };
         let opened = tokio::select! {
             biased;
@@ -690,31 +643,34 @@ impl Harness for TurnHarness<'_> {
                 Ok(Some((stream, model)))
             }
             Err(_) if cancel.is_cancelled() => Ok(None),
-            Err(error) => {
-                if let Some(route) = workflow_route {
-                    route.finalize(Some(provider_route_failure_class(&error)))?;
-                }
-                Err(error.into())
-            }
+            Err(error) => Err(error),
         }
     }
 
     async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
-        // Workflow opens have already finalized on error in open().
-        if !failure.step_started && self.workflow_route.is_some() {
-            return Ok(false);
+        if self.cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
         }
-        self.check_failure_cancelled().await?;
-        // Before the first successful open there is no pin. A failed reopen
-        // during recovery still belongs to the model that served the stream.
         let deadline = hya_tool::deadline::current();
-        if let Some(&wait) = self.engine.round_retry_waits.get(self.retries)
-            && !failure.saw_tool_call
-            && is_retryable_round_error(failure)
-            && !self.cancel.is_cancelled()
-            && deadline.is_none_or(|d| d.remaining().saturating_sub(d.final_window()) > wait)
-        {
-            self.permit = None;
+        let mut retry = self
+            .engine
+            .round_retry_waits
+            .get(self.retries)
+            .copied()
+            .filter(|&wait| {
+                !failure.saw_tool_call
+                    && is_retryable_round_error(failure)
+                    && !self.cancel.is_cancelled()
+                    && deadline
+                        .is_none_or(|d| d.remaining().saturating_sub(d.final_window()) > wait)
+            });
+        for entry in &mut self.entries {
+            entry.failed(failure, &mut retry)?;
+        }
+        if self.cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        if let Some(wait) = retry {
             if failure.step_started {
                 let session = self.session;
                 let message = self.message;
@@ -745,21 +701,22 @@ impl Harness for TurnHarness<'_> {
                 }
             }
             self.retries += 1;
-            tracing::warn!(session = %self.session, retry = self.retries, error = %failure.error,
+            tracing::warn!(name: "round_retry", session = %self.session, retry = self.retries, error = %failure.error,
                 "provider round failed; waiting {wait:?} before retry");
             tokio::select! {
                 biased;
                 () = self.cancel.cancelled() => {}
                 () = tokio::time::sleep(wait) => {}
             }
-            self.check_failure_cancelled().await?;
+            if self.cancel.is_cancelled() {
+                return Err(CoreError::Cancelled);
+            }
             if deadline.is_none_or(|d| d.stage() < hya_tool::deadline::Stage::Final) {
                 return Ok(true);
             }
-        }
-        self.check_failure_cancelled().await?;
-        if let Some(route) = self.workflow_route {
-            route.finalize(Some(core_route_failure_class(&failure.error, self.cancel)))?;
+            for entry in &mut self.entries {
+                entry.failed(failure, &mut None)?;
+            }
         }
         Ok(false)
     }
@@ -773,11 +730,10 @@ impl Harness for TurnHarness<'_> {
                     || self.resources.resolve_tool(&call.name).is_some()
             });
         }
-        if let Some(route) = self.workflow_route {
-            route.finalize(None)?;
+        for entry in &mut self.entries {
+            entry.collected()?;
         }
         self.serving_model = None;
-        self.workflow_candidate = None;
         self.reasoning_tokens = round.tokens.map(|tokens| tokens.reasoning);
         self.last_finish = Some(round.finish);
         self.output_tokens = round.tokens.map(|tokens| tokens.output);
@@ -789,9 +745,6 @@ impl Harness for TurnHarness<'_> {
                 .get_or_insert_with(TokenUsage::default)
                 .add(tokens);
         }
-        // Release the streaming slot before running tools (which may spawn
-        // and await child subagents that need permits of their own).
-        self.permit = None;
         self.retries = 0;
         self.rounds += 1;
         Ok(())
@@ -837,16 +790,15 @@ impl Harness for TurnHarness<'_> {
     }
 
     fn done(&self) -> bool {
-        // An accepted `report` ends the member's episode: the round's other
-        // tool calls have completed and are recorded.
-        self.report_latch.is_set()
+        self.tool_state.done
     }
 
-    fn deadline_subagent(&self) -> Result<bool, CoreError> {
-        can_report(
+    fn deadline_delivery_tool(&self) -> Result<Option<&str>, CoreError> {
+        turn_hooks::delivery_tool(
             self.engine,
             &self.binding,
             &self.live_agent,
+            &self.resources,
             self.parent_session,
             &self.offered,
         )

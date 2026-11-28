@@ -1,10 +1,13 @@
-//! The host's compaction settings, as `RewriteCtx::config` or per-bundle
-//! `config.yml` (`HostCatalogReader::bundle_config("hya/compaction")`) carries them.
+//! The bundle's settings: the `compaction:` block of its `config.yml`
+//! (`HostCatalogReader::bundle_config("hya/compaction")`), then
+//! `HYA_COMPACTION_KEEP_RECENT`.
 
 use hya_context::rewrite::ToolError;
-use hya_context::tokens::TokenAccountingMode;
 use serde::Deserialize;
 use serde_json::Value;
+
+/// Environment variable that overrides `keep_recent`.
+pub(crate) const KEEP_RECENT_ENV: &str = "HYA_COMPACTION_KEEP_RECENT";
 
 const DEFAULT_KEEP_RECENT: usize = 6;
 
@@ -12,23 +15,19 @@ const fn default_keep_recent() -> usize {
     DEFAULT_KEEP_RECENT
 }
 
-/// The kept tail and the token-accounting mode.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+/// The kept tail.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(default)]
 pub(crate) struct Config {
     /// Recent messages (and tool steps) whose tool outputs `shake` keeps.
     #[serde(default = "default_keep_recent")]
     pub(crate) keep_recent: usize,
-    /// How window occupancy is measured for `ContextStatus`.
-    #[serde(default)]
-    pub(crate) token_accounting: TokenAccountingMode,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             keep_recent: DEFAULT_KEEP_RECENT,
-            token_accounting: TokenAccountingMode::default(),
         }
     }
 }
@@ -45,6 +44,15 @@ impl Config {
         }
         Ok(Self::deserialize(value)?)
     }
+
+    /// Apply the `HYA_COMPACTION_KEEP_RECENT` value; an unparseable one keeps
+    /// the file's setting.
+    pub(crate) fn apply_env(mut self, keep_recent: Option<&str>) -> Self {
+        if let Some(parsed) = keep_recent.and_then(|value| value.trim().parse().ok()) {
+            self.keep_recent = parsed;
+        }
+        self
+    }
 }
 
 #[cfg(test)]
@@ -53,21 +61,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_reads_the_host_settings() {
-        let config = Config::from_value(&serde_json::json!({
-            "keep_recent": 2, "token_accounting": "estimate",
-        }))
-        .unwrap();
+    fn config_reads_the_bundle_file_then_the_env_override() {
+        let config = Config::from_value(&serde_json::json!({ "keep_recent": 2 })).unwrap();
         assert_eq!(config.keep_recent, 2);
-        assert_eq!(config.token_accounting, TokenAccountingMode::Estimate);
 
         let nested = Config::from_value(&serde_json::json!({
-            "compaction": { "keep_recent": 4, "token_accounting": "provider" }
+            "compaction": { "keep_recent": 4, "summary_max_tokens": 8192 }
         }))
         .unwrap();
         assert_eq!(nested.keep_recent, 4);
-        assert_eq!(nested.token_accounting, TokenAccountingMode::Provider);
 
         assert_eq!(Config::from_value(&Value::Null).unwrap(), Config::default());
+        assert!(Config::from_value(&serde_json::json!({ "keep_recent": "many" })).is_err());
+
+        assert_eq!(nested.apply_env(Some(" 9 ")).keep_recent, 9);
+        assert_eq!(nested.apply_env(Some("banana")).keep_recent, 4);
+        assert_eq!(nested.apply_env(None).keep_recent, 4);
     }
 }

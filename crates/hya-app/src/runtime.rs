@@ -20,7 +20,7 @@ use hya_engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CoreError, DRAIN_DEADLINE,
     EventBus, ModelSummarizer, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind,
     SessionEngine, SubagentGovernor, Summarizer, TerminalHandoffOptions, TokenAccounting,
-    TurnDrainReport, run_lifecycle_service, run_mailbox_service,
+    TurnDrainReport, run_lifecycle_service,
 };
 
 // Single discovery/date implementation lives in hya-engine; re-export for callers.
@@ -32,9 +32,9 @@ use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId};
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane,
-    MailboxPlane, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule,
-    SpawnError, ToolPermission, ToolRegistry,
+    Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, Mode,
+    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, Rule, SpawnError,
+    ToolPermission, ToolRegistry,
 };
 #[cfg(test)]
 use sha2::{Digest, Sha256};
@@ -51,29 +51,6 @@ use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
 /// Catalog materialization and export validation for Bundle sidecars.
 pub use crate::bundle_runtime::sidecar;
 
-/// Whether `hya/core-agents` is both enabled by `selection` and present on disk.
-pub(crate) fn core_agents_available(selection: &hya_bundle::BuiltinBundleSelection) -> bool {
-    selection.is_enabled("hya/core-agents")
-        && hya_bundle::first_party_bundle_optional("hya/core-agents")
-            .ok()
-            .flatten()
-            .is_some()
-}
-
-/// Build an [`AgentCatalog`] over `bundles` honoring `selection`: uses
-/// `hya/core-agents` when enabled and present, otherwise the minimal compiled-in
-/// `hya-bare` default agent (zero first-party bundle loads).
-pub(crate) fn agent_catalog_for_selection(
-    bundles: Arc<BundleCatalog>,
-    selection: &hya_bundle::BuiltinBundleSelection,
-) -> Result<AgentCatalog, hya_bundle::BundleError> {
-    if core_agents_available(selection) {
-        AgentCatalog::new(bundles)
-    } else {
-        AgentCatalog::new_bare(bundles)
-    }
-}
-
 /// Agent catalog for a process before installed bundles are refreshed.
 ///
 /// Honors the active `config.yaml` [`hya_bundle::BuiltinBundleSelection`].
@@ -81,11 +58,10 @@ pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
     builtin_agent_catalog_for(&crate::config::configured_builtin_bundles())
 }
 
-/// Agent catalog for an explicit [`hya_bundle::BuiltinBundleSelection`].
+/// Agent catalog over the enabled first-party bundles of `selection`.
 ///
-/// Under `BuiltinBundleProfile::Bare` (or when `bundles/builtin/` is absent),
-/// loads zero first-party bundles and publishes only the minimal `hya-bare`
-/// default agent.
+/// With no enabled bundle declaring `default_agent` (an empty selection, or
+/// `bundles/builtin/` absent) the roster is the compiled-in `hya-bare`.
 pub fn builtin_agent_catalog_for(
     selection: &hya_bundle::BuiltinBundleSelection,
 ) -> anyhow::Result<Arc<AgentCatalog>> {
@@ -94,8 +70,8 @@ pub fn builtin_agent_catalog_for(
     let first_party_refs = first_party.iter().collect::<Vec<_>>();
     let bundles = BundleCatalog::from_verified_catalogs(&first_party_refs)
         .context("build first-party bundle catalog")?;
-    let catalog = agent_catalog_for_selection(Arc::new(bundles), selection)
-        .context("build agent catalog over built-ins")?;
+    let catalog =
+        AgentCatalog::new(Arc::new(bundles)).context("build agent catalog over built-ins")?;
     Ok(Arc::new(catalog))
 }
 
@@ -117,7 +93,7 @@ fn register_missing_bare_tools(registry: &hya_tool::ToolRegistry) {
             ),
             _ => (ToolPermission::Tool, &[]),
         };
-        registry.register_builtin(tool, permission, aliases.iter().copied(), "hya/bare");
+        registry.register_builtin(tool, permission, aliases.iter().copied(), "hya/bare", None);
     }
 }
 
@@ -185,31 +161,35 @@ fn caller_workdir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Agent base for server and interactive TUI sessions using `runtime`'s active
-/// built-in bundle selection (`hya-bare` when `hya/core-agents` is disabled or
-/// absent, otherwise `hya-main`).
+/// Agent base for server and interactive TUI sessions: the default agent of
+/// the catalog `runtime`'s built-in bundle selection composes.
+///
+/// # Errors
+/// The first-party bundles of the selection fail to load or compose.
 pub fn agent_base_for_runtime(
     runtime: &RuntimeConfig,
     reasoning: Option<ReasoningEffort>,
-) -> AgentSpec {
-    let name = if core_agents_available(runtime.settings.builtin_bundles()) {
-        BUILTIN_DEFAULT_AGENT_ID
-    } else {
-        hya_engine::BARE_AGENT_ID
-    };
-    AgentSpec {
-        name: AgentName::new(name),
+) -> anyhow::Result<AgentSpec> {
+    let catalog = builtin_agent_catalog_for(runtime.settings.builtin_bundles())?;
+    Ok(AgentSpec {
+        name: AgentName::new(catalog.default_agent_id()),
         ..agent_base_with_model(&runtime.model, reasoning)
-    }
+    })
 }
 
-/// Agent base for direct-mode commands, honoring `runtime`'s active built-in
-/// bundle selection (`hya-bare` in bare mode, `hya-main` in full mode).
-pub fn agent_for_runtime(runtime: &RuntimeConfig, reasoning: Option<ReasoningEffort>) -> AgentSpec {
-    AgentSpec {
+/// [`agent_base_for_runtime`] with the caller's working directory, for
+/// direct-mode commands.
+///
+/// # Errors
+/// See [`agent_base_for_runtime`].
+pub fn agent_for_runtime(
+    runtime: &RuntimeConfig,
+    reasoning: Option<ReasoningEffort>,
+) -> anyhow::Result<AgentSpec> {
+    Ok(AgentSpec {
         workdir: caller_workdir(),
-        ..agent_base_for_runtime(runtime, reasoning)
-    }
+        ..agent_base_for_runtime(runtime, reasoning)?
+    })
 }
 
 /// Agent base for direct-mode commands, with the caller's working directory.
@@ -229,7 +209,7 @@ pub fn agent_with_model_pure(model: &str, reasoning: Option<ReasoningEffort>) ->
 /// Resolve which agent id a headless root session (`exec`/`run`, `-p` goal
 /// mode, `loop`, `rpc`) should use, mirroring `serve`'s own precedence:
 /// explicit override (a CLI flag, when the caller has one) first, then config
-/// `default_agent`, then the built-in [`BUILTIN_DEFAULT_AGENT_ID`].
+/// `default_agent`, then the bound catalog's default agent.
 ///
 /// Unlike `serve` (which resolves lazily per HTTP session-create request and
 /// can silently keep serving other sessions on failure), a headless run has
@@ -349,23 +329,38 @@ impl RuntimeConfig {
         self
     }
 
-    /// `--bare` mode (`BuiltinBundleProfile::Bare`): disable all built-in
-    /// first-party bundles, use the 8 standard bare tools (`read`, `write`,
-    /// `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), core `code-mode`
-    /// without `agent()`, and the minimal `hya-bare` default agent while
-    /// keeping `AGENTS.md`, filesystem skills, MCP, and user/project bundles
-    /// and plugins active (unless `--pure` is also set).
+    /// `--bare`: the empty built-in bundle set ([`builtin_selection`]), so
+    /// the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`,
+    /// `todo`, `rewrite`, `skill`), core `code-mode` without `agent()`, and the
+    /// compiled-in `hya-bare` default agent, while keeping `AGENTS.md`,
+    /// filesystem skills, MCP, and user/project bundles and plugins active
+    /// (unless `--pure` is also set).
     #[must_use]
     pub fn with_bare(mut self, bare: bool) -> Self {
         if bare {
-            self.settings
-                .set_builtin_bundles(hya_bundle::BuiltinBundleSelection::bare());
+            self.settings.set_builtin_bundles(builtin_selection(true));
             self.default_agent = None;
         }
         self
     }
 }
-fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfig {
+
+/// The built-in bundle selection of a CLI invocation: the empty set under
+/// `--bare`, else `config.yaml` `bundles.builtin`.
+#[must_use]
+pub fn builtin_selection(bare: bool) -> hya_bundle::BuiltinBundleSelection {
+    if bare {
+        hya_bundle::BuiltinBundleSelection::bare()
+    } else {
+        config::configured_builtin_bundles()
+    }
+}
+
+/// The offline-provider runtime, built without reading `config.yaml`: no
+/// providers, MCP servers, or plugins. `strict` asks before every tool use
+/// (the fallback after a configuration error).
+#[must_use]
+pub fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfig {
     let (router, model) = offline_router(model_override);
     let catalog = Arc::new(ProviderCatalogSnapshot::build(
         Vec::new(),
@@ -528,6 +523,7 @@ pub struct BuiltSessionEngine {
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
     host_runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
+    app_host_runtime: Arc<crate::host_runtime::AppHostRuntime>,
     native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]>,
     lifecycle: RuntimeTaskOwner,
     runtime_owner: Option<OwnerRunId>,
@@ -546,11 +542,11 @@ impl BuiltSessionEngine {
         Arc::clone(&self.host_runtime)
     }
 
-    /// Registered native [`hya_runtime_abi::GoalDriver`], or `None` when
-    /// `hya/goal` is disabled or running under `--bare`.
+    /// The driver registered as `name` (`<bundle-id>:<name>`), or `None`
+    /// when no enabled bundle exports it.
     #[must_use]
-    pub fn goal_driver(&self) -> Option<Arc<dyn hya_runtime_abi::GoalDriver>> {
-        self.host_runtime.goal_driver()
+    pub fn driver(&self, name: &str) -> Option<Arc<dyn hya_runtime_abi::NativeDriver>> {
+        self.app_host_runtime.driver(name)
     }
 
     /// Shared resident scheduling owner used by Workflow actor activations.
@@ -606,13 +602,6 @@ impl BuiltSessionEngine {
         Arc::clone(&self.mcp_control)
     }
 
-    /// Return the active [`hya_runtime_abi::LoopDriver`] registered by `hya/loop`,
-    /// or `None` when `hya/loop` is disabled or running in `--bare` mode.
-    #[must_use]
-    pub fn loop_driver(&self) -> Option<Arc<dyn hya_runtime_abi::LoopDriver>> {
-        self.host_runtime.loop_driver()
-    }
-
     /// Admit every daemon restore before starting recovered resident episodes.
     /// The restore turn owns its root lease before recovered child mail can wake main.
     pub async fn resume_interrupted(
@@ -622,6 +611,7 @@ impl BuiltSessionEngine {
         let restored = state.resume_interrupted_turns().await;
         let residents = self.resident_supervisor.start_recovered().await?;
         crate::startup_trace::mark("residents_recovered", Some(&residents.to_string()));
+        self.engine.notify_runtime_restored().await;
         Ok(restored)
     }
 
@@ -689,7 +679,10 @@ where
     E: From<CoreError>,
 {
     let body_result = match built.resident_supervisor.start_recovered().await {
-        Ok(_) => body(&mut built).await,
+        Ok(_) => {
+            built.engine.notify_runtime_restored().await;
+            body(&mut built).await
+        }
         Err(error) => Err(E::from(error)),
     };
     let shutdown_result = built.shutdown().await.map_err(E::from);
@@ -856,6 +849,8 @@ struct EngineBuildOptions {
     /// `--pure`: the runtime registry serves builtin skills only and never
     /// reads external skill directories.
     pure: bool,
+    /// Load `<root>/.hya/plugins` manifests (always off under `pure`).
+    project_plugins: bool,
 }
 
 /// Build a fully wired [`SessionEngine`] plus plugin host, MCP, and ask/question channels.
@@ -881,6 +876,7 @@ pub async fn build_session_engine(
         EngineBuildOptions {
             defer_mcp: defer_sideplanes(),
             pure: false,
+            project_plugins: true,
         },
     )
     .await
@@ -907,6 +903,33 @@ pub async fn build_session_engine_pure(
         EngineBuildOptions {
             defer_mcp: defer_sideplanes(),
             pure: true,
+            project_plugins: true,
+        },
+    )
+    .await
+}
+
+/// [`build_session_engine`] that loads no project plugins: a read-only
+/// command must not run commands from the repository it inspects.
+pub async fn build_session_engine_without_project_plugins(
+    store: SessionStore,
+    router: ProviderRouter,
+    agent: &AgentSpec,
+    mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
+    tool_config: (InvocationPolicy, config::EngineSettings),
+) -> anyhow::Result<BuiltSessionEngine> {
+    build_session_engine_with_mcp_defer(
+        store,
+        router,
+        agent,
+        mcp,
+        plugins,
+        tool_config,
+        EngineBuildOptions {
+            defer_mcp: defer_sideplanes(),
+            pure: false,
+            project_plugins: false,
         },
     )
     .await
@@ -933,35 +956,23 @@ fn category_model_fallbacks(categories: &CategoryRegistry) -> HashMap<ModelRef, 
     fallbacks
 }
 
-fn enabled_native_tool_families(
-    selection: &hya_bundle::BuiltinBundleSelection,
-    include_network: bool,
-) -> Vec<&'static str> {
-    let candidates: &[&'static str] = if include_network {
-        &[
-            "hya/hashline",
-            "hya/coding-extras",
-            "hya/multi-agent",
-            "hya/network",
-            "hya/agent-channels",
-        ]
-    } else {
-        &[
-            "hya/hashline",
-            "hya/coding-extras",
-            "hya/multi-agent",
-            "hya/agent-channels",
-        ]
-    };
-    candidates
+/// The enabled, present first-party bundles that run a native library, in
+/// first-party order.
+fn enabled_native_bundles(selection: &hya_bundle::BuiltinBundleSelection) -> Vec<&'static str> {
+    hya_bundle::FIRST_PARTY_BUNDLES
         .iter()
         .copied()
+        .filter(|id| selection.is_enabled(id))
         .filter(|id| {
-            selection.is_enabled(id)
-                && hya_bundle::first_party_bundle_optional(id)
-                    .ok()
-                    .flatten()
-                    .is_some()
+            hya_bundle::first_party_bundle_optional(id)
+                .ok()
+                .flatten()
+                .and_then(|catalog| catalog.bundles().first())
+                .and_then(|bundle| bundle.runtime())
+                .is_some_and(|runtime| {
+                    runtime.kind == hya_bundle::PreparedRuntimeKind::Native
+                        && runtime.abi_version == Some(2)
+                })
         })
         .collect()
 }
@@ -984,26 +995,12 @@ fn enabled_native_tool_families(
 pub fn compose_builtin_tool_registry(
     selection: &hya_bundle::BuiltinBundleSelection,
 ) -> Result<ToolRegistry, String> {
-    compose_builtin_tool_registry_with_runtime(selection, None, true).map(|(registry, _)| registry)
-}
-
-fn compose_builtin_tool_registry_with_runtime(
-    selection: &hya_bundle::BuiltinBundleSelection,
-    host_runtime: Option<Arc<dyn hya_runtime_abi::HostRuntime>>,
-    include_network: bool,
-) -> Result<(ToolRegistry, hya_tool_loader::NativeRegistrations), String> {
-    let enabled_families = enabled_native_tool_families(selection, include_network);
-    let (registry, registrations) = match host_runtime {
-        Some(runtime) => {
-            hya_tool_loader::try_load_tool_families_with_runtime(&enabled_families, runtime)?
-        }
-        None => (
-            hya_tool_loader::try_from_tool_families(&enabled_families)?,
-            hya_tool_loader::NativeRegistrations::default(),
-        ),
-    };
+    let (registry, _) = hya_tool_loader::load_native_bundles(
+        &enabled_native_bundles(selection),
+        hya_tool_loader::noop_host_runtime(),
+    )?;
     register_missing_bare_tools(&registry);
-    Ok((registry, registrations))
+    Ok(registry)
 }
 
 async fn build_session_engine_with_mcp_defer(
@@ -1045,203 +1042,65 @@ async fn build_session_engine_with_mcp_defer(
         Arc::clone(&categories),
     ));
     let host_runtime: Arc<dyn hya_runtime_abi::HostRuntime> = app_host_runtime.clone();
-    let enabled_families = enabled_native_tool_families(&builtins, false);
-    let (registry, native_registrations) = compose_builtin_tool_registry_with_runtime(
-        &builtins,
-        Some(Arc::clone(&host_runtime)),
-        false,
-    )
-    .map_err(|error| anyhow::anyhow!("compose built-in tool registry: {error}"))?;
-    let mut started_services: Vec<Arc<dyn hya_runtime_abi::NativeService>> =
-        Vec::with_capacity(native_registrations.services.len());
-    for service in native_registrations.services {
-        if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-            for started in started_services.into_iter().rev() {
-                let _ = started.stop().await;
-            }
-            store.release_runtime_owner(owner_run_id)?;
-            return Err(anyhow::anyhow!(
-                "start native bundle service `{}`: {error}",
-                service.id()
-            ));
-        }
-        started_services.push(service);
-    }
-    let mut all_native_hooks = native_registrations.hooks;
-    let native_uri_handlers = native_registrations.uri_schema_handlers;
-    let native_projection_reducers = native_registrations.projection_reducers;
-    let native_api_handlers = native_registrations.api_handlers;
-    let mut loaded_v2_tools = false;
-    if builtins.is_enabled("hya/plan")
-        && hya_bundle::first_party_bundle_optional("hya/plan")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let regs = hya_tool_loader::load_and_register_v2_bundle(
-            &registry,
-            "hya/plan",
-            Arc::clone(&host_runtime),
-        )
-        .map_err(anyhow::Error::msg)
-        .context("load first-party native bundle hya/plan")?;
-        loaded_v2_tools |= !regs.tools.is_empty();
-        all_native_hooks.extend(regs.hooks);
-    }
-    let mut deferred_workflow_regs: Option<hya_tool_loader::NativeRegistrations> = None;
-    if builtins.is_enabled("hya/workflow")
-        && hya_bundle::first_party_bundle_optional("hya/workflow")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let mut regs = hya_tool_loader::load_and_register_v2_bundle(
-            &registry,
-            "hya/workflow",
-            Arc::clone(&host_runtime),
-        )
-        .map_err(anyhow::Error::msg)
-        .context("load first-party native bundle hya/workflow")?;
-        loaded_v2_tools |= !regs.tools.is_empty();
-        all_native_hooks.extend(std::mem::take(&mut regs.hooks));
-        deferred_workflow_regs = Some(regs);
-    }
-    let network_enabled = builtins.is_enabled("hya/network")
-        && hya_bundle::first_party_bundle_optional("hya/network")
-            .ok()
-            .flatten()
-            .is_some();
-    if network_enabled {
-        let regs = hya_tool_loader::load_v2("hya/network", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load native bundle hya/network: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
+    let native_ids = enabled_native_bundles(&builtins);
+    let (registry, native_regs) =
+        match hya_tool_loader::load_native_bundles(&native_ids, Arc::clone(&host_runtime)) {
+            Ok(loaded) => loaded,
+            Err(error) => {
                 store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
+                return Err(anyhow::anyhow!("load native bundles: {error}"));
             }
-        }
-        let advertised: Vec<String> = regs
-            .tools
-            .iter()
-            .map(|tool| tool.name().to_string())
-            .collect();
-        let mut hidden: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for hook in &regs.hooks {
-            if hook
-                .hook_points()
-                .contains(&hya_runtime_abi::HookPoint::ToolVisibility)
-            {
-                let outcome = hook
-                    .tool_visibility(hya_runtime_abi::ToolVisibilityInput {
-                        session: SessionId::new(),
-                        agent: None,
-                        candidate_tools: advertised.clone(),
-                        interactive: true,
-                    })
-                    .await
-                    .map_err(|error| {
-                        anyhow::anyhow!("evaluate tool visibility hook `{}`: {error}", hook.id())
-                    })?;
-                match outcome {
-                    hya_runtime_abi::ToolVisibilityOutcome::Preserve => {}
-                    hya_runtime_abi::ToolVisibilityOutcome::Hide { tools } => {
-                        hidden.extend(tools);
-                    }
-                    hya_runtime_abi::ToolVisibilityOutcome::AllowOnly { tools } => {
-                        for candidate in &advertised {
-                            if !tools.contains(candidate) {
-                                hidden.insert(candidate.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let network_preset = hya_tool_loader::tool_bundle_presets()
-            .iter()
-            .find(|preset| preset.identity() == "hya/network");
-        for tool in regs.tools {
-            if hidden.contains(tool.name()) {
-                continue;
-            }
-            if let Some(exposure) = network_preset.and_then(|preset| preset.tool(tool.name())) {
-                if !exposure.exposed() {
-                    continue;
-                }
-                registry.register_builtin(
-                    tool,
-                    exposure.permission(),
-                    exposure
-                        .aliases()
-                        .iter()
-                        .map(|alias| (alias.name(), alias.visibility())),
-                    "hya/network",
-                );
-            } else {
-                registry.register_builtin(tool, ToolPermission::Tool, [], "hya/network");
-            }
-        }
-        started_services.extend(regs.services);
-    }
-    if builtins.is_enabled("hya/goal")
-        && hya_bundle::first_party_bundle_optional("hya/goal")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let regs = hya_tool_loader::load_v2("hya/goal", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load first-party native bundle hya/goal: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
-        }
-        if let Some(driver) = regs.goal_drivers.into_iter().next() {
-            app_host_runtime.attach_goal_driver(driver);
-        }
-        all_native_hooks.extend(regs.hooks);
-        started_services.extend(regs.services);
-    }
-    if builtins.is_enabled("hya/loop")
-        && hya_bundle::first_party_bundle_optional("hya/loop")
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        let regs = hya_tool_loader::load_v2("hya/loop", Arc::clone(&host_runtime))
-            .map_err(|error| anyhow::anyhow!("load first-party native bundle hya/loop: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
-        }
-        started_services.extend(regs.services);
-        all_native_hooks.extend(regs.hooks);
-        app_host_runtime.set_loop_drivers(regs.loop_drivers);
-    }
+        };
     register_missing_bare_tools(&registry);
+    let mut native = crate::native_bundles::NativeInstall::default();
+    for (bundle_id, regs) in native_regs {
+        native.add(&app_host_runtime, &bundle_id, regs);
+    }
+    // Installed native bundles load the same way as first-party ones
+    // (`--pure` loads no installed extensions).
+    let installed = if options.pure {
+        Vec::new()
+    } else {
+        crate::bundle_registry::BundleRegistry::enabled_catalogs(
+            &crate::installed_bundle_refresh::bundle_registry_path(),
+        )
+        .await
+        .context("read installed bundles")?
+    };
+    let installed = match crate::installed_bundle_refresh::retain_satisfied(
+        &builtins,
+        installed.iter().collect(),
+    ) {
+        Ok((kept, unsatisfied)) => {
+            for (bundle_id, warning) in unsatisfied {
+                tracing::warn!(bundle_id = %bundle_id, "{warning}");
+            }
+            kept
+        }
+        Err(error) => {
+            store.release_runtime_owner(owner_run_id)?;
+            return Err(error.into());
+        }
+    };
+    for catalog in installed {
+        for bundle in catalog.bundles().iter().filter(|bundle| {
+            bundle.runtime().is_some_and(|runtime| {
+                runtime.kind == hya_bundle::PreparedRuntimeKind::Native
+                    && runtime.abi_version == Some(2)
+            })
+        }) {
+            let bundle_id = bundle.identity().id.clone();
+            let regs = hya_tool_loader::load_installed_native_bundle(
+                &registry,
+                bundle,
+                Arc::clone(&host_runtime),
+            )
+            .map_err(anyhow::Error::msg)?;
+            native.add(&app_host_runtime, &bundle_id, regs);
+        }
+    }
 
-    let project_plugins = if options.pure {
+    let project_plugins = if options.pure || !options.project_plugins {
         crate::project_plugins::ProjectPluginSettings::disabled()
     } else {
         let configured = settings.plugin_ids();
@@ -1299,9 +1158,6 @@ async fn build_session_engine_with_mcp_defer(
         )
         .context("prepare core code-mode runtime specification")?
     };
-    let load_compaction = builtins.is_enabled("hya/compaction");
-    let use_tool_family_prompts =
-        !enabled_families.is_empty() || loaded_v2_tools || network_enabled;
     let catalog_refresh = Arc::new(
         RuntimeExtensionsRefresh::new(
             crate::ProjectScopeRefresh::new(Arc::new(
@@ -1329,41 +1185,25 @@ async fn build_session_engine_with_mcp_defer(
         .unwrap_or(tokio::sync::Semaphore::MAX_PERMITS)
         .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(spawn_queue_capacity);
-    let (mailbox, mailbox_rx) = MailboxPlane::new();
     let (lifecycle_plane, lifecycle_rx) = LifecyclePlane::new();
 
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
-    let governor = SubagentGovernor::new(subagent_limits);
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production(
         lifecycle.io_tasks.clone(),
     ));
-    let context_settings = settings.context();
-    let engine = if load_compaction {
-        match SessionEngine::try_new_with_host_runtime(
-            store.clone(),
-            router,
-            runtime,
-            permission,
-            bus,
-            Arc::clone(&host_runtime),
-        ) {
-            Ok(engine) => engine,
-            Err(error) => {
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(error).context("load internal native rewriters at startup");
-            }
-        }
-    } else {
-        SessionEngine::new_bare(store.clone(), router, runtime, permission, bus)
-    };
+    let context_settings = settings.context()?;
+    let engine = SessionEngine::new(store.clone(), router, runtime, permission, bus)
+        .with_rewriters(std::mem::take(&mut native.registrations.rewriters));
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::for_engine(&engine, agent.model.clone()));
     let engine_builder = engine
         .with_base_system_prompt(agent.system_prompt.clone())
         .with_pure_context(options.pure)
-        .with_tool_family_prompts(use_tool_family_prompts)
-        .with_native_hook_list(all_native_hooks)
-        .with_uri_schema_handlers(native_uri_handlers, Arc::clone(&host_runtime))
+        .with_hook_list(std::mem::take(&mut native.registrations.hooks))
+        .with_uri_schema_handlers(
+            std::mem::take(&mut native.registrations.uri_schema_handlers),
+            Arc::clone(&host_runtime),
+        )
         // Stop/start records use this store's runtime-owner claim.
         .with_runtime_owner(owner_run_id)
         .with_global_reasoning(settings.reasoning())
@@ -1378,13 +1218,10 @@ async fn build_session_engine_with_mcp_defer(
         .with_terminal_handoff(
             summarizer,
             TerminalHandoffOptions {
-                max_output_tokens: context_settings.compaction.summary_max_tokens,
+                max_output_tokens: context_settings.summary_max_tokens,
             },
         )
-        .with_rewriter_keep_recent(context_settings.compaction.keep_recent)
         .with_token_accounting(TokenAccounting::new(context_settings.token_accounting))
-        .with_formatter(settings.formatter())
-        .with_lsp(settings.lsp()?)
         .with_exclusive_tool(
             (settings.code_mode() == config::CodeMode::Only)
                 .then(|| config::CodeMode::TOOL.to_string()),
@@ -1393,31 +1230,16 @@ async fn build_session_engine_with_mcp_defer(
         // Explicit cancellation closes intake: the engine owns each sender while
         // its receiver service retains the engine.
         .with_spawn_sender(spawn_sender)
-        .with_mailbox(mailbox)
-        .with_lifecycle(lifecycle_plane)
-        .with_governor(governor);
+        .with_lifecycle(lifecycle_plane);
+    let engine_builder = if native_ids.contains(&"hya/multi-agent") {
+        engine_builder.with_governor(SubagentGovernor::new(subagent_limits))
+    } else {
+        engine_builder
+    };
 
     let engine = Arc::new(engine_builder);
     app_host_runtime.attach_engine(&engine);
-    if !native_projection_reducers.is_empty() {
-        engine.register_native_projection_reducers(native_projection_reducers);
-    }
-    if !native_api_handlers.is_empty() {
-        let mut by_bundle: BTreeMap<String, Vec<Arc<dyn hya_runtime_abi::NativeBundleApiHandler>>> =
-            BTreeMap::new();
-        for handler in native_api_handlers {
-            by_bundle
-                .entry(handler.id().to_string())
-                .or_default()
-                .push(handler);
-        }
-        for (bundle_id, handlers) in by_bundle {
-            engine
-                .runtime_registry()
-                .register_native_bundle_apis(&bundle_id, handlers)
-                .map_err(|error| anyhow::anyhow!("register {bundle_id} native APIs: {error}"))?;
-        }
-    }
+    native.register_with(&engine)?;
     let (agent_configuration, agent_efforts) = settings.agents()?;
     let agent_model_control = PersistentAgentModelControl::load(
         engine.store().clone(),
@@ -1499,26 +1321,13 @@ async fn build_session_engine_with_mcp_defer(
     .await?;
     app_host_runtime.attach_resident_supervisor(&resident_supervisor);
     app_host_runtime.attach_sidecar_environment(Arc::clone(&sidecar_environment));
-    if let Some(regs) = deferred_workflow_regs {
-        engine.register_native_projection_reducers(regs.projection_reducers);
-        engine
-            .runtime_registry()
-            .register_native_bundle_apis("hya/workflow", regs.api_handlers)
-            .map_err(|error| anyhow::anyhow!("register hya/workflow native APIs: {error}"))?;
-        for service in &regs.services {
-            if let Err(error) = service.start(Arc::clone(&host_runtime)).await {
-                for started in started_services.into_iter().rev() {
-                    let _ = started.stop().await;
-                }
-                store.release_runtime_owner(owner_run_id)?;
-                return Err(anyhow::anyhow!(
-                    "start native service `{}`: {error}",
-                    service.id()
-                ));
-            }
+    let started_services = match native.start_services(&host_runtime).await {
+        Ok(started) => started,
+        Err(error) => {
+            store.release_runtime_owner(owner_run_id)?;
+            return Err(error);
         }
-        started_services.extend(regs.services);
-    }
+    };
     engine.register_native_services(started_services.clone());
     let native_services: Arc<[Arc<dyn hya_runtime_abi::NativeService>]> = started_services.into();
     let lifecycle = spawn_team_supervisor_with_environment(
@@ -1530,19 +1339,12 @@ async fn build_session_engine_with_mcp_defer(
         sidecar_environment,
         lifecycle,
     );
-    // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
-    // the team-root log and serve roster/channel reads (ADR-0001).
     // Release idle Project scopes (and their plugin/bundle processes) even
     // when nothing binds.
     lifecycle.tasks.spawn(run_catalog_scope_sweeper(
         Arc::downgrade(&engine),
         lifecycle.stop.clone(),
         CATALOG_SCOPE_SWEEP_PERIOD,
-    ));
-    lifecycle.tasks.spawn(run_mailbox_service(
-        engine.clone(),
-        mailbox_rx,
-        lifecycle.stop.clone(),
     ));
     lifecycle.tasks.spawn(run_lifecycle_service(
         engine.clone(),
@@ -1557,6 +1359,7 @@ async fn build_session_engine_with_mcp_defer(
         questions: Some(questions),
         mcp_control,
         host_runtime,
+        app_host_runtime,
         native_services,
         lifecycle,
         agent_model_control,
@@ -1600,7 +1403,7 @@ pub struct ServerEngine {
     default_agent: Option<String>,
     pure: bool,
     builtin_selection: hya_bundle::BuiltinBundleSelection,
-    use_core_agents: bool,
+    auto_title: bool,
     use_core_commands: bool,
     pending_discovery: Vec<config::PendingCatalogDiscovery>,
 }
@@ -1610,13 +1413,18 @@ impl ServerEngine {
     pub async fn build(store: SessionStore, runtime: RuntimeConfig) -> anyhow::Result<Self> {
         // The server retains the base. Per-turn guidance is resolved by the harness.
         let builtin_selection = runtime.settings.builtin_bundles().clone();
-        let use_core_agents = core_agents_available(&builtin_selection);
         let use_core_commands = builtin_selection.is_enabled("hya/core-commands")
             && hya_bundle::first_party_bundle_optional("hya/core-commands")
                 .ok()
                 .flatten()
                 .is_some();
-        let agent = Arc::new(agent_base_for_runtime(&runtime, None));
+        let catalog = builtin_agent_catalog_for(&builtin_selection)?;
+        // Titling runs the `hya-title` agent, so it is on when the roster has one.
+        let auto_title = catalog.resolve("hya-title").is_some();
+        let agent = Arc::new(AgentSpec {
+            name: AgentName::new(catalog.default_agent_id()),
+            ..agent_base_with_model(&runtime.model, None)
+        });
         let tool_config = (runtime.permission, runtime.settings);
         let built = build_session_engine_with_mcp_defer(
             store,
@@ -1628,6 +1436,7 @@ impl ServerEngine {
             EngineBuildOptions {
                 defer_mcp: defer_sideplanes(),
                 pure: runtime.pure,
+                project_plugins: true,
             },
         )
         .await?;
@@ -1637,7 +1446,7 @@ impl ServerEngine {
             default_agent: runtime.default_agent,
             pure: runtime.pure,
             builtin_selection,
-            use_core_agents,
+            auto_title,
             use_core_commands,
             pending_discovery: runtime.pending_discovery,
         })
@@ -1662,7 +1471,7 @@ impl ServerEngine {
             .with_agent_model_control(Arc::new(self.built.agent_model_control()))
             .with_default_agent(self.default_agent)
             .with_pure_guidance(self.pure)
-            .with_auto_title(self.use_core_agents)
+            .with_auto_title(self.auto_title)
             .with_core_commands(self.use_core_commands)
             .with_allowed_hosts(hosts)
             .with_permission_requests(asks);
@@ -1853,11 +1662,15 @@ mod open_store_tests {
             std::process::id(),
             nanos
         ));
-        let blocker = dir.join("not-a-dir");
-        std::fs::create_dir_all(&blocker).unwrap();
-        let path = blocker.to_string_lossy().into_owned();
+        // One directory-db path per check: an open that outlives its timeout
+        // keeps that path's owner lock briefly, so the checks must not share it.
+        let blocker = |name: &str| {
+            let blocker = dir.join(name);
+            std::fs::create_dir_all(&blocker).unwrap();
+            blocker.to_string_lossy().into_owned()
+        };
 
-        let strict_err = match open_store(&path).await {
+        let strict_err = match open_store(&blocker("strict")).await {
             Ok(_) => panic!("strict open_store must fail on directory db"),
             Err(err) => err,
         };
@@ -1867,7 +1680,7 @@ mod open_store_tests {
         );
 
         let runtime_err = match HyaRuntime::start(RuntimeOptions {
-            db: path.clone(),
+            db: blocker("runtime"),
             model: None,
             default_agent: None,
             yolo: false,
@@ -1883,9 +1696,9 @@ mod open_store_tests {
             "{runtime_err}"
         );
 
-        let fallback = match open_store_or_memory(&path).await {
+        let fallback = match open_store_or_memory(&blocker("fallback")).await {
             Ok(store) => store,
-            Err(err) => panic!("open_store_or_memory must fall back on directory db: {err}"),
+            Err(err) => panic!("open_store_or_memory must fall back on directory db: {err:#}"),
         };
         assert!(fallback.memory_fallback().is_some());
 

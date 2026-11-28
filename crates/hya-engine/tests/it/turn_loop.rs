@@ -14,8 +14,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use hya_engine::{
-    AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, ResidentSupervisor,
-    SessionEngine, SubagentGovernor, SubagentLimits, Summarizer, TokenAccountingMode, TokenSource,
+    AgentSpec, CoreError, CreateSession, EventBus, ResidentSupervisor, SessionEngine,
+    SubagentGovernor, SubagentLimits, Summarizer, TerminalHandoffOptions,
 };
 use hya_proto::{
     AgentName, Envelope, Event, FinishReason, MailEndpoint, MailKind, Message, MessageId,
@@ -52,16 +52,24 @@ fn rewrite_count(envelopes: &[Envelope]) -> usize {
         .count()
 }
 
+/// Payloads of the `hya/compaction` records of `kind`.
+fn compaction_records<'a>(
+    envelopes: &'a [Envelope],
+    kind: &'a str,
+) -> impl Iterator<Item = &'a serde_json::Value> {
+    envelopes.iter().filter_map(move |e| match &e.event {
+        Event::Extension {
+            bundle,
+            kind: k,
+            payload,
+            ..
+        } if bundle == "hya/compaction" && k == kind => Some(payload),
+        _ => None,
+    })
+}
+
 fn eviction_count(envelopes: &[Envelope]) -> usize {
-    envelopes
-        .iter()
-        .filter(|e| {
-            matches!(
-                hya_tool::extension::ExtensionEvent::from_event(&e.event),
-                Some(hya_tool::extension::ExtensionEvent::ContextEvicted { .. })
-            )
-        })
-        .count()
+    compaction_records(envelopes, "context_evicted").count()
 }
 
 #[tokio::test]
@@ -254,7 +262,7 @@ async fn cancel_provider_error_and_usage_record_on_assistant_projection() {
     // 3. Unresolved model surfaces error and still closes assistant message with Error.
     let engine = support::engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         PermissionRules::default(),
     )
     .await;
@@ -421,24 +429,23 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
             "/**",
             Mode::Allow,
         )]));
-        SessionEngine::new(
-            store,
-            Arc::new(ProviderRouter::new().with(provider.clone())),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-            perm,
-            EventBus::default(),
-        )
-        .with_compaction(
-            Arc::new(NoSummarizer),
-            CompactionConfig {
-                keep_recent: 1,
-                ..CompactionConfig::default()
-            },
-        )
+        let provider = provider.clone();
+        async move {
+            support::fixture_engine(
+                store,
+                Arc::new(ProviderRouter::new().with(provider)),
+                support::builtin_test_runtime(),
+                perm,
+                EventBus::default(),
+            )
+            .await
+            .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+            .with_rewriters(support::compaction_rewriters(1))
+        }
     };
     let agent = support::agent_spec("build", "fake", dir.path());
 
-    let engine = build_engine(SessionStore::connect(&db).await.unwrap());
+    let engine = build_engine(SessionStore::connect(&db).await.unwrap()).await;
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     for prompt in ["read big".to_string(), "now summarize ".repeat(3_000)] {
         engine.admit_user_prompt(session, prompt).await.unwrap();
@@ -466,7 +473,7 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
 
     // Reopened engine sends the identical evicted request without re-evicting,
     // and a follow-up prompt stays sticky without escalating to rewrite.
-    let engine = build_engine(SessionStore::connect(&db).await.unwrap());
+    let engine = build_engine(SessionStore::connect(&db).await.unwrap()).await;
     engine
         .run_turn(session, &agent, CancellationToken::new())
         .await
@@ -492,6 +499,103 @@ async fn tool_output_eviction_avoids_rewrite_sticks_and_matches_after_restart() 
     assert_eq!(rewrite_count(&after_envelopes), 0);
 }
 
+/// A reducer's tool-output overrides become the tool part's eviction notice,
+/// whichever bundle registered the reducer.
+#[tokio::test]
+async fn reducer_tool_output_overrides_replace_the_tool_output() {
+    struct NoteReducer;
+    impl hya_runtime_abi::ProjectionReducer for NoteReducer {
+        fn bundle_id(&self) -> &str {
+            "acme/notes"
+        }
+        fn apply(
+            &self,
+            _state: &mut serde_json::Value,
+            _event: &hya_runtime_abi::ExtensionEventContext,
+        ) -> Result<(), hya_runtime_abi::HostError> {
+            Ok(())
+        }
+        fn tool_output_overrides(
+            &self,
+            event: &hya_runtime_abi::ExtensionEventContext,
+        ) -> Vec<hya_runtime_abi::ToolOutputOverride> {
+            vec![hya_runtime_abi::ToolOutputOverride {
+                part: serde_json::from_value(event.payload["part"].clone()).unwrap(),
+                output: "[noted]".into(),
+            }]
+        }
+    }
+
+    let dir = support::TestDir::new("turn-output-override");
+    let file = dir.path().join("note.txt");
+    tokio::fs::write(&file, "hello\n").await.unwrap();
+    let engine = support::engine_with_provider(
+        Arc::new(FakeProvider::scripted_turns(vec![
+            vec![
+                FakeStep::ToolCall {
+                    name: "read".into(),
+                    input: json!({ "path": file.to_string_lossy() }),
+                },
+                FakeStep::Finish(FinishReason::ToolCalls),
+            ],
+            vec![
+                FakeStep::Text("read it".into()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+        ])),
+        PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
+    )
+    .await;
+    engine.register_native_projection_reducers(vec![Arc::new(NoteReducer)]);
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "read the note".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(
+            session,
+            &support::agent_spec("build", "fake", dir.path()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let tool_part = |projection: &Projection| {
+        projection
+            .session
+            .messages
+            .iter()
+            .flat_map(|row| row.parts.iter())
+            .find_map(|part| match part {
+                PartProjection::Tool {
+                    id,
+                    eviction_notice,
+                    ..
+                } => Some((*id, eviction_notice.clone())),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (part, notice) = tool_part(&engine.read_projection(session).await.unwrap());
+    assert_eq!(notice, None);
+
+    engine
+        .store()
+        .append_events(
+            session,
+            vec![Event::Extension {
+                session,
+                bundle: "acme/notes".into(),
+                kind: "noted".into(),
+                payload: json!({ "part": part }),
+            }],
+        )
+        .await
+        .unwrap();
+    let (_, notice) = tool_part(&engine.read_projection(session).await.unwrap());
+    assert_eq!(notice.as_deref(), Some("[noted]"));
+}
+
 #[tokio::test]
 async fn context_status_reports_round_occupancy_and_accounting_mode() {
     let dir = support::TestDir::new("turn-ctx-status");
@@ -503,7 +607,7 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
         PermissionRules::default(),
     )
     .await
-    .with_compaction(Arc::new(NoSummarizer), CompactionConfig::default());
+    .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default());
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
         .admit_user_prompt(session, "hello".into())
@@ -519,34 +623,19 @@ async fn context_status_reports_round_occupancy_and_accounting_mode() {
         .unwrap();
 
     let envelopes = engine.store().replay(session).await.unwrap();
-    let statuses: Vec<_> = envelopes
-        .iter()
-        .filter_map(
-            |e| match hya_tool::extension::ExtensionEvent::from_event(&e.event) {
-                Some(hya_tool::extension::ExtensionEvent::ContextStatus {
-                    tokens,
-                    source,
-                    mode,
-                    threshold,
-                    ..
-                }) => Some((tokens, source, mode, threshold)),
-                _ => None,
-            },
-        )
-        .collect();
+    let statuses: Vec<_> = compaction_records(&envelopes, "context_status").collect();
     assert_eq!(statuses.len(), 1);
-    let (tokens, source, mode, threshold) = statuses[0];
-    assert!(tokens > 0);
+    let status = statuses[0];
+    assert!(status["tokens"].as_u64().is_some_and(|tokens| tokens > 0));
     assert_eq!(
-        (mode, source, threshold),
-        (TokenAccountingMode::Auto, TokenSource::Estimate, 160_000)
+        (&status["mode"], &status["source"], &status["threshold"]),
+        (&json!("auto"), &json!("estimate"), &json!(160_000))
     );
+    // The bundle's reducer folds the record into its extension state.
     let projection = engine.read_projection(session).await.unwrap();
-    let folded =
-        hya_tool::extension::context_status_projection(&projection).expect("context status");
     assert_eq!(
-        (folded.tokens, folded.source, folded.mode, folded.threshold),
-        (tokens, source, mode, threshold)
+        &projection.extensions["hya/compaction"]["context_status"],
+        status
     );
 }
 
@@ -632,13 +721,8 @@ async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed()
     .with_max_context(30_000);
     let engine = support::engine_with_provider(Arc::new(provider), read_rules())
         .await
-        .with_compaction(
-            Arc::new(NoSummarizer),
-            CompactionConfig {
-                keep_recent: 1,
-                ..CompactionConfig::default()
-            },
-        );
+        .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+        .with_rewriters(support::compaction_rewriters(1));
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
         .admit_user_prompt(session, "read three times".into())
@@ -690,13 +774,8 @@ async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed()
     };
     let engine = support::engine_with_provider(Arc::new(route), read_rules())
         .await
-        .with_compaction(
-            Arc::new(NoSummarizer),
-            CompactionConfig {
-                keep_recent: 2,
-                ..CompactionConfig::default()
-            },
-        );
+        .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+        .with_rewriters(support::compaction_rewriters(2));
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     let agent = support::agent_spec("build", "fake", dir.path());
     engine.admit_user_prompt(session, prompt).await.unwrap();
@@ -719,10 +798,7 @@ async fn stale_tool_outputs_spill_mid_turn_and_escalate_to_rewrite_when_needed()
         .unwrap()
         .iter()
         .filter_map(|e| {
-            if matches!(
-                hya_tool::extension::ExtensionEvent::from_event(&e.event),
-                Some(hya_tool::extension::ExtensionEvent::ContextEvicted { .. })
-            ) {
+            if eviction_count(std::slice::from_ref(e)) == 1 {
                 return Some("spill");
             }
             match e.event {
@@ -837,13 +913,8 @@ async fn kernel_rewrite_runs_before_preflight_rejects_under_threshold_provider_c
         PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
     )
     .await
-    .with_compaction(
-        Arc::new(NoSummarizer),
-        CompactionConfig {
-            keep_recent: 1,
-            ..CompactionConfig::default()
-        },
-    );
+    .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
+    .with_rewriters(support::compaction_rewriters(1));
     let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
     engine
         .admit_user_prompt(session, "work".into())
@@ -1864,8 +1935,7 @@ async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes()
                 svc.abort();
             }
             _ => {
-                let read = engine
-                    .read_channel_history(None, root, "scout", None)
+                let read = support::read_channel(&engine, root, "scout", None)
                     .await
                     .unwrap();
                 assert_eq!(read.messages[0].1, "findings ready");
@@ -1961,8 +2031,7 @@ async fn consumed_results_suppress_redundant_synthesis_while_unseen_mail_wakes()
         })
         .await
     );
-    engine
-        .read_channel_history(None, root, "scout", None)
+    support::read_channel(&engine, root, "scout", None)
         .await
         .unwrap();
     drop(lease);
@@ -2082,10 +2151,10 @@ async fn todo_list_survives_restart_and_builds_on_prior_state() {
     };
     let make_engine = |script: Vec<Vec<FakeStep>>| {
         let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
-        SessionEngine::new(
+        support::fixture_engine(
             store.clone(),
             Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(script)))),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime(),
             perm,
             EventBus::default(),
         )
@@ -2105,14 +2174,16 @@ async fn todo_list_survives_restart_and_builds_on_prior_state() {
     let first = make_engine(call_todo(json!({"ops": [
         {"op": "add", "content": "first"},
         {"op": "add", "content": "second"}
-    ]})));
+    ]})))
+    .await;
     let session = support::create_root_session(&first, "build", "fake", dir.path()).await;
     run(&first, session, dir.path()).await;
     drop(first);
 
     let second = make_engine(call_todo(
         json!({"ops": [{"op": "status", "id": "2", "status": "completed"}]}),
-    ));
+    ))
+    .await;
     run(&second, session, dir.path()).await;
 
     let proj = store.read_projection(session).await.unwrap();

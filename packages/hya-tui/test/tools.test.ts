@@ -155,17 +155,6 @@ test("network, skill, and question tools show their main argument", () => {
   expect(toolCard({ tool: "ask_user", state: ok, inputJson: json({ questions: [{ header: "Scope", question: "Which crate?", options: [] }] }) }).summary).toBe("Scope: Which crate?")
 })
 
-test("task: the child agent, description, and the child session from the output", () => {
-  const card = toolCard({
-    tool: "task", state: ok, callId: "call_1",
-    inputJson: json({ description: "survey the repo", prompt: "list files", subagent_type: "scout" }),
-    outputJson: json({ title: "survey the repo", metadata: { sessionId: "hysec_child", parentSessionId: "hysec_p", subagent_type: "scout", status: "running" }, output: "…" }),
-  })
-  expect(card.summary).toBe("scout · survey the repo")
-  expect(card.task).toEqual({ agent: "scout", description: "survey the repo", child: "hysec_child" })
-  expect(toolCard({ tool: "task", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: json({ description: "x", prompt: "p" }) }).task).toEqual({ agent: "hya-task", description: "x" })
-})
-
 test("MCP and other tools show the name and compact arguments", () => {
   const card = toolCard({ tool: "github__search_issues", state: ok, inputJson: json({ repo: "a/b", query: "bug" }), outputJson: json("3 issues") })
   expect(card.summary).toBe("{\"repo\":\"a/b\",\"query\":\"bug\"}")
@@ -204,26 +193,4 @@ test("tool cards retain complete arguments and separate expandable output", () =
 test("display arguments use semantic builtins and pretty generic JSON", () => {
   expect(toolCard({ tool: "read", state: ok, inputJson: json({ path: "src/a.ts", offset: 2 }) }).displayArgs).toBe("src/a.ts · from line 2")
   expect(toolCard({ tool: "mcp__server__inspect", state: ok, inputJson: json({ path: "a", nested: { enabled: true } }) }).displayArgs).toBe('{\n  "path": "a",\n  "nested": {\n    "enabled": true\n  }\n}')
-})
-
-
-test("task: canonical and legacy batches use member labels and counts", () => {
-  for (const field of ["tasks", "members"]) {
-    const card = toolCard({ tool: "task", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: json({
-      description: "ignored single label", subagent_type: "ignored-single-agent",
-      [field]: [{ description: "map routes", subagent_type: "hya-scout", prompt: "inspect" }, { prompt: "inspect tests" }],
-    }) })
-    expect(card.task).toEqual({ agent: "hya-scout", description: "map routes", members: [{ agent: "hya-scout", description: "map routes" }, { agent: "hya-task", description: "" }] })
-    expect(card.summary).toBe("hya-scout · map routes · 2 members")
-  }
-})
-
-
-test("task: retains every batch handle/session and failed launch without clipping", () => {
-  const members = Array.from({ length: 15 }, (_, i) => ({ member: `main/scout-${i}`, sessionId: `hysec_${i}`, subagent_type: "hya-scout", description: `inspect ${i}`, status: "running" }))
-  const card = toolCard({ tool: "task", state: ok, outputJson: json({ metadata: { members: [...members, { subagent_type: "hya-task", description: "failed launch", status: "error", summary: "capacity exhausted", sessionId: "" }] } }) })
-  expect(card.task?.members).toHaveLength(16)
-  expect(card.task?.members?.[14]).toMatchObject({ name: "main/scout-14", child: "hysec_14", description: "inspect 14" })
-  expect(card.task?.members?.[15]).toEqual({ agent: "hya-task", description: "failed launch", status: "error", summary: "capacity exhausted" })
-  expect(toolCard({ tool: "task", state: ok, outputJson: json({ metadata: { members: [{ member: "main/legacy", session: "hysec_legacy" }] } }) }).task?.members?.[0]).toMatchObject({ name: "main/legacy", child: "hysec_legacy" })
 })

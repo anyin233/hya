@@ -18,8 +18,8 @@ use super::{
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
-    HookChain, HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
-    activation_hook_for, scope_activation_hooks,
+    HookChain, NativeToolBeforeInput, NativeToolBeforeOutcome, activation_hook_for,
+    scope_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
 
@@ -382,7 +382,7 @@ impl SessionEngine {
             if bound_hooks.is_empty() {
                 operation.await
             } else {
-                let hooks = Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>;
+                let hooks = Arc::new(HookChain::new(bound_hooks));
                 scope_activation_hooks(session, hooks, operation).await
             }
         };
@@ -441,7 +441,7 @@ impl SessionEngine {
         if let Some(hooks) = &active_hooks {
             let current = std::mem::take(&mut input);
             match hooks
-                .tool_execute_before(ToolExecuteBeforeInput {
+                .tool_execute_before(NativeToolBeforeInput {
                     session,
                     message: shell_part.message,
                     call: shell_part.call,
@@ -450,8 +450,8 @@ impl SessionEngine {
                 })
                 .await
             {
-                ToolExecuteBeforeOutcome::Continue { input: next } => input = next,
-                ToolExecuteBeforeOutcome::Veto { reason } => {
+                NativeToolBeforeOutcome::Continue { input: next } => input = next,
+                NativeToolBeforeOutcome::Veto { reason } => {
                     let message_text = format!("blocked by plugin: {reason}");
                     self.emit(
                         session,
@@ -532,11 +532,6 @@ impl SessionEngine {
                                         .for_session_with_agents(session, roster.clone()),
                                 )
                                 .with(
-                                    self.mailbox
-                                        .for_session(session)
-                                        .with_channel_policy(channel_policy),
-                                )
-                                .with(
                                     self.lifecycle
                                         .for_session(session)
                                         .with_channel_policy(channel_policy),
@@ -545,12 +540,6 @@ impl SessionEngine {
                                 .with(roster);
                             if let Some(parent) = parent_session {
                                 extensions.insert(hya_tool::ParentSession(parent));
-                            }
-                            if self.lsp.is_configured() {
-                                extensions.insert(self.lsp.clone());
-                            }
-                            if self.formatter.is_configured() {
-                                extensions.insert(self.formatter.clone());
                             }
                             let ctx = ToolCtx {
                                 workdir: binding.workdir().to_path_buf(),

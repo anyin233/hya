@@ -377,9 +377,14 @@ async fn handshake_with_fixture_reports_hooks_and_tools() {
     assert_eq!(init.protocol_version, 1);
     assert_eq!(init.plugin.id, "fixture");
     assert_eq!(init.plugin.kind, PluginKindWire::Rust);
-    let hook_names: Vec<HookName> = init.contributions.hooks.iter().map(|h| h.name).collect();
-    assert!(hook_names.contains(&HookName::ToolExecuteBefore));
-    assert!(hook_names.contains(&HookName::Event));
+    let hook_names: Vec<hya_plugin::messages::HookId> = init
+        .contributions
+        .hooks
+        .iter()
+        .map(|h| h.name.clone())
+        .collect();
+    assert!(hook_names.contains(&HookName::ToolExecuteBefore.into()));
+    assert!(hook_names.contains(&HookName::Event.into()));
     assert_eq!(init.contributions.tools.len(), 1);
     assert_eq!(init.contributions.tools[0].name, "remember");
 }

@@ -43,9 +43,9 @@ pub mod workspace;
 
 pub use event::{CompactionStrategy, Envelope, Event, SessionKind, StepCut};
 pub use ids::{
-    ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
-    OperationId, OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId,
-    TeamRunId, ToolCallId, WorkflowRunId,
+    ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OperationId,
+    OwnerRunId, PartId, PermissionRequestId, ProjectId, QuestionRequestId, SessionId, TeamRunId,
+    ToolCallId,
 };
 pub use mail::{
     CHANNEL_RANDOM_LEN, ChannelKind, ChannelPolicySnapshot, MailEndpoint, MailKind,
@@ -66,9 +66,9 @@ pub use scope::{HARNESS_HANDLE, ROOT_HANDLE};
 pub use todo::{TodoItem, TodoStatus};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{
-    WorkflowAvailability, WorkflowIdentity, WorkflowInfo, WorkflowModelAssignment,
-    WorkflowModelCandidate, WorkflowModelResolvedCandidate, WorkflowRevision,
-    WorkflowRevisionParseError, WorkflowSourceId, WorkflowStageInfo, WorkflowSummary,
+    WorkflowIdentity, WorkflowInfo, WorkflowModelAssignment, WorkflowModelCandidate,
+    WorkflowRevision, WorkflowRevisionParseError, WorkflowSourceId, WorkflowStageInfo,
+    WorkflowSummary,
 };
 #[allow(deprecated, reason = "retain the public compatibility path")]
 pub use workspace::WorkspaceAdapterInfo;

@@ -170,13 +170,16 @@ pub fn engine_on<P: Provider + 'static>(
     rules: PermissionRules,
 ) -> (Arc<SessionEngine>, mpsc::UnboundedReceiver<AskRequest>) {
     let (perm, asks) = PermissionPlane::new(rules);
-    let engine = Arc::new(SessionEngine::new(
-        store,
-        Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-        perm,
-        EventBus::default(),
-    ));
+    let engine = Arc::new(
+        SessionEngine::new(
+            store,
+            Arc::new(ProviderRouter::new().with(Arc::new(provider))),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            perm,
+            EventBus::default(),
+        )
+        .with_legacy_coordination(),
+    );
     (engine, asks)
 }
 

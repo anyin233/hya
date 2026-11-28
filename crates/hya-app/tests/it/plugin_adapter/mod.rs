@@ -13,9 +13,9 @@ use std::path::PathBuf;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{
     AgentSpawnParams, CompactionAfterParams, CompactionBeforeOutcomeWire, CompactionBeforeParams,
-    CompactionTriggerWire, HookName, HostInfo, ModelFallbackOutcomeWire, ModelFallbackParams,
-    PermissionApproveParams, PermissionOutcomeWire, PluginKindWire, SessionLifecycleParams,
-    WireResource,
+    CompactionTriggerWire, HookId, HookName, HostInfo, ModelFallbackOutcomeWire,
+    ModelFallbackParams, PermissionApproveParams, PermissionOutcomeWire, PluginKindWire,
+    SessionLifecycleParams, WireResource,
 };
 use hya_proto::{ModelRef, SessionId};
 use hya_tool::{Action, InteractionPlane, PermissionPlane, PermissionRules, ToolCtx};
@@ -77,10 +77,6 @@ fn wire_hook_names_and_shapes_round_trip() {
         (HookName::SessionStart, "session.start"),
         (HookName::SessionEnd, "session.end"),
         (HookName::AgentSpawn, "agent.spawn"),
-        (HookName::GoalEvaluate, "goal.evaluate"),
-        (HookName::LoopVerifier, "loop.verifier"),
-        (HookName::LoopPlanner, "loop.planner"),
-        (HookName::LoopShouldStop, "loop.should_stop"),
         (HookName::ModelFallback, "model.fallback"),
         (HookName::PermissionApprove, "permission.approve"),
     ] {
@@ -90,6 +86,19 @@ fn wire_hook_names_and_shapes_round_trip() {
         assert_eq!(name.method(), format!("hook/{wire}"));
     }
     assert_eq!(HookName::from_wire("compaction.beforex"), None);
+
+    for wire in [
+        "hya/goal:evaluate",
+        "hya/loop:verifier",
+        "hya/loop:planner",
+        "hya/loop:should_stop",
+    ] {
+        let name = HookId::Declared(wire.into());
+        assert_eq!(serde_json::to_string(&name).unwrap(), format!("\"{wire}\""));
+        assert_eq!(HookId::from_wire(wire), Some(name.clone()));
+        assert_eq!(name.as_str(), wire);
+        assert_eq!(name.method(), format!("hook/{wire}"));
+    }
 
     let session = SessionId::new();
     let before = CompactionBeforeParams {

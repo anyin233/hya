@@ -9,9 +9,9 @@
 //!   [`HookDispatcher`], [`RuntimeCatalogRefresh`], [`Summarizer`],
 //!   and [`RuntimeSourceOwner`].
 //! - **Team/subagent orchestration** — admission, governors, resident supervisors,
-//!   and mailbox delivery over the same event-sourced log.
+//!   and mail delivery over the same event-sourced log.
 //!
-//! Downstream crates wire planes (permission, tools, mailbox) and plugins; this
+//! Downstream crates wire planes (permission, tools) and plugins; this
 //! crate stays free of terminal UI and HTTP routing.
 
 pub use hya_core::{error, kernel};
@@ -39,8 +39,6 @@ pub mod catalog_scope;
 pub mod category;
 /// Trusted defaults and restrictive bundle policy for runtime channels.
 pub mod channel_policy;
-/// Combined compaction configuration and handoff types.
-pub mod compaction;
 /// Harness coordination tools injected into every agent view at startup.
 pub(crate) use hya_agent_channels_core::coordination;
 /// Effective reasoning effort resolution shared by request and display layers.
@@ -51,9 +49,8 @@ pub mod engine;
 pub mod handle_naming;
 /// Plugin/host hook dispatch contract and native payload types.
 pub mod hooks;
-/// Team mailbox service loop (event-sourced mail/channels).
+/// Lifecycle service loop (`report`, `archive`, `wait`) into the resident supervisor.
 pub mod lifecycle;
-pub mod mailbox;
 mod member_wait;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
@@ -83,10 +80,7 @@ pub use hya_context::tokens;
 mod test_support;
 
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
-pub use builtin_agents::{
-    BARE_AGENT_ID, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope,
-    TASK_AGENT_ID, builtin_agent_ids, core_agents_preset, preset_agent,
-};
+pub use builtin_agents::{BARE_AGENT_ID, MAIN_AGENT_ID, TASK_AGENT_ID};
 pub use bundle_apis::{
     ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,
     BundleApiProvider, BundleApiReply, BundleApiRequest, HostSessionReads,
@@ -101,29 +95,23 @@ pub use category::{
     resolve_dispatch_model,
 };
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
-pub use compaction::CompactionConfig;
 pub use effort::{AgentEffortSource, EffectiveEffort, EffortSource, agent_effort, resolve_effort};
 pub use engine::terminal_handoff;
 pub use engine::{
     AgentSpec, BoundSpawnRequest, BoundSpawnSender, BundleRefresh, CatalogScopeCacheConfig,
-    CreateSession, DRAIN_DEADLINE, ExplicitModelRoute, ExplicitModelRouteCandidate,
-    ExplicitTurnRoute, ForkAt, ForkError, MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES,
-    MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT, ModelProbeReply, ProviderSnapshot, RevertError,
-    RevertOutcome, RevertTarget, RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver,
-    TurnDrainReport, TurnLease, advertise_tool, fork_cut,
+    CreateSession, DRAIN_DEADLINE, DrivenTurn, DrivenTurnEnd, ExplicitModelRoute,
+    ExplicitModelRouteCandidate, ExplicitTurnRoute, FencedSidecars, ForkAt, ForkError,
+    MAX_DIRTY_BYTES, MAX_DIRTY_FILES, MAX_FILE_BYTES, MAX_SESSION_BLOB_BYTES, MODEL_PROBE_PROMPT,
+    ModelProbeReply, ProviderSnapshot, RevertError, RevertOutcome, RevertTarget,
+    RuntimeCatalogRefresh, SessionEngine, TurnBoundaryObserver, TurnDrainReport, TurnLease,
+    advertise_tool, fork_cut,
 };
 pub use error::CoreError;
 pub use hooks::{
-    AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, EvidenceQuality, HookChain, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    NativeHookDispatcher, NoopHookHost, PlannerOutput, SessionLifecycleInput, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative, VerifierVerdict,
+    HookChain, HookEntry, HookPoint, ModelFailureClass, NativeHook, apply_chat_params,
+    chat_params_value,
 };
 pub use lifecycle::run_lifecycle_service;
-pub use mailbox::run_mailbox_service;
 pub use orchestrator::{SubagentGovernor, SubagentLimits};
 pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};
 pub use prompt::{

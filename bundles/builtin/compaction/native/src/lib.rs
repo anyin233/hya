@@ -4,49 +4,79 @@
 //! Before each round, ahead of the kernel's own Rewrite, [`CompactionRewriter`]
 //! spills stale tool outputs (`shake`) and then lets the route fold its own
 //! window (`remote`); on `/summarize` it tries `remote`. Domain observability
-//! records (`context_evicted`, `context_status`) are persisted as
+//! records ([`events`]: `context_evicted`, `context_status`) are persisted as
 //! [`hya_proto::Event::Extension`] under `"hya/compaction"` and folded by
-//! [`CompactionProjectionReducer`].
+//! [`CompactionProjectionReducer`], whose tool-output overrides carry the
+//! eviction notices into later requests.
 
 mod config;
+pub mod events;
 mod evict;
 mod ladder;
 mod reducer;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use hya_context::rewrite::{RewriteCtx, Rewriter, ToolError};
-use hya_runtime_abi::{HostRuntime, NativePluginContext, NativeRegistrations};
+use hya_runtime_abi::{HostError, HostRuntime, NativePluginContext, NativeRegistrations};
+use serde_json::Value;
+
+use crate::config::{Config, KEEP_RECENT_ENV};
+use crate::events::BUNDLE_COMPACTION;
 
 pub use reducer::{CompactionProjectionReducer, CompactionReducerState, LastEvictionSummary};
 
-/// The `shake` and `remote` steps as an ABI v2 [`Rewriter`] extension backed by
-/// an optional host runtime handle.
-#[derive(Default)]
+/// The `shake` and `remote` steps as an ABI v2 [`Rewriter`] extension bound to
+/// the host runtime.
 pub struct CompactionRewriter {
-    runtime: Option<Arc<dyn HostRuntime>>,
+    runtime: Arc<dyn HostRuntime>,
+    config: OnceLock<Config>,
 }
 
 impl CompactionRewriter {
-    /// Construct a rewriter bound to the host's [`HostRuntime`] (for fallback
-    /// `HostModelCaller` and `HostCatalogReader::bundle_config` access).
+    /// Construct a rewriter bound to the host's [`HostRuntime`] (for its
+    /// `config.yml` through `HostCatalogReader::bundle_config` and the
+    /// fallback `HostModelCaller`).
     #[must_use]
     pub fn new(runtime: Arc<dyn HostRuntime>) -> Self {
         Self {
-            runtime: Some(runtime),
+            runtime,
+            config: OnceLock::new(),
         }
+    }
+
+    /// The bundle's settings, read on first use: its `config.yml`, then
+    /// `HYA_COMPACTION_KEEP_RECENT`.
+    async fn config(&self) -> Result<Config, ToolError> {
+        if let Some(config) = self.config.get() {
+            return Ok(*config);
+        }
+        let value = match self
+            .runtime
+            .catalog_reader()
+            .bundle_config(BUNDLE_COMPACTION)
+            .await
+        {
+            Ok(value) => value,
+            Err(HostError::NotFound(_) | HostError::Unavailable(_)) => Value::Null,
+            Err(error) => return Err(error.into()),
+        };
+        let config =
+            Config::from_value(&value)?.apply_env(std::env::var(KEEP_RECENT_ENV).ok().as_deref());
+        Ok(*self.config.get_or_init(|| config))
     }
 }
 
 #[async_trait]
 impl Rewriter for CompactionRewriter {
     async fn before_round(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
-        ladder::walk(&cx, self.runtime.as_ref()).await
+        let config = self.config().await?;
+        ladder::walk(&cx, &self.runtime, config).await
     }
 
     async fn rewrite_now(&self, cx: RewriteCtx<'_>) -> Result<bool, ToolError> {
-        ladder::compact_now(&cx, self.runtime.as_ref()).await
+        ladder::compact_now(&cx, &self.runtime).await
     }
 }
 
@@ -68,6 +98,9 @@ hya_runtime_abi::export_native_bundle_v2!(|ctx, out| {
 mod tests {
     use std::sync::Mutex;
 
+    use crate::events::{
+        BUNDLE_COMPACTION, CompactionEvent, ContextEvicted, ContextStatusProjection, EvictedPart,
+    };
     use async_trait::async_trait;
     use hya_bundle::{Bundle, PreparedAgent};
     use hya_context::rewrite::{Pressure, RewriteCtx, SessionLog, ToolError, Transcript};
@@ -82,10 +115,9 @@ mod tests {
         HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
         HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest,
         ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativePluginContext,
-        NativeRegistrations, ProjectionReducer, SessionListFilter, SessionSummaryMeta, TurnOutcome,
-        TurnSpawnRequest, TurnStartRequest, TurnStatus,
+        NativeRegistrations, ProjectionReducer, SessionListFilter, SessionSummaryMeta,
+        ToolOutputOverride, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
     };
-    use hya_tool::extension::{BUNDLE_COMPACTION, EvictedPart, ExtensionEvent};
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
@@ -462,7 +494,7 @@ mod tests {
     #[tokio::test]
     async fn abi_v2_registration_rewriter_host_runtime_and_projection_reducer() {
         let host = TestHost::new(
-            json!({ "compaction": { "keep_recent": 1, "token_accounting": "estimate" } }),
+            json!({ "compaction": { "keep_recent": 1 } }),
             Some("REMOTE_COMPACT_MARKER"),
         );
         let runtime: Arc<dyn HostRuntime> = host.clone();
@@ -490,7 +522,8 @@ mod tests {
         let projection = Projection::default();
         let model = ModelRef::new("test/model");
 
-        // Pass `config: Value::Null` and `models: None` to exercise HostRuntime fallbacks.
+        // `keep_recent` comes from the host's `bundle_config`; `models: None`
+        // exercises the `HostModelCaller` fallback.
         let changed = regs.rewriters[0]
             .before_round(RewriteCtx {
                 session,
@@ -504,7 +537,7 @@ mod tests {
                     threshold: 1_000,
                 }),
                 workdir: &dir,
-                config: &Value::Null,
+                token_accounting: TokenAccountingMode::Estimate,
                 log: &log,
                 transcript: &transcript,
                 models: None,
@@ -585,7 +618,7 @@ mod tests {
                 overhead_tokens: 0,
                 pressure: None,
                 workdir: &dir,
-                config: &Value::Null,
+                token_accounting: TokenAccountingMode::Estimate,
                 log: &log2,
                 transcript: &transcript,
                 models: None,
@@ -627,8 +660,7 @@ mod tests {
             kind,
             payload,
             ..
-        } = ExtensionEvent::ContextEvicted {
-            session,
+        } = CompactionEvent::ContextEvicted(ContextEvicted {
             evicted_parts: 1,
             parts: vec![EvictedPart {
                 part,
@@ -637,8 +669,8 @@ mod tests {
             tokens_before: 5000,
             tokens_after: 1200,
             threshold: 4000,
-        }
-        .into_event()
+        })
+        .into_event(session)
         else {
             panic!("expected extension event");
         };
@@ -655,20 +687,27 @@ mod tests {
         // Applying the same event again is idempotent.
         reducer.apply(&mut state, &ev_ctx).unwrap();
         assert_eq!(state, after_first);
+        // The notice replaces the part's output in later requests.
+        assert_eq!(
+            reducer.tool_output_overrides(&ev_ctx),
+            vec![ToolOutputOverride {
+                part,
+                output: "[tool output moved to artifact://abc]".to_string(),
+            }]
+        );
 
         let Event::Extension {
             bundle: s_bundle,
             kind: s_kind,
             payload: s_payload,
             ..
-        } = ExtensionEvent::ContextStatus {
-            session,
+        } = CompactionEvent::ContextStatus(ContextStatusProjection {
             tokens: 1200,
             source: TokenSource::Estimate,
             mode: TokenAccountingMode::Auto,
             threshold: 4000,
-        }
-        .into_event()
+        })
+        .into_event(session)
         else {
             panic!("expected extension event");
         };
@@ -681,10 +720,19 @@ mod tests {
                     ts_millis: 3,
                     bundle: s_bundle,
                     kind: s_kind,
-                    payload: s_payload,
+                    payload: s_payload.clone(),
                 },
             )
             .unwrap();
+        let status_ctx = ExtensionEventContext {
+            session,
+            seq: EventSeq(3),
+            ts_millis: 3,
+            bundle: BUNDLE_COMPACTION.to_string(),
+            kind: "context_status".to_string(),
+            payload: s_payload,
+        };
+        assert!(reducer.tool_output_overrides(&status_ctx).is_empty());
 
         let decoded: CompactionReducerState = serde_json::from_value(state).unwrap();
         assert_eq!(

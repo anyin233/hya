@@ -1,26 +1,26 @@
 //! One resolution seam over two agent origins.
 //!
-//! Built-in agents are Rust constants ([`crate::builtin_agents`]) on the full
-//! Harness tool plane. Installed bundle agents come from a
-//! [`BundleCatalog`] and run on the clamped internal-public plane. Call sites
-//! must not branch on the difference: they resolve through [`AgentCatalog`] and
-//! receive an origin-tagged [`AgentDefinition`].
+//! The compiled-in `hya-bare` ([`crate::builtin_agents`]) is part of the
+//! roster only when no enabled bundle declares `default_agent`; every other
+//! agent comes from a [`BundleCatalog`]. Call sites must not branch on the
+//! difference: they resolve through [`AgentCatalog`] and receive an
+//! origin-tagged [`AgentDefinition`].
 //!
 //! **Origin decides the tool plane.** No manifest field selects it.
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use hya_bundle::{AgentRole, BundleCatalog, BundleError, ModelPolicy};
+use hya_bundle::{AgentRole, BundleCatalog, BundleError, ModelPolicy, SPAWN_ANY_AGENT};
 
-use crate::builtin_agents::{BuiltinAgents, SpawnScope, core_agents_preset};
+use crate::builtin_agents::{BARE_AGENT_ID, core_agent, core_agent_digest};
 
 /// Where a resolved agent came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentOrigin<'a> {
-    /// Compiled-in agent. Full Harness plane, owns no bundle resources.
+    /// The compiled-in `hya-bare`. Full Harness plane, owns no bundle resources.
     Builtin,
-    /// Installed AgentBundle agent. Clamped plane plus its own bundle resources.
+    /// Bundle agent. Its bundle's plane plus its own bundle resources.
     Bundle {
         /// Identity id of the owning bundle.
         bundle_id: &'a str,
@@ -49,7 +49,7 @@ impl AgentOrigin<'_> {
 pub struct AgentDefinition<'a> {
     /// Stable agent id used for selection, spawn graphs, and session binding.
     pub stable_id: &'a str,
-    /// Whether ordinary built-in spawn and selector listings exclude this agent.
+    /// Whether `can_spawn: ["*"]` grants and selector listings exclude this agent.
     pub private: bool,
     /// Optional human description for selectors.
     pub description: Option<&'a str>,
@@ -75,127 +75,97 @@ impl AgentDefinition<'_> {
     }
 }
 
-/// Built-ins plus installed bundles, resolved as one namespace.
+/// The enabled bundles' agents, plus `hya-bare` when no bundle declares
+/// `default_agent`, resolved as one namespace.
 #[derive(Debug)]
 pub struct AgentCatalog {
-    preset: BuiltinAgents,
     bundles: Arc<BundleCatalog>,
 }
 
 impl AgentCatalog {
-    /// Join the compiled-in roster with an installed-bundle catalog.
+    /// Build the roster of `bundles`.
     ///
     /// # Errors
-    /// Returns [`BundleError::BuiltinAgentIdShadowed`] when an installed bundle
-    /// declares an agent id that a built-in already owns.
+    /// Returns [`BundleError::BuiltinAgentIdShadowed`] when a bundle declares
+    /// the compiled-in `hya-bare` id.
     pub fn new(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
-        let catalog = Self {
-            preset: BuiltinAgents::Core(core_agents_preset()?),
-            bundles,
-        };
-        catalog.validate()?;
-        Ok(catalog)
-    }
-
-    /// Build a bare-mode catalog backed by the minimal compiled-in `hya-bare`
-    /// default agent and zero first-party agent bundles (ADR-0039).
-    ///
-    /// # Errors
-    /// Returns [`BundleError::BuiltinAgentIdShadowed`] when an installed bundle
-    /// claims `hya-bare`.
-    pub fn new_bare(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
-        let catalog = Self {
-            preset: BuiltinAgents::Bare,
-            bundles,
-        };
-        catalog.validate()?;
-        Ok(catalog)
-    }
-
-    /// Whether this catalog uses the minimal `hya-bare` agent instead of
-    /// `hya/core-agents`.
-    #[must_use]
-    pub const fn is_bare(&self) -> bool {
-        self.preset.is_bare()
-    }
-
-    /// Default primary agent id for this catalog (`hya-bare` in bare mode,
-    /// `hya-main` when `hya/core-agents` is loaded).
-    #[must_use]
-    pub const fn default_agent_id(&self) -> &'static str {
-        self.preset.default_agent_id()
-    }
-
-    /// Reject installed bundles that shadow a built-in agent id.
-    fn validate(&self) -> Result<(), BundleError> {
-        for bundle in self.bundles.bundles() {
-            for agent in bundle.agents() {
-                if self.preset_agent(agent.id.as_str()).is_some() {
-                    return Err(BundleError::BuiltinAgentIdShadowed {
-                        bundle_id: bundle.identity().id.clone(),
-                        agent_id: agent.id.as_str().to_string(),
-                    });
-                }
+        for bundle in bundles.bundles() {
+            if let Some(agent) = bundle
+                .agents()
+                .iter()
+                .find(|agent| agent.id.as_str() == BARE_AGENT_ID)
+            {
+                return Err(BundleError::BuiltinAgentIdShadowed {
+                    bundle_id: bundle.identity().id.clone(),
+                    agent_id: agent.id.as_str().to_string(),
+                });
             }
         }
-        Ok(())
+        Ok(Self { bundles })
     }
 
-    /// Installed-bundle catalog backing this agent catalog.
+    /// Default primary agent id: the `default_agent` an enabled bundle
+    /// declares (at most one may, [`BundleCatalog`] enforces it), else
+    /// `hya-bare`.
+    #[must_use]
+    pub fn default_agent_id(&self) -> &str {
+        self.declared_default().unwrap_or(BARE_AGENT_ID)
+    }
+
+    fn declared_default(&self) -> Option<&str> {
+        self.bundles
+            .bundles()
+            .iter()
+            .find_map(|bundle| bundle.default_agent())
+            .map(hya_proto::AgentName::as_str)
+    }
+
+    /// Whether the compiled-in `hya-bare` is part of this roster.
+    fn has_core_agent(&self) -> bool {
+        self.declared_default().is_none()
+    }
+
+    /// Bundle catalog backing this agent catalog.
     #[must_use]
     pub fn bundles(&self) -> &Arc<BundleCatalog> {
         &self.bundles
     }
 
-    /// Digest of the compiled-in roster, for the runtime semantic fingerprint.
-    #[must_use]
-    pub fn builtin_digest(&self) -> &'static [u8; 32] {
-        self.preset.digest_bytes()
-    }
-
     /// Domain-separated semantic identity of the whole agent surface.
     ///
-    /// Composes the compiled-in roster digest with the installed-bundle
-    /// catalog's own identity. Returns `None` when installed bundles are
-    /// present but carry no verified provenance, which preserves the rule that
-    /// an unverified catalog has no identity.
+    /// Composes the `hya-bare` digest (an empty section when `hya-bare` is not
+    /// in the roster) with the bundle catalog's own identity. Returns `None`
+    /// when bundles are present but carry no verified provenance, which
+    /// preserves the rule that an unverified catalog has no identity.
     #[must_use]
     pub fn semantic_identity_v1(&self) -> Option<Vec<u8>> {
         let bundle_identity = match self.bundles.semantic_identity_v1() {
             Some(identity) => identity.to_vec(),
-            // A catalog with zero installed bundles has nothing to attest, so an
-            // empty section is correct rather than "unidentifiable".
+            // A catalog with zero bundles has nothing to attest, so an empty
+            // section is correct rather than "unidentifiable".
             None if self.bundles.bundles().is_empty() => Vec::new(),
             None => return None,
         };
+        let core_agent: &[u8] = if self.has_core_agent() {
+            core_agent_digest()
+        } else {
+            &[]
+        };
         let mut identity = Vec::new();
         append_section(&mut identity, AGENT_CATALOG_IDENTITY_DOMAIN_V1);
-        append_section(&mut identity, self.preset.digest_bytes());
+        append_section(&mut identity, core_agent);
         append_section(&mut identity, &bundle_identity);
         Some(identity)
     }
 
     /// Resolve by stable id, or by a `bundle:{id}/agent/{local}` reference.
-    ///
-    /// Built-ins win on an exact id match. [`Self::validate`] has already
-    /// rejected any bundle that could make that ambiguous.
     #[must_use]
     pub fn resolve(&self, reference: &str) -> Option<AgentDefinition<'_>> {
-        if let Some(agent) = self.preset_agent(reference) {
-            return Some(preset_definition(agent));
+        if reference == BARE_AGENT_ID && self.has_core_agent() {
+            return Some(definition(core_agent(), AgentOrigin::Builtin));
         }
         let (bundle_id, agent) = self.bundles.resolve_agent_entry(reference)?;
-        Some(AgentDefinition {
-            stable_id: agent.id.as_str(),
-            private: agent.private,
-            description: agent.description.as_deref(),
-            role: agent.role,
-            color: agent.color.as_deref(),
-            prompt: agent.prompt.as_deref(),
-            model_policy: Cow::Borrowed(&agent.model_policy),
-            workdir: agent.workdir.as_deref(),
-            origin: AgentOrigin::Bundle { bundle_id },
-        })
+        Some(definition(agent, AgentOrigin::Bundle { bundle_id }))
     }
 
     /// Resolve or fail with [`BundleError::UnknownAgentId`].
@@ -217,23 +187,23 @@ impl AgentCatalog {
     /// Returns [`BundleError::UnknownAgentId`] when `caller` itself is unknown.
     pub fn spawnable(&self, caller: &str) -> Result<Vec<AgentDefinition<'_>>, BundleError> {
         match self.spawn_scope_of(caller)? {
-            CallerScope::Builtin(SpawnScope::None) => Ok(Vec::new()),
-            CallerScope::Builtin(SpawnScope::AllOrdinary) => Ok(self.all_ordinary()),
-            CallerScope::Bundle(can_spawn) => Ok(can_spawn
+            CallerScope::All => Ok(self.all_ordinary()),
+            CallerScope::Listed(can_spawn) => Ok(can_spawn
                 .iter()
                 .filter_map(|target| self.resolve(target.as_str()))
                 .collect()),
         }
     }
 
-    /// Authorise one spawn. Strict: an unknown or unlisted target is an error.
+    /// Authorise one spawn. Strict: an unknown or unlisted target is an error,
+    /// and an all-agents grant never reaches a private agent.
     pub fn resolve_spawn(
         &self,
         caller: &str,
         requested: &str,
     ) -> Result<AgentDefinition<'_>, BundleError> {
-        let target = self.resolve_workflow_agent(caller, requested)?;
-        if target.private && matches!(self.spawn_scope_of(caller)?, CallerScope::Builtin(_)) {
+        let target = self.resolve_agent_run(caller, requested)?;
+        if target.private && matches!(self.spawn_scope_of(caller)?, CallerScope::All) {
             return Err(BundleError::AgentSpawnNotAllowed {
                 caller: caller.to_string(),
                 agent_id: target.stable_id.to_string(),
@@ -242,10 +212,10 @@ impl AgentCatalog {
         Ok(target)
     }
 
-    /// Authorise a workflow node or verifier, including private bundle agents.
-    /// Built-ins with ordinary scope may use any non-reserved target; bundle
-    /// callers still need an explicit `can_spawn` grant. Reserved callers cannot run agents.
-    pub fn resolve_workflow_agent(
+    /// Authorise a directed agent run, including private agents.
+    /// An all-agents caller may run any target; other callers need an
+    /// explicit `can_spawn` grant.
+    pub fn resolve_agent_run(
         &self,
         caller: &str,
         requested: &str,
@@ -253,9 +223,8 @@ impl AgentCatalog {
         let scope = self.spawn_scope_of(caller)?;
         let target = self.require(requested)?;
         let allowed = match scope {
-            CallerScope::Builtin(SpawnScope::None) => false,
-            CallerScope::Builtin(SpawnScope::AllOrdinary) => !self.is_reserved(target.stable_id),
-            CallerScope::Bundle(can_spawn) => can_spawn
+            CallerScope::All => true,
+            CallerScope::Listed(can_spawn) => can_spawn
                 .iter()
                 .any(|listed| listed.as_str() == target.stable_id),
         };
@@ -268,22 +237,20 @@ impl AgentCatalog {
         Ok(target)
     }
 
-    /// Every selectable agent, built-in and installed, for selector listings.
+    /// Every non-private agent, for selector listings.
     #[must_use]
     pub fn selectable(&self) -> Vec<AgentDefinition<'_>> {
         self.all_ordinary()
     }
 
-    /// Every agent, including private bundle agents and reserved system agents.
-    /// Metadata surfaces use this list and mark private/reserved entries hidden.
+    /// Every agent, including private ones. Metadata surfaces use this list
+    /// and mark private entries hidden.
     #[must_use]
     pub fn all(&self) -> Vec<AgentDefinition<'_>> {
-        let mut agents = self
-            .preset
-            .agents()
-            .iter()
-            .map(preset_definition)
-            .collect::<Vec<_>>();
+        let mut agents = Vec::new();
+        if self.has_core_agent() {
+            agents.push(definition(core_agent(), AgentOrigin::Builtin));
+        }
         for bundle in self.bundles.bundles() {
             for agent in bundle.agents() {
                 if let Some(definition) = self.resolve(agent.id.as_str()) {
@@ -295,46 +262,26 @@ impl AgentCatalog {
         agents
     }
 
-    /// Whether `id` is a reserved system agent that no ordinary agent may spawn.
-    #[must_use]
-    pub fn is_reserved(&self, id: &str) -> bool {
-        self.preset.is_reserved(id)
-    }
-
-    /// Non-reserved built-ins and public installed bundle agents.
     fn all_ordinary(&self) -> Vec<AgentDefinition<'_>> {
         self.all()
             .into_iter()
-            .filter(|agent| !agent.private && !self.is_reserved(agent.stable_id))
+            .filter(|agent| !agent.private)
             .collect()
     }
 
     fn spawn_scope_of(&self, caller: &str) -> Result<CallerScope<'_>, BundleError> {
-        if let Some(agent) = self.preset_agent(caller) {
-            let scope = if self.preset.is_reserved(agent.id.as_str()) {
-                SpawnScope::None
-            } else {
-                SpawnScope::AllOrdinary
-            };
-            return Ok(CallerScope::Builtin(scope));
+        if caller == BARE_AGENT_ID && self.has_core_agent() {
+            return Ok(CallerScope::All);
         }
         let (_, agent) = self.bundles.resolve_agent_entry(caller).ok_or_else(|| {
             BundleError::UnknownAgentId {
                 agent_id: caller.to_string(),
             }
         })?;
-        Ok(CallerScope::Bundle(&agent.can_spawn))
-    }
-
-    pub(crate) fn preset_agent(&self, reference: &str) -> Option<&hya_bundle::PreparedAgent> {
-        let id = reference
-            .strip_prefix("bundle:hya/core-agents/agent/")
-            .unwrap_or(reference);
-        self.preset
-            .agents()
-            .binary_search_by(|agent| agent.id.as_str().cmp(id))
-            .ok()
-            .map(|index| &self.preset.agents()[index])
+        Ok(match agent.can_spawn.as_slice() {
+            [only] if only.as_str() == SPAWN_ANY_AGENT => CallerScope::All,
+            listed => CallerScope::Listed(listed),
+        })
     }
 }
 
@@ -349,11 +296,15 @@ fn append_section(bytes: &mut Vec<u8>, value: &[u8]) {
 
 /// What the caller is allowed to spawn, normalised across origins.
 enum CallerScope<'a> {
-    Builtin(SpawnScope),
-    Bundle(&'a [hya_proto::AgentName]),
+    /// `hya-bare` and `can_spawn: ["*"]`: every agent (spawns: non-private only).
+    All,
+    Listed(&'a [hya_proto::AgentName]),
 }
 
-fn preset_definition(agent: &hya_bundle::PreparedAgent) -> AgentDefinition<'_> {
+fn definition<'a>(
+    agent: &'a hya_bundle::PreparedAgent,
+    origin: AgentOrigin<'a>,
+) -> AgentDefinition<'a> {
     AgentDefinition {
         stable_id: agent.id.as_str(),
         private: agent.private,
@@ -363,6 +314,6 @@ fn preset_definition(agent: &hya_bundle::PreparedAgent) -> AgentDefinition<'_> {
         prompt: agent.prompt.as_deref(),
         model_policy: Cow::Borrowed(&agent.model_policy),
         workdir: agent.workdir.as_deref(),
-        origin: AgentOrigin::Builtin,
+        origin,
     }
 }

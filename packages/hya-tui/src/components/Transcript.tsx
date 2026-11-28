@@ -10,8 +10,8 @@
  * scrolled-up view, a `↓ New messages below` hint shows until the bottom is
  * reached again (state/scroll.ts).
  *
- * A subagent's session (one with a parent) shows a one-line banner above the
- * messages, `Viewing subagent <agent> · Esc returns`; its input is read-only.
+ * A child session shows a one-line banner above the
+ * messages, `Viewing child session · Esc returns`; its input is read-only.
  *
  * The transcript starts with the startup list (components/StartupBlock.tsx:
  * `tui.toml` notices and what was loaded): it scrolls away with the history
@@ -80,7 +80,7 @@ export function Transcript(props: { secondary?: boolean; scroller?: (scroller: T
       <Show when={!props.secondary && store.state.selected?.parent}>
         <box width="100%" height={1} flexShrink={0} backgroundColor={colors.panel} paddingX={1}>
           <text height={1} wrapMode="none">
-            <span style={{ fg: colors.warning }}>{`Viewing subagent ${store.state.selected?.agent ?? ""}`}</span>
+            <span style={{ fg: colors.warning }}>Viewing child session</span>
             <span style={{ fg: colors.muted }}> · Esc returns · read-only</span>
           </text>
         </box>

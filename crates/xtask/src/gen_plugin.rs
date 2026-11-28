@@ -204,12 +204,11 @@ impl Generator {
                 );
             }
         }
-        // These types implement serde manually instead of deriving it.
-        for name in ["SessionId", "WorkflowRevision"] {
-            generator
-                .definitions
-                .insert(name.to_owned(), format!("export type {name} = string\n"));
-        }
+        // SessionId implements serde manually instead of deriving it.
+        generator.definitions.insert(
+            "SessionId".to_owned(),
+            "export type SessionId = string\n".to_owned(),
+        );
         Ok(generator)
     }
 
@@ -535,6 +534,12 @@ fn outputs(root: &Path) -> Result<BTreeMap<PathBuf, String>> {
     guards.insert("HookName".into(), "export function isHookName(value: unknown): value is HookName { return typeof value === \"string\" && HOOK_NAMES.includes(value as HookName) }\n".into());
     // HookName is emitted as its literal union and runtime list above.
     g.definitions.insert("HookName".into(), String::new());
+    // HookId serializes as a core hook name or a declared `<bundle-id>:<point>`.
+    g.definitions.insert(
+        "HookId".into(),
+        "export type HookId = HookName | `${string}:${string}`\n".into(),
+    );
+    guards.insert("HookId".into(), "export function isHookId(value: unknown): value is HookId { return typeof value === \"string\" && (isHookName(value) || /^[^:]+:[^:]+$/.test(value)) }\n".into());
     while let Some(name) = g.pending.pop_first() {
         if g.definitions.contains_key(&name) {
             continue;

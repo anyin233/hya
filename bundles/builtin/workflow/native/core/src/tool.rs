@@ -4,14 +4,13 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::{ToolSchema, WorkflowRevision, WorkflowRunId};
+use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
-use hya_tool::{
-    Action, Resource, Tool, ToolCtx, ToolError, WorkflowCommand, WorkflowDelivery, WorkflowPlane,
-};
+use hya_tool::{Action, Resource, Tool, ToolCtx, ToolError};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::model::{WorkflowCommand, WorkflowDelivery, WorkflowRevision, WorkflowRunId};
 use crate::service::{WorkflowInvocation, WorkflowService};
 
 #[derive(Deserialize)]
@@ -139,32 +138,29 @@ impl Tool for WorkflowTool {
             }
         };
 
-        let result = if self.service.is_started() {
-            let session = ctx.session.ok_or_else(|| ToolError::WorkflowControl {
-                code: "SESSION_NOT_FOUND".to_string(),
-                message: "workflow tool requires an active session".to_string(),
-            })?;
-            let invocation = WorkflowInvocation {
-                caller: None,
-                operation: Some(ctx.operation),
-                delivery: WorkflowDelivery::Finished,
-            };
-            self.service
-                .execute(session, invocation, command, ctx.cancel.clone())
-                .await
-                .map_err(|error| ToolError::WorkflowControl {
-                    code: error.code().to_string(),
-                    message: error.to_string(),
-                })?
-        } else {
-            let workflows = ctx
-                .extension::<WorkflowPlane>()
-                .cloned()
-                .unwrap_or_else(WorkflowPlane::disconnected);
-            workflows
-                .execute(ctx.operation, command, ctx.cancel.clone())
-                .await?
+        if !self.service.is_started() {
+            // Byte-identical to what an unstarted service returned before.
+            return Err(ToolError::Other(
+                "workflow tool requires a session".to_string(),
+            ));
+        }
+        let session = ctx.session.ok_or_else(|| ToolError::Coded {
+            code: "SESSION_NOT_FOUND".to_string(),
+            message: "workflow tool requires an active session".to_string(),
+        })?;
+        let invocation = WorkflowInvocation {
+            caller: None,
+            operation: Some(ctx.operation),
+            delivery: WorkflowDelivery::Finished,
         };
+        let result = self
+            .service
+            .execute(session, invocation, command, ctx.cancel.clone())
+            .await
+            .map_err(|error| ToolError::Coded {
+                code: error.code().to_string(),
+                message: error.to_string(),
+            })?;
         serde_json::to_value(result)
             .map_err(|error| ToolError::Other(format!("serialize workflow result: {error}")))
     }

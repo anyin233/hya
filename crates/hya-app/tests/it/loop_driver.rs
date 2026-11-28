@@ -1,22 +1,22 @@
-//! Integration tests verifying `hya/loop` ABI v2 `LoopDriver` loading, execution
-//! through `HostRuntime::loop_driver()`, and actionable errors when `hya/loop`
-//! is disabled or running in `--bare` mode.
+//! Integration tests running the `hya/loop:loop` driver through the app's
+//! generic driver registry, and the actionable error when `hya/loop` is
+//! disabled or running in `--bare` mode.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_app::{
-    HeadlessEvaluatorRoute, InvocationPolicy, LoopPredicateMode, LoopPredicateSpec, LoopRunOptions,
-    agent_with_model, build_session_engine_pure, config::EngineSettings, open_store, prepare_loop,
+    InvocationPolicy, agent_with_model, build_session_engine_pure, config::EngineSettings,
+    open_store, prepare_driver,
 };
-use hya_bundle::{BuiltinBundleProfile, BuiltinBundleSelection};
+use hya_bundle::BuiltinBundleSelection;
 use hya_engine::CreateSession;
 use hya_proto::{FinishReason, SessionKind};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
-use hya_runtime_abi::DriverRunOutcome;
+use hya_runtime_abi::DriverRequest;
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 fn router_with_turns(turns: Vec<Vec<FakeStep>>) -> ProviderRouter {
@@ -26,17 +26,13 @@ fn router_with_turns(turns: Vec<Vec<FakeStep>>) -> ProviderRouter {
 #[tokio::test]
 async fn hya_loop_native_driver_runs_verifier_planner_and_predicate_through_host_runtime() {
     let store = open_store("").await.unwrap();
-    let worker_router = router_with_turns(vec![
+    // Worker and judge share one router; calls interleave worker, verifier,
+    // planner, worker, verifier.
+    let router = router_with_turns(vec![
         vec![
             FakeStep::Text("attempt 1".into()),
             FakeStep::Finish(FinishReason::Stop),
         ],
-        vec![
-            FakeStep::Text("attempt 2 verified".into()),
-            FakeStep::Finish(FinishReason::Stop),
-        ],
-    ]);
-    let evaluator_router = router_with_turns(vec![
         vec![
             FakeStep::Text(
                 r#"{"score": 40, "satisfied": false, "evidence_quality": "claim_only", "critical_gaps": ["missing check"], "iteration_summary": "first try", "reason": "needs verification"}"#.into(),
@@ -47,6 +43,10 @@ async fn hya_loop_native_driver_runs_verifier_planner_and_predicate_through_host
             FakeStep::Text(
                 r#"{"directive": "run check and report evidence", "continuity_brief": "keep changes small", "planner_notes": "verify step", "strategy_change": false}"#.into(),
             ),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("attempt 2 verified".into()),
             FakeStep::Finish(FinishReason::Stop),
         ],
         vec![
@@ -61,7 +61,7 @@ async fn hya_loop_native_driver_runs_verifier_planner_and_predicate_through_host
     agent.workdir = std::env::temp_dir();
     let mut built = build_session_engine_pure(
         store,
-        worker_router,
+        router,
         &agent,
         BTreeMap::new(),
         Vec::new(),
@@ -70,10 +70,10 @@ async fn hya_loop_native_driver_runs_verifier_planner_and_predicate_through_host
     .await
     .unwrap();
 
-    let driver = built
-        .loop_driver()
-        .expect("hya/loop LoopDriver must be registered in full mode");
-    assert_eq!(driver.id(), "loop");
+    assert!(
+        built.driver("hya/loop:loop").is_some(),
+        "hya/loop must register its driver in full mode"
+    );
 
     let session = built
         .engine()
@@ -88,83 +88,61 @@ async fn hya_loop_native_driver_runs_verifier_planner_and_predicate_through_host
         .await
         .unwrap();
 
-    // 1. Multi-iteration verifier + planner loop completes with Achieved.
-    let work = prepare_loop(
-        built.host_runtime(),
+    let request = |args| DriverRequest {
         session,
-        agent.clone(),
-        HeadlessEvaluatorRoute {
-            router: &evaluator_router,
-            model_override: Some("fake/judge"),
-            default_model: "fake/worker",
-        },
-        "deliver feature".into(),
-        |_| {
-            Ok(LoopRunOptions {
-                budget: 5,
-                ..LoopRunOptions::default()
-            })
-        },
+        agent: Some(agent.name.clone()),
+        model: Some(agent.model.clone()),
+        workdir: agent.workdir.clone(),
+        args,
+    };
+
+    // 1. Multi-iteration verifier + planner loop completes with Achieved.
+    let work = prepare_driver(
+        &built,
+        "hya/loop:loop",
+        request(
+            json!({ "target": "deliver feature", "budget": 5, "evaluator_model": "fake/judge" }),
+        ),
         CancellationToken::new(),
     )
-    .await
     .unwrap();
-    let outcome = work.await.unwrap();
+    let report = work.await.unwrap();
     assert_eq!(
-        outcome,
-        DriverRunOutcome::Achieved {
-            iterations: 2,
-            reason: "satisfied: score 95".into(),
-        }
+        report.stdout,
+        "loop outcome: Achieved { iterations: 2, reason: \"satisfied: score 95\" }\n"
     );
+    assert_eq!(report.exit_code, 0);
 
     // 2. Deterministic `--until true` predicate stops on iteration 1 without calling evaluator.
-    let pred_work = prepare_loop(
-        built.host_runtime(),
-        session,
-        agent,
-        HeadlessEvaluatorRoute {
-            router: &evaluator_router,
-            model_override: Some("fake/judge"),
-            default_model: "fake/worker",
-        },
-        "predicate check".into(),
-        |workdir| {
-            Ok(LoopRunOptions {
-                budget: 3,
-                predicate: Some(LoopPredicateSpec {
-                    command: "true".into(),
-                    mode: LoopPredicateMode::Until,
-                    workdir: PathBuf::from(workdir),
-                }),
-                ..LoopRunOptions::default()
-            })
-        },
+    let pred_work = prepare_driver(
+        &built,
+        "hya/loop:loop",
+        request(json!({ "target": "predicate check", "budget": 3, "until": "true" })),
         CancellationToken::new(),
     )
-    .await
     .unwrap();
-    match pred_work.await.unwrap() {
-        DriverRunOutcome::Achieved { iterations, reason } => {
-            assert_eq!(iterations, 1);
-            assert!(reason.contains("until"), "{reason}");
-        }
-        other => panic!("expected achieved predicate outcome, got {other:?}"),
-    }
+    let report = pred_work.await.unwrap();
+    assert!(
+        report
+            .stdout
+            .starts_with("loop outcome: Achieved { iterations: 1")
+            && report.stdout.contains("until"),
+        "{}",
+        report.stdout
+    );
 
     built.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn prepare_loop_returns_actionable_error_when_bare_or_hya_loop_disabled() {
+async fn loop_driver_is_absent_with_an_actionable_error_when_bare_or_disabled() {
     for (label, selection) in [
         ("bare", BuiltinBundleSelection::bare()),
         (
             "disabled",
             BuiltinBundleSelection {
-                profile: BuiltinBundleProfile::Full,
-                enable: Vec::new(),
                 disable: vec!["hya/loop".to_string()],
+                ..BuiltinBundleSelection::full()
             },
         ),
     ] {
@@ -189,8 +167,8 @@ async fn prepare_loop_returns_actionable_error_when_bare_or_hya_loop_disabled() 
         .unwrap();
 
         assert!(
-            built.loop_driver().is_none(),
-            "{label}: loop_driver must be None when hya/loop is not enabled"
+            built.driver("hya/loop:loop").is_none(),
+            "{label}: the loop driver must be absent when hya/loop is not enabled"
         );
         let session = built
             .engine()
@@ -205,22 +183,15 @@ async fn prepare_loop_returns_actionable_error_when_bare_or_hya_loop_disabled() 
             .await
             .unwrap();
 
-        let err = match prepare_loop(
-            built.host_runtime(),
+        let request = DriverRequest {
             session,
-            agent,
-            HeadlessEvaluatorRoute {
-                router: &router,
-                model_override: None,
-                default_model: "fake/worker",
-            },
-            "do work".into(),
-            |_| Ok(LoopRunOptions::default()),
-            CancellationToken::new(),
-        )
-        .await
-        {
-            Ok(_) => panic!("{label}: prepare_loop must error without hya/loop"),
+            agent: Some(agent.name.clone()),
+            model: Some(agent.model.clone()),
+            workdir: agent.workdir.clone(),
+            args: json!({ "target": "do work" }),
+        };
+        let err = match prepare_driver(&built, "hya/loop:loop", request, CancellationToken::new()) {
+            Ok(_) => panic!("{label}: prepare_driver must error without hya/loop"),
             Err(err) => err,
         };
         let msg = err.to_string();

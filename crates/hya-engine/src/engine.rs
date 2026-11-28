@@ -6,10 +6,7 @@ use hya_proto::{MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::handle::{ArtifactPlane, UriSchemaPlane};
-use hya_tool::{
-    FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, PermissionPlane,
-    ResolvedTool, ToolError,
-};
+use hya_tool::{InteractionPlane, LifecyclePlane, PermissionPlane, ResolvedTool, ToolError};
 use serde_json::Value;
 
 #[cfg(test)]
@@ -17,9 +14,7 @@ use tokio::sync::Notify;
 
 use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
-use crate::compaction::CompactionConfig;
 use crate::error::CoreError;
-use crate::hooks::HookDispatcher;
 use crate::sidecar::SidecarEnvironment;
 use crate::tokens::TokenAccounting;
 use crate::{CategoryRegistry, RuntimeRegistry, TurnBinding};
@@ -44,18 +39,15 @@ impl FixedSystemAgent {
 
 mod admission;
 mod agent_binding;
-mod channel_host;
 mod events;
 mod file_snapshot;
 mod fork;
+mod host_runtime;
 mod mailbox;
 mod member_control;
 mod members;
 mod model_probe;
 mod models;
-#[cfg(unix)]
-#[cfg(test)]
-mod native_rewriters_test;
 mod nested_tools;
 mod permissions;
 mod restart;
@@ -67,7 +59,6 @@ mod session_state;
 mod session_title;
 mod shell;
 mod spawn_requests;
-mod steer;
 mod stream_round;
 mod summary;
 /// Model-backed terminal handoff documents for resident agents.
@@ -96,7 +87,12 @@ use session_state::session_workdir;
 pub use spawn_requests::{BoundSpawnRequest, BoundSpawnSender};
 use terminal_handoff::{SummarizeOptions, Summarizer, TerminalHandoffOptions};
 pub(crate) use turn::TurnRequestContext;
-pub use turn::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
+pub use turn::{
+    DrivenTurn, DrivenTurnEnd, ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute,
+    FencedSidecars,
+};
+
+use crate::orchestrator::SubagentGovernor as StreamGovernor;
 
 async fn authorize_tool_call(
     resolved: &ResolvedTool,
@@ -137,7 +133,7 @@ impl MailPreAppendGate {
 /// Central session runtime: persistence, providers, tools, and turn execution.
 ///
 /// Construct with [`SessionEngine::new`], then chain `with_*` builders for
-/// interaction, spawn, mailbox, hooks, compaction, and governors. Turns append
+/// interaction, spawn, lifecycle, hooks, compaction, and governors. Turns append
 /// events to the store and publish on the bus; observers never write the log.
 ///
 /// Clones share execution handles and live provider publications.
@@ -146,10 +142,6 @@ pub struct SessionEngine {
     store: SessionStore,
     base_system_prompt: String,
     pure_context: bool,
-    /// Whether system prompts may consult first-party tool-family exposure
-    /// policies (`hya_tool_loader`). Disabled in bare mode so zero builtin
-    /// bundles are read from disk.
-    use_tool_family_prompts: bool,
     providers: ProviderSnapshots,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
     /// candidate chain (the preferred model itself first). Empty by default,
@@ -171,7 +163,9 @@ pub struct SessionEngine {
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
     native_services: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::NativeService>>>>,
-    mailbox: MailboxPlane,
+    /// Every ABI v2 reducer registered so far; the store adapters are rebuilt
+    /// from all of them, so owners and observers may register in any order.
+    native_reducers: Arc<RwLock<Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>>>,
     project_activity: hya_tool::ProjectActivityPlane,
     lifecycle: LifecyclePlane,
     /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
@@ -180,25 +174,23 @@ pub struct SessionEngine {
     artifacts: ArtifactPlane,
     /// Dynamic URI scheme handlers carried to every tool call.
     schemas: UriSchemaPlane,
-    formatter: FormatterPlane,
-    lsp: LspPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
     handoff_options: TerminalHandoffOptions,
-    rewriter_keep_recent: usize,
     token_accounting: TokenAccounting,
     /// Context-reduction extensions the kernel runs before its own Rewrite,
     /// before each round and on `/summarize`.
     rewriters: Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>,
-    /// Process-wide ABI v2 native bundle hooks (run before external plugin hooks).
-    native_hooks: Option<Arc<dyn HookDispatcher>>,
-    hooks: Option<Arc<dyn HookDispatcher>>,
+    /// Process-wide hook chain: entries from every enabled source, in
+    /// registration order. Per-binding bundle and plugin entries follow it.
+    hooks: Arc<crate::hooks::HookChain>,
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
-    mail_steer_suppressed: Arc<RwLock<HashMap<SessionId, bool>>>,
-    staged_mail_acks: Arc<RwLock<HashMap<SessionId, hya_runtime_abi::StagedMailAck>>>,
-    governor: Option<crate::orchestrator::SubagentGovernor>,
+    transient_state: host_runtime::TransientState,
+    /// Extension events staged by after-hooks of the tool result in flight.
+    staged_events: host_runtime::StagedEvents,
+    governor: Option<StreamGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
     /// Revival seam (ADR-0015): a downward mail to an archived direct child
     /// routes here instead of failing the send. Interior-mutable because the
@@ -223,7 +215,6 @@ impl Clone for SessionEngine {
             store: self.store.clone(),
             base_system_prompt: self.base_system_prompt.clone(),
             pure_context: self.pure_context,
-            use_tool_family_prompts: self.use_tool_family_prompts,
             providers: self.providers.clone(),
             global_reasoning: self.global_reasoning,
             exclusive_tool: self.exclusive_tool.clone(),
@@ -236,26 +227,22 @@ impl Clone for SessionEngine {
             interaction: self.interaction.clone(),
             spawner: self.spawner.clone(),
             native_services: Arc::clone(&self.native_services),
-            mailbox: self.mailbox.clone(),
+            native_reducers: Arc::clone(&self.native_reducers),
             project_activity: self.project_activity.clone(),
             lifecycle: self.lifecycle.clone(),
             handle_namer: self.handle_namer.clone(),
             artifacts: self.artifacts,
             schemas: self.schemas.clone(),
-            formatter: self.formatter.clone(),
-            lsp: self.lsp.clone(),
             bus: self.bus.clone(),
             summarizer: self.summarizer.clone(),
             handoff_options: self.handoff_options,
-            rewriter_keep_recent: self.rewriter_keep_recent,
             token_accounting: self.token_accounting.clone(),
             rewriters: Arc::clone(&self.rewriters),
-            native_hooks: self.native_hooks.clone(),
-            hooks: self.hooks.clone(),
+            hooks: Arc::clone(&self.hooks),
             session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
             session_channel_policies: Arc::clone(&self.session_channel_policies),
-            mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
-            staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+            transient_state: Arc::clone(&self.transient_state),
+            staged_events: Arc::clone(&self.staged_events),
             governor: self.governor.clone(),
             sidecar_environment: self.sidecar_environment.clone(),
             reviver: Arc::clone(&self.reviver),
@@ -275,13 +262,9 @@ impl SessionEngine {
         self.runtime.set_session_sources(session, sources);
     }
 
-    /// Build an engine with disconnected mailbox/spawner and default tool planes.
+    /// Build an engine with an empty native extension chain and disconnected tool planes.
     ///
-    /// Wire product planes with `with_*` before serving interactive traffic.
-    ///
-    /// # Panics
-    /// Panics if an internal rewriter cannot load. Use [`Self::try_new`] at startup
-    /// boundaries that return errors.
+    /// Install runtime registrations with the relevant `with_*` builders.
     #[must_use]
     pub fn new(
         store: SessionStore,
@@ -290,201 +273,24 @@ impl SessionEngine {
         permission: PermissionPlane,
         bus: EventBus,
     ) -> Self {
-        Self::try_new(store, providers, runtime, permission, bus)
-            .unwrap_or_else(|error| panic!("load internal bundles: {error}"))
-    }
-
-    /// Build the engine after loading the required native rewriters and
-    /// projection reducers from internal ABI v2 bundles.
-    ///
-    /// # Errors
-    /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
-    pub fn try_new(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-    ) -> Result<Self, CoreError> {
-        let (rewriters, reducers) = internal_bundles()?;
-        let native_hooks = default_native_hook_list();
-        Ok(Self::build_with_rewriters(
-            store,
-            providers,
-            runtime,
-            permission,
-            bus,
-            rewriters,
-            native_hooks,
-            reducers,
-            true,
-        ))
-    }
-
-    /// Build the engine loading internal ABI v2 bundles with a caller-supplied
-    /// [`hya_runtime_abi::HostRuntime`] (for example to expose per-bundle
-    /// `config.yml` files to `hya/compaction`).
-    ///
-    /// # Errors
-    /// Returns [`CoreError::BundleRuntime`] when an internal bundle cannot load.
-    pub fn try_new_with_host_runtime(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-        host_runtime: Arc<dyn hya_runtime_abi::HostRuntime>,
-    ) -> Result<Self, CoreError> {
-        let regs = hya_core::bundles::load_internal_with_runtime(host_runtime)?;
-        let rewriters: NativeRewriters = regs.rewriters.into();
-        let native_hooks = default_native_hook_list();
-        Ok(Self::build_with_rewriters(
-            store,
-            providers,
-            runtime,
-            permission,
-            bus,
-            rewriters,
-            native_hooks,
-            regs.projection_reducers,
-            true,
-        ))
-    }
-
-    /// Build the engine in bare mode without loading any internal native
-    /// bundles (such as `hya/compaction`) or tool-family prompt presets
-    /// (ADR-0039). Context compaction relies solely on the kernel's `rewrite`
-    /// primitive.
-    #[must_use]
-    pub fn new_bare(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-    ) -> Self {
-        Self::build_with_rewriters(
-            store,
-            providers,
-            runtime,
-            permission,
-            bus,
-            Arc::from([]),
-            Vec::new(),
-            Vec::new(),
-            false,
-        )
-    }
-
-    /// Control whether system prompts consult first-party tool-family exposure
-    /// policies (`hya_tool_loader`).
-    #[must_use]
-    pub fn with_tool_family_prompts(mut self, enabled: bool) -> Self {
-        self.use_tool_family_prompts = enabled;
-        self
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_with_rewriters(
-        store: SessionStore,
-        providers: Arc<ProviderRouter>,
-        runtime: Arc<RuntimeRegistry>,
-        permission: PermissionPlane,
-        bus: EventBus,
-        rewriters: NativeRewriters,
-        mut native_hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>,
-        abi_reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
-        use_tool_family_prompts: bool,
-    ) -> Self {
         if store.projection_reducers().is_empty() {
             store.set_projection_reducers(hya_tool::extension::projection_reducers());
-        }
-        for reducer in abi_reducers {
-            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: reducer,
-            }));
         }
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
-        let mailbox = MailboxPlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
-        let formatter = FormatterPlane::default();
-        let lsp = LspPlane::default();
         let session_channel_policies = Arc::new(RwLock::new(HashMap::new()));
-        let mail_steer_suppressed = Arc::new(RwLock::new(HashMap::new()));
-        let staged_mail_acks = Arc::new(RwLock::new(HashMap::new()));
         let reviver = Arc::new(RwLock::new(None));
         let runtime_owner = hya_proto::OwnerRunId::new();
         let turn_gate = Arc::new(turn_gate::TurnGate::default());
         let artifacts = ArtifactPlane;
-        let mut schemas = UriSchemaPlane::default();
-
-        if use_tool_family_prompts {
-            let channels_runtime: Arc<dyn hya_runtime_abi::HostRuntime> =
-                Arc::new(channel_host::EngineChannelsHostRuntime {
-                    store: store.clone(),
-                    bus: bus.clone(),
-                    runtime_owner,
-                    session_channel_policies: Arc::clone(&session_channel_policies),
-                    mail_steer_suppressed: Arc::clone(&mail_steer_suppressed),
-                    staged_mail_acks: Arc::clone(&staged_mail_acks),
-                    reviver: Arc::clone(&reviver),
-                    turn_gate: Arc::clone(&turn_gate),
-                });
-            let channels_service =
-                Arc::new(hya_agent_channels_core::AgentChannelsService::with_runtime(
-                    Arc::clone(&channels_runtime),
-                ));
-            native_hooks.push(Arc::new(hya_agent_channels_core::UnreadMailSteerHook::new(
-                Arc::clone(&channels_service),
-            )));
-            let channel_uri: Arc<dyn hya_runtime_abi::UriSchemaHandler> = Arc::new(
-                hya_agent_channels_core::ChannelUriSchemaHandler::new(channels_service),
-            );
-            if let Ok(updated) =
-                schemas
-                    .clone()
-                    .with_uri_handler(hya_runtime_abi::adapt_uri_schema_handler(
-                        channel_uri,
-                        Some(Arc::clone(&channels_runtime)),
-                    ))
-            {
-                schemas = updated;
-            }
-            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_agent_channels_core::AgentChannelsProjectionReducer),
-            }));
-
-            let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
-                Arc::clone(&channels_runtime),
-            ));
-            native_hooks.push(Arc::new(
-                hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
-            ));
-            store.register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                inner: Arc::new(hya_multi_agent_core::MultiAgentProjectionReducer),
-            }));
-            let _ = runtime.register_native_bundle_apis(
-                hya_tool::extension::BUNDLE_MULTI_AGENT,
-                vec![Arc::new(
-                    hya_multi_agent_core::MultiAgentBundleApiHandler::new(multi_service),
-                )],
-            );
-        }
-
-        let native_hooks = (!native_hooks.is_empty()).then(|| {
-            Arc::new(crate::hooks::NativeHookDispatcher::new(native_hooks))
-                as Arc<dyn HookDispatcher>
-        });
-
         let engine = Self {
             workspace_watches: Default::default(),
             store,
             providers: ProviderSnapshots::new(providers),
             base_system_prompt: String::new(),
             pure_context: false,
-            use_tool_family_prompts,
 
             global_reasoning: None,
             exclusive_tool: None,
@@ -497,26 +303,22 @@ impl SessionEngine {
             interaction,
             spawner,
             native_services: Arc::new(RwLock::new(Vec::new())),
-            mailbox,
+            native_reducers: Arc::new(RwLock::new(Vec::new())),
             project_activity,
             lifecycle,
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             artifacts,
-            schemas,
-            formatter,
-            lsp,
+            schemas: UriSchemaPlane::default(),
             bus,
             summarizer: None,
             handoff_options: TerminalHandoffOptions::default(),
-            rewriter_keep_recent: CompactionConfig::default().keep_recent,
             token_accounting: TokenAccounting::default(),
-            rewriters,
-            native_hooks,
-            hooks: None,
+            rewriters: Arc::from([]),
+            hooks: Arc::new(crate::hooks::HookChain::default()),
             session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
             session_channel_policies,
-            mail_steer_suppressed,
-            staged_mail_acks,
+            transient_state: Arc::default(),
+            staged_events: Arc::default(),
             governor: None,
             sidecar_environment: None,
             reviver,
@@ -537,6 +339,40 @@ impl SessionEngine {
             ));
         }
         engine
+    }
+
+    /// Install native context rewriters in registration order.
+    #[must_use]
+    pub fn with_rewriters(
+        mut self,
+        rewriters: Vec<Arc<dyn hya_context::rewrite::Rewriter>>,
+    ) -> Self {
+        self.rewriters = rewriters.into();
+        self
+    }
+
+    /// Wire the inline `hya/multi-agent` adapters used by engine fixtures.
+    ///
+    /// Application runtimes install the corresponding native registrations.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_legacy_coordination(mut self) -> Self {
+        let multi_service = Arc::new(hya_multi_agent_core::MultiAgentService::with_runtime(
+            self.host_runtime(),
+        ));
+        self = self.with_hooks(Arc::new(
+            hya_multi_agent_core::MultiAgentLifecycleHook::new(Arc::clone(&multi_service)),
+        ));
+        self.register_native_projection_reducers(vec![Arc::new(
+            hya_multi_agent_core::MultiAgentProjectionReducer,
+        )]);
+        let _ = self.runtime.register_native_bundle_apis(
+            hya_tool::extension::BUNDLE_MULTI_AGENT,
+            vec![Arc::new(
+                hya_multi_agent_core::MultiAgentBundleApiHandler::new(multi_service),
+            )],
+        );
+        self
     }
 
     /// Record the id claimed with `SessionStore::claim_runtime_owner`.
@@ -619,33 +455,24 @@ impl SessionEngine {
         self
     }
 
-    /// Install ABI v2 native bundle hooks (preserved across [`Self::with_hooks`]).
+    /// Append a hook to the process-wide chain.
     #[must_use]
-    pub fn with_native_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
-        self.native_hooks = Some(hooks);
+    pub fn with_hooks(mut self, hook: Arc<dyn hya_runtime_abi::NativeHook>) -> Self {
+        Arc::make_mut(&mut self.hooks).push(crate::hooks::HookEntry::new(hook));
         self
     }
 
-    /// Install plugin/host hooks for command/tool/chat interception and events.
+    /// Replace the process-wide chain with the hooks of the enabled sources.
     #[must_use]
-    pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
-        self.hooks = Some(hooks);
+    pub fn with_hook_list(mut self, hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>) -> Self {
+        self.hooks = Arc::new(crate::hooks::HookChain::of_hooks(hooks));
         self
     }
 
-    /// Install ABI v2 native hooks registered by enabled native bundles.
-    ///
-    /// Replaces any default native hooks loaded by [`Self::try_new`] so
-    /// disabling a native bundle cleanly removes its hooks.
+    /// The process-wide hook chain.
     #[must_use]
-    pub fn with_native_hook_list(
-        mut self,
-        hooks: Vec<Arc<dyn hya_runtime_abi::NativeHook>>,
-    ) -> Self {
-        self.native_hooks = (!hooks.is_empty()).then(|| {
-            Arc::new(crate::hooks::NativeHookDispatcher::new(hooks)) as Arc<dyn HookDispatcher>
-        });
-        self
+    pub fn process_hooks(&self) -> &Arc<crate::hooks::HookChain> {
+        &self.hooks
     }
 
     /// Replace dynamic URI scheme handlers on this engine's [`UriSchemaPlane`]
@@ -674,49 +501,87 @@ impl SessionEngine {
         self
     }
 
+    /// Read a process-local bundle value scoped to one session.
+    pub fn get_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Option<Value> {
+        host_runtime::get_transient(&self.transient_state, bundle, session, key)
+    }
+
+    /// Set a process-local bundle value or remove it with `None`.
+    pub fn set_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+        value: Option<Value>,
+    ) {
+        host_runtime::set_transient(&self.transient_state, bundle, session, key, value);
+    }
+
+    /// Subscribe to changes of a process-local bundle value.
+    pub fn subscribe_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> tokio::sync::watch::Receiver<Option<Value>> {
+        host_runtime::subscribe_transient(&self.transient_state, bundle, session, key)
+    }
+
     /// Suppress or re-enable in-turn unread-mail steering for `session`.
     pub fn set_mail_steer_suppressed(&self, session: SessionId, suppressed: bool) {
-        let mut map = self
-            .mail_steer_suppressed
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if suppressed {
-            map.insert(session, true);
-        } else {
-            map.remove(&session);
-        }
+        self.set_transient_state(
+            host_runtime::STEER_STATE_BUNDLE,
+            session,
+            host_runtime::STEER_SUPPRESSION_KEY,
+            suppressed.then_some(Value::Bool(true)),
+        );
     }
 
-    /// Whether in-turn unread-mail steering is currently suppressed for `session`.
-    #[must_use]
-    pub fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.mail_steer_suppressed
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&session)
-            .copied()
-            .unwrap_or(false)
-    }
-
-    /// Stage a `mail_consumed` acknowledgement from `UnreadMailSteerHook` to
-    /// commit atomically with the current tool result on `session`.
-    pub fn stage_mail_steer_ack(&self, session: SessionId, ack: hya_runtime_abi::StagedMailAck) {
-        self.staged_mail_acks
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(session, ack);
-    }
-
-    /// Take and clear any staged `mail_consumed` acknowledgement for `session`.
-    #[must_use]
-    pub fn take_staged_mail_ack(
+    /// Stage an extension event with the tool result `during` is committing
+    /// ([`hya_runtime_abi::HostSessionStore::stage_extension_event`]).
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` when `during` has no tool result in its after-hooks.
+    pub fn stage_extension_event(
         &self,
-        session: SessionId,
-    ) -> Option<hya_runtime_abi::StagedMailAck> {
-        self.staged_mail_acks
-            .write()
+        during: SessionId,
+        target: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
+        on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), hya_runtime_abi::HostError> {
+        host_runtime::stage_event(
+            &self.staged_events,
+            during,
+            target,
+            bundle,
+            kind,
+            payload,
+            on_commit,
+        )
+    }
+
+    /// Accept staged events for `session`'s tool result, dropping stale ones.
+    pub(crate) fn open_staged_events(&self, session: SessionId) {
+        self.staged_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, Vec::new());
+    }
+
+    /// Stop accepting staged events for `session` and return them in order.
+    pub(crate) fn take_staged_events(&self, session: SessionId) -> Vec<host_runtime::StagedEvent> {
+        self.staged_events
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&session)
+            .unwrap_or_default()
     }
 
     /// Return `true` when `handle` under `root` is currently stopped by the user.
@@ -759,14 +624,14 @@ impl SessionEngine {
     /// Build a lightweight [`hya_runtime_abi::HostRuntime`] backed by this
     /// engine's store, bus, turn gate, and reviver handles.
     #[must_use]
-    pub(crate) fn channel_host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
-        Arc::new(channel_host::EngineChannelsHostRuntime {
+    pub fn host_runtime(&self) -> Arc<dyn hya_runtime_abi::HostRuntime> {
+        Arc::new(host_runtime::EngineHostRuntime {
             store: self.store.clone(),
             bus: self.bus.clone(),
             runtime_owner: self.runtime_owner,
             session_channel_policies: Arc::clone(&self.session_channel_policies),
-            mail_steer_suppressed: Arc::clone(&self.mail_steer_suppressed),
-            staged_mail_acks: Arc::clone(&self.staged_mail_acks),
+            transient_state: Arc::clone(&self.transient_state),
+            staged_events: Arc::clone(&self.staged_events),
             reviver: Arc::clone(&self.reviver),
             turn_gate: Arc::clone(&self.turn_gate),
         })
@@ -826,15 +691,39 @@ impl SessionEngine {
 
     /// Register ABI v2 [`ProjectionReducer`](hya_runtime_abi::ProjectionReducer)
     /// instances on the underlying event store.
+    ///
+    /// A reducer's [`observed_bundles`](hya_runtime_abi::ProjectionReducer::observed_bundles)
+    /// also receive those bundles' events, after the owner folds them. Calls
+    /// accumulate: a reducer and its observers may arrive in separate calls.
     pub fn register_native_projection_reducers(
         &self,
         reducers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
     ) {
-        for reducer in reducers {
-            self.store
-                .register_projection_reducer(Arc::new(AbiV2ProjectionReducerAdapter {
-                    inner: reducer,
-                }));
+        let mut all = self
+            .native_reducers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        all.extend(reducers);
+        let mut adapters: std::collections::BTreeMap<String, AbiV2ProjectionReducerAdapter> =
+            std::collections::BTreeMap::new();
+        for reducer in all.iter() {
+            let bundle = reducer.bundle_id().to_string();
+            adapters
+                .entry(bundle.clone())
+                .or_insert_with(|| AbiV2ProjectionReducerAdapter::observing(bundle))
+                .inner = Some(Arc::clone(reducer));
+        }
+        for reducer in all.iter() {
+            for observed in reducer.observed_bundles() {
+                adapters
+                    .entry((*observed).to_string())
+                    .or_insert_with(|| AbiV2ProjectionReducerAdapter::observing((*observed).into()))
+                    .observers
+                    .push(Arc::clone(reducer));
+            }
+        }
+        for adapter in adapters.into_values() {
+            self.store.register_projection_reducer(Arc::new(adapter));
         }
     }
 
@@ -880,16 +769,6 @@ impl SessionEngine {
                 .map_err(|error| CoreError::Invalid(error.to_string()))?;
         }
         Ok(())
-    }
-
-    /// Inject the mailbox plane whose service loop this engine drives (see
-    /// [`run_mailbox_service`](crate::mailbox::run_mailbox_service)). Wired from
-    /// the app layer alongside the spawner, mirroring the established plane
-    /// pattern so `hya-tool` stays free of a `hya-engine` dependency.
-    #[must_use]
-    pub fn with_mailbox(mut self, mailbox: MailboxPlane) -> Self {
-        self.mailbox = mailbox;
-        self
     }
 
     /// Install the lifecycle plane drained by
@@ -947,39 +826,6 @@ impl SessionEngine {
         self.governor.as_ref()
     }
 
-    /// Replace the default disconnected LSP plane.
-    #[must_use]
-    pub fn with_lsp(mut self, lsp: LspPlane) -> Self {
-        self.lsp = lsp;
-        self
-    }
-
-    /// Replace the default disconnected formatter plane.
-    #[must_use]
-    pub fn with_formatter(mut self, formatter: FormatterPlane) -> Self {
-        self.formatter = formatter;
-        self
-    }
-
-    /// Set both the terminal handoff summarizer and rewriter retention.
-    ///
-    /// Use [`Self::with_terminal_handoff`] and [`Self::with_rewriter_keep_recent`]
-    /// to configure the two independently.
-    #[must_use]
-    pub fn with_compaction(
-        self,
-        summarizer: Arc<dyn Summarizer>,
-        config: CompactionConfig,
-    ) -> Self {
-        self.with_terminal_handoff(
-            summarizer,
-            TerminalHandoffOptions {
-                max_output_tokens: config.summary_max_tokens,
-            },
-        )
-        .with_rewriter_keep_recent(config.keep_recent)
-    }
-
     /// Set the terminal handoff generator and its output budget.
     #[must_use]
     pub fn with_terminal_handoff(
@@ -989,13 +835,6 @@ impl SessionEngine {
     ) -> Self {
         self.summarizer = Some(summarizer);
         self.handoff_options = options;
-        self
-    }
-
-    /// Keep tool outputs from this many recent messages when shake runs.
-    #[must_use]
-    pub fn with_rewriter_keep_recent(mut self, keep_recent: usize) -> Self {
-        self.rewriter_keep_recent = keep_recent;
         self
     }
 
@@ -1031,23 +870,11 @@ impl SessionEngine {
         &self.store
     }
 
-    /// LSP plane used by tools and post-edit hooks.
-    #[must_use]
-    pub fn lsp(&self) -> &LspPlane {
-        &self.lsp
-    }
-
     /// Process permission plane. Remembered grants installed on it are shared
     /// with every session plane derived from it.
     #[must_use]
     pub fn permission_plane(&self) -> &PermissionPlane {
         &self.permission
-    }
-
-    /// Formatter plane used after write/edit/patch.
-    #[must_use]
-    pub fn formatter(&self) -> &FormatterPlane {
-        &self.formatter
     }
 }
 
@@ -1067,46 +894,33 @@ fn fixed_system_agent(
         })
 }
 
-/// The rewriters registered by internal bundles, in registration order.
-/// Successful registrations are shared process-wide.
-type NativeRewriters = Arc<[Arc<dyn hya_context::rewrite::Rewriter>]>;
-type NativeProjectionReducers = Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>;
-
-fn internal_bundles() -> Result<(NativeRewriters, NativeProjectionReducers), CoreError> {
-    static BUNDLES: std::sync::Mutex<Option<(NativeRewriters, NativeProjectionReducers)>> =
-        std::sync::Mutex::new(None);
-    let mut slot = BUNDLES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((rewriters, reducers)) = slot.as_ref() {
-        return Ok((Arc::clone(rewriters), reducers.clone()));
-    }
-    let regs = hya_core::bundles::load_internal()?;
-    let rewriters: NativeRewriters = regs.rewriters.into();
-    let reducers = regs.projection_reducers;
-    *slot = Some((Arc::clone(&rewriters), reducers.clone()));
-    Ok((rewriters, reducers))
-}
-
 /// Bridges an ABI v2 native bundle [`hya_runtime_abi::ProjectionReducer`] onto
-/// the host's [`hya_proto::ProjectionReducer`] pipeline.
+/// the host's [`hya_proto::ProjectionReducer`] pipeline for one bundle's
+/// events: its owner (when loaded) folds them, then each observer folds them
+/// into its own state.
 struct AbiV2ProjectionReducerAdapter {
-    inner: Arc<dyn hya_runtime_abi::ProjectionReducer>,
+    bundle: String,
+    inner: Option<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
+    observers: Vec<Arc<dyn hya_runtime_abi::ProjectionReducer>>,
 }
 
-impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
-    fn bundle_id(&self) -> &str {
-        self.inner.bundle_id()
+impl AbiV2ProjectionReducerAdapter {
+    fn observing(bundle: String) -> Self {
+        Self {
+            bundle,
+            inner: None,
+            observers: Vec::new(),
+        }
     }
 
-    fn fold_extension(
-        &self,
+    fn fold_owned(
+        inner: &dyn hya_runtime_abi::ProjectionReducer,
         projection: &mut hya_proto::Projection,
         session: SessionId,
         kind: &str,
         payload: &Value,
     ) {
-        let bundle_id = self.inner.bundle_id();
+        let bundle_id = inner.bundle_id();
         let multi_reviving_path =
             if bundle_id == hya_tool::extension::BUNDLE_MULTI_AGENT && kind == "agent_registered" {
                 let handle = payload.get("handle").and_then(Value::as_str);
@@ -1137,7 +951,7 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
         let state = projection
             .extensions
             .entry(bundle_id.to_string())
-            .or_insert_with(|| self.inner.initial_state());
+            .or_insert_with(|| inner.initial_state());
         let ctx = hya_runtime_abi::ExtensionEventContext {
             session,
             seq: hya_proto::EventSeq(projection.last_seq),
@@ -1146,7 +960,7 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
             kind: kind.to_string(),
             payload: payload.clone(),
         };
-        if self.inner.apply(state, &ctx).is_err() {
+        if inner.apply(state, &ctx).is_err() {
             return;
         }
         // Mirror `hya/multi-agent` registration and archive events into
@@ -1221,29 +1035,20 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
                 }
             }
         }
-        // Mirror compaction tool-output eviction notices onto PartProjection::Tool.
-        if bundle_id == hya_tool::extension::BUNDLE_COMPACTION
-            && kind == "context_evicted"
-            && let Some(parts) = payload.get("parts").and_then(Value::as_array)
-        {
-            for entry in parts {
-                if let (Some(part_id), Some(notice)) = (
-                    entry
-                        .get("part")
-                        .and_then(|v| serde_json::from_value::<hya_proto::PartId>(v.clone()).ok()),
-                    entry.get("notice").and_then(Value::as_str),
-                ) && let Some(hya_proto::PartProjection::Tool {
-                    eviction_notice, ..
-                }) = projection
-                    .session
-                    .messages
-                    .iter_mut()
-                    .rev()
-                    .flat_map(|row| row.parts.iter_mut())
-                    .find(|part| part.id() == part_id)
-                {
-                    *eviction_notice = Some(notice.to_string());
-                }
+        // A reducer's tool-output overrides become the parts' eviction notices,
+        // which the kernel sends in place of the outputs.
+        for replaced in inner.tool_output_overrides(&ctx) {
+            if let Some(hya_proto::PartProjection::Tool {
+                eviction_notice, ..
+            }) = projection
+                .session
+                .messages
+                .iter_mut()
+                .rev()
+                .flat_map(|row| row.parts.iter_mut())
+                .find(|part| part.id() == replaced.part)
+            {
+                *eviction_notice = Some(replaced.output);
             }
         }
         // Bridge `hya/agent-channels` mail events with `hya/multi-agent` roster state
@@ -1309,34 +1114,48 @@ impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
     }
 }
 
-/// Default native hooks registered by first-party ABI v2 native tool bundles
-/// (`hya/plan`, etc.), cached process-wide for [`SessionEngine::try_new`].
-/// Callers with explicit [`hya_bundle::BuiltinBundleSelection`] override this
-/// via [`SessionEngine::with_native_hook_list`].
-fn default_native_hook_list() -> Vec<Arc<dyn hya_runtime_abi::NativeHook>> {
-    static HOOKS: std::sync::Mutex<Option<Vec<Arc<dyn hya_runtime_abi::NativeHook>>>> =
-        std::sync::Mutex::new(None);
-    let mut slot = HOOKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(cached) = slot.as_ref() {
-        return cached.clone();
+impl hya_proto::ProjectionReducer for AbiV2ProjectionReducerAdapter {
+    fn bundle_id(&self) -> &str {
+        &self.bundle
     }
-    let mut hooks = Vec::new();
-    for identity in hya_tool_loader::NATIVE_V2_TOOL_BUNDLES {
-        match hya_tool_loader::load_v2(identity, hya_tool_loader::noop_host_runtime()) {
-            Ok(regs) => hooks.extend(regs.hooks),
-            Err(error) => {
-                tracing::debug!(
-                    bundle = identity,
-                    %error,
-                    "default native v2 hooks unavailable"
-                );
+
+    fn version(&self) -> u32 {
+        // Observers change the fold, so they are part of the snapshot signature.
+        self.observers.iter().fold(1u32, |hash, observer| {
+            observer.bundle_id().bytes().fold(hash, |hash, byte| {
+                hash.wrapping_mul(31).wrapping_add(u32::from(byte))
+            })
+        })
+    }
+
+    fn fold_extension(
+        &self,
+        projection: &mut hya_proto::Projection,
+        session: SessionId,
+        kind: &str,
+        payload: &Value,
+    ) {
+        if let Some(inner) = &self.inner {
+            Self::fold_owned(inner.as_ref(), projection, session, kind, payload);
+        }
+        let ctx = hya_runtime_abi::ExtensionEventContext {
+            session,
+            seq: hya_proto::EventSeq(projection.last_seq),
+            ts_millis: 0,
+            bundle: self.bundle.clone(),
+            kind: kind.to_string(),
+            payload: payload.clone(),
+        };
+        for observer in &self.observers {
+            let state = projection
+                .extensions
+                .entry(observer.bundle_id().to_string())
+                .or_insert_with(|| observer.initial_state());
+            if let Err(error) = observer.apply(state, &ctx) {
+                tracing::warn!(observer = observer.bundle_id(), %error, "observed event fold failed");
             }
         }
     }
-    *slot = Some(hooks.clone());
-    hooks
 }
 
 /// Build summarize options from a fixed system definition and bound preference.

@@ -490,7 +490,7 @@ async fn revert_validation_busy_oversized_and_read_timeout() {
                     json!({"path": "a.txt", "content": "after"}),
                 )))),
             ),
-            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            support::builtin_test_runtime().runtime,
             perm.clone(),
             EventBus::default(),
         );
@@ -531,7 +531,7 @@ async fn revert_validation_busy_oversized_and_read_timeout() {
     let engine = SessionEngine::new(
         slow_store,
         Arc::new(ProviderRouter::new()),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         perm,
         EventBus::default(),
     );
@@ -664,7 +664,7 @@ async fn usage_fixture(
         .fold(ProviderRouter::new(), |r, p| r.with(Arc::new(p)));
     let mut engine = support::engine_with_router_and_runtime(
         Arc::new(router),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime(),
         PermissionRules::new(vec![Rule::new(Action::Read, "/**", Mode::Allow)]),
     )
     .await;

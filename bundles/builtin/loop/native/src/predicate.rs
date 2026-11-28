@@ -51,7 +51,7 @@ pub enum LoopPredicateOutcome {
 }
 
 /// Wire JSON representation of a deterministic loop predicate passed in
-/// [`hya_runtime_abi::LoopRunRequest::predicate`].
+/// [`crate::LoopRunRequest::predicate`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopPredicateSpec {
     /// Shell command text, executed as `sh -c <command>`.
@@ -99,7 +99,7 @@ impl LoopPredicate {
     }
 
     /// Parse a [`LoopPredicate`] from the JSON payload carried on
-    /// [`hya_runtime_abi::LoopRunRequest::predicate`].
+    /// [`crate::LoopRunRequest::predicate`].
     ///
     /// # Errors
     /// Returns [`HostError::InvalidInput`] if the JSON payload is malformed or

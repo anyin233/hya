@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-Bundles customize Hya's terminal UI and browser WebUI in TypeScript through **`@hya/tui-sdk` v2** (`api_version: 2`, `sdk: "2.0.0"`). Under the clean-sheet `hya.v2` modular architecture ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), domain UI surfaces—such as subagent panes and viewers, workflow dashboards, channel renderers, and workspace sidebar panels—live in bundles rather than being hardcoded into `packages/hya-tui`.
+Bundles customize Hya's terminal UI and browser WebUI in TypeScript through **`@hya/tui-sdk` v2** (`api_version: 2`). Extensions can declare the minimum compatible 2.x SDK version. Under the clean-sheet `hya.v2` modular architecture ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), domain UI surfaces—such as subagent panes and viewers, workflow dashboards, channel renderers, and workspace sidebar panels—live in bundles rather than being hardcoded into `packages/hya-tui`.
 
 `@hya/tui-sdk` v2 adds four core capabilities on top of the isolated execution model:
 
@@ -99,6 +99,33 @@ export default defineTuiExtension({
 
 Package and install the bundle (`hya bundle install ...`), or place the folder under `<project>/.hya/bundles/<name>/` and run **`/reload-bundles`**.
 
+### Tool call cards
+
+Use `api.registerToolRenderer` to present a tool your bundle supplies. The
+TUI shows its default argument and result previews while the extension host
+computes the card. The same renderer runs in the sandboxed VM and trusted JIT.
+
+Set `tui.sdk: "2.1.0"` and include `tui.render` in `tui.permissions`. Add
+`tui.transcript.read` to receive the arguments and result. For a bundle that
+ships an `inspect` tool:
+
+```ts
+api.registerToolRenderer({
+  id: "inspect-card",
+  tools: ["inspect"],
+  render(call) {
+    return {
+      summary: "Inspection",
+      statusChip: call.status === "completed" ? "Ready" : "Inspecting",
+      body: { kind: "text", text: typeof call.output === "string" ? call.output : "Waiting for results" },
+    }
+  },
+})
+```
+
+Click the card or use `/tools on` to expand the body. The tool name,
+execution state, elapsed time, and errors are drawn by the host.
+
 ### Managing extensions, trust tiers, and `--bare`
 
 - **`/extensions` / `/bundles`:** Inspect loaded extensions, warnings, permissions, and logs.
@@ -119,7 +146,7 @@ Package and install the bundle (`hya bundle install ...`), or place the folder u
 | Constant | Value | Meaning |
 | --- | --- | --- |
 | `TUI_EXTENSION_API_VERSION` | `2` | Wire protocol major version enforced by `tui/initialize` and catalog validation. |
-| `TUI_EXTENSION_SDK_VERSION` | `"2.0.0"` | Independent `@hya/tui-sdk` semantic version. |
+| `TUI_EXTENSION_SDK_VERSION` | `"2.1.0"` | Independent `@hya/tui-sdk` semantic version. |
 | `TUI_EXTENSION_SDK_MAJOR` | `2` | SDK contract major version validated by `sdkCompatible`. |
 | `MAX_FRAME_BYTES` | `2_097_152` | Maximum UTF-8 byte length of one LF-delimited JSON-RPC frame. |
 | `MAX_CONTRIBUTIONS` | `32` | Maximum contributions of each kind per extension activation. |
@@ -133,7 +160,7 @@ An extension only receives context sections, contributions, render nodes, and ho
 | --- | --- |
 | `tui.panel` | Register `panels` and dynamic `panes`; emit `pane.open`, `pane.pin`, `pane.close`, `pane.focus`. |
 | `tui.status_item` | Register `status_items` shown in the Context box and bottom status line. |
-| `tui.render` | Register `renderers` (`tool_call`, `composer`) and output `formatters`. |
+| `tui.render` | Register named tool cards, `renderers` (`tool_call`, `composer`), and output `formatters`. |
 | `tui.action` | Emit clickable `NodeAction`s, register `interceptors`, and register slash `commands`. |
 | `tui.keys` | Receive `tui/key` events on registered panels and dynamic panes (`onKey`). |
 | `tui.session.read` | Read `context.session` (active session ID, title, agent, model, mode, workdir, busy). |
@@ -159,6 +186,7 @@ export interface TuiExtensionApi {
   readonly registerPane: (pane: PaneOptions) => void
   readonly registerCommand: (command: SlashCommandOptions) => void
   readonly registerStatusItem: (item: StatusItemOptions) => void
+  readonly registerToolRenderer: (renderer: ToolRendererOptions) => void
   readonly registerRenderer: (renderer: RendererOptions) => void
   readonly registerFormatter: (formatter: FormatterOptions) => void
   readonly registerInterceptor: (interceptor: InterceptorOptions) => void
@@ -173,6 +201,64 @@ export interface TuiExtensionApi {
 - **`api.registerCommand(command: SlashCommandOptions)`:** Registers a slash command `{ name, description, argumentHint?, execute, onResult? }`. `name` must match `/^[a-z0-9][a-z0-9._:-]{0,63}$/` and must not start with `skill:`.
 - **`api.bundleApi`:** Provides `request({ method, path, body?, query?, sessionId?, bundleId? })` and shorthand methods `get`, `post`, `put`, `patch`, `delete`. `method` is `"GET" | "POST" | "PUT" | "PATCH" | "DELETE"`.
 - **`api.extensionState`:** Provides `get<T>(bundleId?): T | undefined` (synchronous read from the latest pushed `context.extension_state`) and `read<T>({ sessionId?, bundleId? }?): Promise<T | undefined>` (asynchronous host query, optionally targeting a specific session).
+
+### `ToolRendererOptions`
+
+```ts
+interface ToolRendererOptions {
+  readonly id: string
+  readonly tools: readonly string[]
+  readonly priority?: number
+  readonly render: (
+    input: ToolCallInput,
+    context: RenderContext,
+  ) => MaybePromise<ToolCardPresentation | null | undefined>
+  readonly onAction?: ActionHandler
+}
+
+interface ToolCallInput {
+  readonly id: string
+  readonly tool: string
+  readonly status: "pending" | "running" | "completed" | "error"
+  readonly summary: string
+  readonly input?: JsonValue
+  readonly output?: JsonValue
+  readonly error?: string
+}
+
+interface ToolCardPresentation {
+  readonly summary: string
+  readonly body?: RenderNode
+  readonly statusChip?: string
+  readonly expandedByDefault?: boolean
+}
+```
+
+`tools` accepts 1–32 exact names of up to 128 characters each. The host
+validates the registration ID and integer priority using the same rules as
+other renderers. The highest priority replacement with a valid result wins.
+Equal priorities are ordered by bundle ID, then registration order within
+the bundle, with the last result winning. The default priority is 0.
+
+The host decodes JSON arguments and results, passing incomplete or non-JSON
+values as strings. Without `tui.transcript.read`, the summary is empty and
+the arguments, result, and error are omitted. `RenderContext` supplies
+`{ context, width, height, now }` using the same permission-scoped context
+as other renderers. `MaybePromise<T>` accepts `T` or `Promise<T>`.
+Return `null` or `undefined` to leave the default card in place. Summary
+and chip text appear on one line, capped at 512 and 64 characters respectively.
+The body accepts normal render nodes and supports clicks through `onAction`
+with `tui.action`. The handler receives `(action, context, meta?)`,
+where `action` is `{ name: string; data: JsonValue; button: "left" | "right" }`
+and `meta`, when present, is `{ instance?: string }`. It returns a notice
+string, `void`, or `{ notice?: string; commands?: readonly HostCommand[];
+invalidate?: boolean }`, synchronously or as a promise. Expansion defaults to collapsed unless the renderer sets
+`expandedByDefault` or the user has set an expansion preference.
+
+On the wire, named cards are `tool_call` replacement renderers with a
+`tools` list. `tui/render` returns `{ root, card? }`; `root` is the body
+or `null` and `card` contains the remaining `ToolCardPresentation` fields.
+Existing SDK 2.0 extensions and `registerRenderer` continue to work.
 
 ### `Contributions` wire schema (`tui/activate` result)
 
@@ -204,7 +290,7 @@ export interface Contributions {
     readonly argument_hint?: string
   }[]
   readonly status_items: readonly { readonly id: string; readonly label: string; readonly priority: number }[]
-  readonly renderers: readonly { readonly id: string; readonly target: "tool_call" | "composer"; readonly mode: "replace" | "decorate"; readonly priority: number }[]
+  readonly renderers: readonly { readonly id: string; readonly target: "tool_call" | "composer"; readonly mode: "replace" | "decorate"; readonly priority: number; readonly tools?: readonly string[] }[]
   readonly formatters: readonly { readonly id: string; readonly priority: number }[]
   readonly interceptors: readonly { readonly id: string; readonly target: "submit"; readonly priority: number }[]
 }
@@ -243,7 +329,7 @@ export type HostCommand =
   | { readonly command: "pane.pin"; readonly pane: string; readonly instance?: string; readonly pinned?: boolean; readonly token?: string }
   | { readonly command: "pane.close"; readonly pane: string; readonly instance?: string; readonly token?: string }
   | { readonly command: "pane.focus"; readonly pane: string; readonly instance?: string; readonly token?: string }
-  | { readonly command: "session.open"; readonly id: string; readonly token?: string }
+  | { readonly command: "session.open"; readonly id: string; readonly exact?: boolean; readonly token?: string }
   | { readonly command: "session.menu"; readonly id: string }
   | { readonly command: "session.new_temporary"; readonly token?: string }
   | { readonly command: "project.switch"; readonly id: string; readonly token?: string }
@@ -258,17 +344,19 @@ export type HostCommand =
   | { readonly command: "ui.open" }
 ```
 
+`session.open` normally opens the root of the requested session. Set `exact: true` to open the requested session directly, including read-only child sessions.
+
 Commands carrying a `token` deliver their outcome back to the originating surface or slash command via `tui/command_result` (`{ token, ok, value?, error? }`).
 
 ## 4. First-Party Built-in TUI Extensions (`bundles/builtin/`)
 
-Under the v2 modular architecture ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), five first-party bundles ship `@hya/tui-sdk` v2 extensions (`api_version: 2`, `sdk: "2.0.0"`). Hybrid `native` + `tui` bundles package both their compiled ABI v2 dynamic library and their `tui/*.ts` assets inside one `.hyabundle` archive; `GET /v2/tui-extensions` serves only the non-binary TUI assets.
+Under the v2 modular architecture ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)), five first-party bundles ship `@hya/tui-sdk` v2 extensions (`api_version: 2`). Hybrid `native` + `tui` bundles package both their compiled ABI v2 dynamic library and their `tui/*.ts` assets inside one `.hyabundle` archive; `GET /v2/tui-extensions` serves only the non-binary TUI assets.
 
 | Bundle | Runtime | Contributed Surfaces & Commands | Required Permissions |
 | --- | --- | --- | --- |
 | `hya/basic-tui-components` | `tui` | Panels replacing `projects`, `sessions`, `todos`, `context`, `context_line`, `project_view`, and `jobs` (`hya/basic-tui-components#jobs`) | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.sessions.read`, `tui.projects.read`, `tui.todos.read`, `tui.status.read`, `tui.session.control`, `tui.project.control` |
-| `hya/multi-agent` | `native` + `tui` | Dynamic panes `hya/multi-agent#subagents` (`SubagentsPane`) and `hya/multi-agent#subagent-viewer` (`SubagentViewer`, embedding `{ type: "transcript", sessionId }`), plus `/subagents` slash command calling `GET /members`, `POST /archive`, `POST /steer` | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.sessions.read`, `tui.bundle_api`, `tui.extension_state.read`, `tui.transcript.embed` |
-| `hya/workflow` | `native` + `tui` | Dynamic pane `hya/workflow#workflows` (`WorkflowsPane`) plus `/workflow` and `/workflows` slash commands calling `GET /workflows`, `GET /state`, `POST /command` | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.workspace.read`, `tui.bundle_api`, `tui.extension_state.read` |
+| `hya/multi-agent` | `native` + `tui` | Dynamic panes `hya/multi-agent#subagents` (`SubagentsPane`) and `hya/multi-agent#subagent-viewer` (`SubagentViewer`, embedding `{ type: "transcript", sessionId }`), named cards for `task`, `list_agents`, `search_agent`, `archive`, and `wait`, plus `/subagents` calling `GET /members`, `POST /archive`, `POST /steer` | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.sessions.read`, `tui.bundle_api`, `tui.extension_state.read`, `tui.transcript.embed`, `tui.render`, `tui.transcript.read`, `tui.session.control` |
+| `hya/workflow` | `native` + `tui` | Dynamic pane `hya/workflow#workflows` (`WorkflowsPane`) a `workflow` tool card, plus `/workflow` and `/workflows` slash commands calling `GET /workflows`, `GET /state`, `POST /command` | `tui.panel`, `tui.action`, `tui.keys`, `tui.session.read`, `tui.workspace.read`, `tui.bundle_api`, `tui.extension_state.read`, `tui.render`, `tui.transcript.read` |
 | `hya/plan` | `native` + `tui` | `plan_exit` tool-call card renderer (`plan-exit-card`) and `Plan` status badge (`PLAN (read-only)` while active session runs `hya-plan`) | `tui.render`, `tui.status_item`, `tui.session.read`, `tui.transcript.read` |
 | `hya/agent-channels` | `native` + `tui` | `send` / `list_channel` / `report` tool-call renderers (`channel-tools`) and `Mail` unread status item (`unread-mail`, reading `extension_state["hya/agent-channels"]` with `GET /inbox` fallback) | `tui.render`, `tui.status_item`, `tui.session.read`, `tui.transcript.read`, `tui.bundle_api`, `tui.extension_state.read` |
 

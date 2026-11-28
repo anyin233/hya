@@ -19,15 +19,16 @@ use hya_bundle::{FirstPartySource, first_party_bundle, first_party_source, load_
 use hya_context::rewrite::Rewriter;
 use hya_proto::{Envelope, ModelRef, SessionId};
 use hya_runtime_abi::{
-    AbiDigestFn, AbiError, DriverRunOutcome, GoalDriver, GoalRunRequest, HookPoint, HostError,
-    HostRuntime, LoopDriver, LoopRunRequest, NativeAgentSpawnInput, NativeApiEndpoint,
-    NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeChatParamsInput,
-    NativeCommandBeforeInput, NativeCompactionAfterInput, NativeCompactionBeforeInput,
-    NativeCompactionDecision, NativeGoalEvaluateVerdict, NativeHook, NativeLoopPlanInput,
-    NativeMessageUserBeforeInput, NativeModelFallbackInput, NativePermissionApproveInput,
-    NativePlannerOutput, NativePluginContext, NativeRegistrations, NativeService,
-    NativeSessionLifecycleInput, NativeTextCompleteInput, NativeToolAfterInput,
-    NativeToolAfterOutcome, NativeToolBeforeInput, NativeToolBeforeOutcome, NativeVerifierVerdict,
+    AbiDigestFn, AbiError, DriverReport, DriverRequest, HookPoint, HostError, HostRuntime,
+    NativeAgentSpawnInput, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
+    NativeBundleApiRequest, NativeChatParamsInput, NativeCommandBeforeInput,
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
+    NativeDriver, NativeHeadlessRunInput, NativeHook, NativeMessageUserBeforeInput,
+    NativeModelFallbackInput, NativePermissionApproveInput, NativePluginContext,
+    NativeRegistrations, NativeService, NativeSessionCloseInput, NativeSessionLifecycleInput,
+    NativeSessionRestoreInput, NativeStreamPermit, NativeStreamPermitInput,
+    NativeTextCompleteInput, NativeToolAfterInput, NativeToolAfterOutcome, NativeToolBeforeInput,
+    NativeToolBeforeOutcome, NativeTurnAdmitInput, NativeTurnAdmitOutcome, NativeTurnStopInput,
     RegisterV2Fn, SYMBOL_ABI_V2, SYMBOL_REGISTER_V2, SYMBOL_SHARE_DEADLINE_V2,
     SYMBOL_WITH_RUNTIME_V2, ServiceHealth, ShareDeadlineFn, ToolVisibilityInput,
     ToolVisibilityOutcome, UriContent, UriResolveCtx, UriSchemaHandler, abi_digest_v2,
@@ -223,6 +224,13 @@ impl NativeHook for NativeHookAdapter {
         poll_host_result(self.inner.message_user_before(input), self.with_runtime).await
     }
 
+    async fn turn_admit(
+        &self,
+        input: NativeTurnAdmitInput,
+    ) -> Result<NativeTurnAdmitOutcome, HostError> {
+        poll_host_result(self.inner.turn_admit(input), self.with_runtime).await
+    }
+
     async fn text_complete(&self, input: NativeTextCompleteInput) -> Result<String, HostError> {
         poll_host_result(self.inner.text_complete(input), self.with_runtime).await
     }
@@ -258,51 +266,57 @@ impl NativeHook for NativeHookAdapter {
         poll_host_result(self.inner.permission_approve(input), self.with_runtime).await
     }
 
-    async fn goal_evaluate(
-        &self,
-        condition: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
-        poll_host_result(
-            self.inner.goal_evaluate(condition, transcript),
-            self.with_runtime,
-        )
-        .await
+    fn declared_points(&self) -> &[String] {
+        self.inner.declared_points()
     }
 
-    async fn loop_verify(
-        &self,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        poll_host_result(
-            self.inner.loop_verify(target, transcript),
-            self.with_runtime,
-        )
-        .await
+    async fn invoke_declared(&self, point: &str, input: Value) -> Result<Option<Value>, HostError> {
+        poll_host_result(self.inner.invoke_declared(point, input), self.with_runtime).await
     }
 
-    async fn loop_plan(
-        &self,
-        input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        poll_host_result(self.inner.loop_plan(input), self.with_runtime).await
+    fn is_healthy(&self) -> bool {
+        self.inner.is_healthy()
     }
 
-    async fn loop_should_stop(
+    fn permission_identity(&self) -> Option<[u8; 32]> {
+        self.inner.permission_identity()
+    }
+
+    fn on_event(&self, envelope: &Envelope) {
+        self.inner.on_event(envelope);
+    }
+
+    async fn model_stream_permit(
         &self,
-        target: &str,
-        transcript: &str,
+        input: NativeStreamPermitInput,
+    ) -> Result<Option<NativeStreamPermit>, HostError> {
+        poll_host_result(self.inner.model_stream_permit(input), self.with_runtime).await
+    }
+
+    async fn turn_stop(&self, input: NativeTurnStopInput) -> Result<(), HostError> {
+        poll_host_result(self.inner.turn_stop(input), self.with_runtime).await
+    }
+
+    async fn session_close(&self, input: NativeSessionCloseInput) -> Result<(), HostError> {
+        poll_host_result(self.inner.session_close(input), self.with_runtime).await
+    }
+
+    async fn headless_run(
+        &self,
+        input: NativeHeadlessRunInput,
     ) -> Result<Option<String>, HostError> {
-        poll_host_result(
-            self.inner.loop_should_stop(target, transcript),
-            self.with_runtime,
-        )
-        .await
+        poll_host_result(self.inner.headless_run(input), self.with_runtime).await
     }
 
-    async fn on_event(&self, envelope: &Envelope) -> Result<(), HostError> {
-        poll_host_result(self.inner.on_event(envelope), self.with_runtime).await
+    async fn session_restore(
+        &self,
+        input: NativeSessionRestoreInput,
+    ) -> Result<Option<String>, HostError> {
+        poll_host_result(self.inner.session_restore(input), self.with_runtime).await
+    }
+
+    async fn runtime_restored(&self) -> Result<(), HostError> {
+        poll_host_result(self.inner.runtime_restored(), self.with_runtime).await
     }
 }
 
@@ -358,53 +372,24 @@ impl UriSchemaHandler for UriSchemaHandlerAdapter {
     }
 }
 
-struct GoalDriverAdapter {
-    inner: Arc<dyn GoalDriver>,
+struct NativeDriverAdapter {
+    inner: Arc<dyn NativeDriver>,
     with_runtime: RuntimeEntry,
 }
 
 #[async_trait]
-impl GoalDriver for GoalDriverAdapter {
-    fn id(&self) -> &str {
-        self.inner.id()
+impl NativeDriver for NativeDriverAdapter {
+    fn name(&self) -> &str {
+        self.inner.name()
     }
 
-    async fn run_goal(
+    async fn run(
         &self,
         runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        poll_host_result(
-            self.inner.run_goal(runtime, request, cancel),
-            self.with_runtime,
-        )
-        .await
-    }
-}
-
-struct LoopDriverAdapter {
-    inner: Arc<dyn LoopDriver>,
-    with_runtime: RuntimeEntry,
-}
-
-#[async_trait]
-impl LoopDriver for LoopDriverAdapter {
-    fn id(&self) -> &str {
-        self.inner.id()
-    }
-
-    async fn run_loop(
-        &self,
-        runtime: Arc<dyn HostRuntime>,
-        request: LoopRunRequest,
-        cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        poll_host_result(
-            self.inner.run_loop(runtime, request, cancel),
-            self.with_runtime,
-        )
-        .await
+    ) -> Result<DriverReport, HostError> {
+        poll_host_result(self.inner.run(runtime, request, cancel), self.with_runtime).await
     }
 }
 
@@ -413,6 +398,7 @@ fn wrap_registrations_with_runtime(
     with_runtime: RuntimeEntry,
 ) -> NativeRegistrations {
     NativeRegistrations {
+        hook_points: regs.hook_points,
         tools: regs
             .tools
             .into_iter()
@@ -474,24 +460,14 @@ fn wrap_registrations_with_runtime(
                 }) as Arc<dyn UriSchemaHandler>
             })
             .collect(),
-        goal_drivers: regs
-            .goal_drivers
+        drivers: regs
+            .drivers
             .into_iter()
             .map(|inner| {
-                Arc::new(GoalDriverAdapter {
+                Arc::new(NativeDriverAdapter {
                     inner,
                     with_runtime,
-                }) as Arc<dyn GoalDriver>
-            })
-            .collect(),
-        loop_drivers: regs
-            .loop_drivers
-            .into_iter()
-            .map(|inner| {
-                Arc::new(LoopDriverAdapter {
-                    inner,
-                    with_runtime,
-                }) as Arc<dyn LoopDriver>
+                }) as Arc<dyn NativeDriver>
             })
             .collect(),
     }

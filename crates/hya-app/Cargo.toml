@@ -12,11 +12,6 @@ workspace = true
 
 [dependencies]
 hya-multi-agent = { workspace = true }
-hya-agent-channels = { workspace = true }
-hya-network = { workspace = true }
-hya-plan = { workspace = true }
-hya-goal = { workspace = true }
-hya-loop = { workspace = true }
 hya-bundle = { workspace = true }
 hya-runtime-abi = { workspace = true }
 hya-version = { workspace = true }
@@ -25,11 +20,6 @@ hya-engine = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
 hya-tool-loader = { workspace = true }
-hya-hashline = { workspace = true }
-hya-coding-extras-core = { workspace = true }
-hya-coding-extras = { workspace = true }
-hya-workflow-bundle-core = { workspace = true }
-hya-workflow-bundle = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
@@ -57,6 +47,7 @@ futures = { workspace = true }
 semver = "1"
 
 [dev-dependencies]
+uuid = { workspace = true }
 hya-api = { workspace = true }
 hya-provider = { workspace = true, features = ["test-support"] }
 libsqlite3-sys = "=0.30.1"

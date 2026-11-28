@@ -109,6 +109,9 @@ pub struct ResourceView {
     pub namespace: Option<String>,
 }
 
+/// `can_spawn` entry that, alone, grants every non-private agent of the catalog.
+pub const SPAWN_ANY_AGENT: &str = "*";
+
 /// One prepared Agent: id, prompt material, spawn graph, and resource view.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -133,7 +136,8 @@ pub struct PreparedAgent {
     pub workdir: Option<String>,
     /// Per-agent allow/deny/alias resource view.
     pub resource_view: ResourceView,
-    /// Stable agent ids this agent is allowed to spawn.
+    /// Stable agent ids this agent is allowed to spawn, or only
+    /// [`SPAWN_ANY_AGENT`] for every non-private agent of the catalog.
     pub can_spawn: Vec<AgentName>,
     /// Excluded from ordinary selection and spawn; workflows and explicit grants may use it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -418,6 +422,12 @@ pub struct Bundle {
     /// Target bundle identity overridden by this bundle (e.g. `hya/bare`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overrides: Option<String>,
+    /// Bundles that must be enabled with this one, sorted and unique.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// This bundle's Agent that becomes the default primary agent while it is enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<AgentName>,
     /// Digest of this bundle's canonical content for integrity checks.
     pub digest: String,
     /// All Agents this bundle defines.
@@ -454,6 +464,9 @@ pub struct Bundle {
     pub apis: Vec<PreparedApi>,
     /// Permission modes owned by this bundle.
     pub permission_modes: Vec<PreparedPermissionMode>,
+    /// `hya` CLI commands this bundle contributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cli: Vec<crate::cli::CliCommand>,
 }
 
 /// One compiled Workflow source retained in a prepared Bundle.
@@ -565,9 +578,24 @@ impl Bundle {
     pub fn runtime(&self) -> Option<&PreparedRuntime> {
         self.runtime.as_ref()
     }
+    /// `hya` CLI commands this bundle contributes.
+    #[must_use]
+    pub fn cli(&self) -> &[crate::cli::CliCommand] {
+        &self.cli
+    }
     /// Target bundle identity overridden by this bundle, if declared.
     pub fn overrides(&self) -> Option<&str> {
         self.overrides.as_deref()
+    }
+    /// Bundles that must be enabled with this one.
+    #[must_use]
+    pub fn requires(&self) -> &[String] {
+        &self.requires
+    }
+    /// This bundle's default primary Agent, if declared.
+    #[must_use]
+    pub fn default_agent(&self) -> Option<&AgentName> {
+        self.default_agent.as_ref()
     }
 }
 

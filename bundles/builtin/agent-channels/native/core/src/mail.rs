@@ -1,4 +1,4 @@
-//! Mail address, channel id, preview, and channel history types for
+//! Mail address, channel id, preview, channel row, and channel history types for
 //! `hya/agent-channels` (ADR-0001, ADR-0016, ADR-0039).
 
 use hya_proto::Projection;
@@ -27,6 +27,36 @@ pub struct ChannelHistoryRead {
     /// Set when the caller's id spelling was normalized or resolved via a
     /// member-handle DM alias.
     pub warning: Option<String>,
+}
+
+/// One row of `list_channel`: what the acting agent can see. Group channels
+/// never expose a member list (ADR-0016); DM channels always name their peer.
+#[derive(Clone, Debug)]
+pub struct ChannelRow {
+    /// Channel id (`announce-{8}` / `DM-{8}`).
+    pub id: String,
+    /// Group broadcast pipe or DM pair.
+    pub kind: ChannelKind,
+    /// Whether the acting agent may post (group: unit leader only; dm: yes).
+    pub can_speak: bool,
+    /// DM peer identity; `None` for group channels.
+    pub peer: Option<String>,
+    /// Unread message count for the acting agent.
+    pub unread: usize,
+}
+
+/// One team row of `list_channel`: a direct child's live status and harness
+/// heartbeat freshness, so the parent can tell a busy child that is really
+/// progressing (fresh heartbeat) from one that has stalled.
+#[derive(Clone, Debug)]
+pub struct MemberStatusRow {
+    /// Canonical handle of the direct child.
+    pub handle: String,
+    /// Live roster status: `idle` / `busy` / `done` / `failed`.
+    pub status: String,
+    /// Seconds since the child's last harness-observed activity; `None` when
+    /// no heartbeat was ever observed.
+    pub last_active_seconds: Option<u64>,
 }
 
 /// One steered unread message: sender, body, and the channel it arrived through.

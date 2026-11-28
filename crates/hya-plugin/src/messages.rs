@@ -93,15 +93,6 @@ plugin_hooks! {
     /// Approver of a bundle-declared session permission mode; called only on
     /// the declaring bundle, after every `permission.ask` hook deferred.
     PermissionApprove: "permission.approve" => PermissionApproveParams => PermissionOutcomeWire,
-    /// Goal-mode evaluator hook.
-    GoalEvaluate: "goal.evaluate" => GoalEvaluateParams => GoalVerdictWire,
-    /// Loop-mode verifier hook.
-    LoopVerifier: "loop.verifier" => LoopVerifyParams => VerifierVerdictWire,
-    /// Loop-mode planner hook.
-    LoopPlanner: "loop.planner" => LoopPlanParams => PlannerOutputWire,
-    /// Post-turn loop stop consult: `{"stop": true, "reason": …}` forces the
-    /// loop to stop with that reason before the verifier judges.
-    LoopShouldStop: "loop.should_stop" => LoopShouldStopParams => LoopShouldStopWire,
     /// Consulted before the engine compacts context; may skip or replace the
     /// summarizer instructions.
     CompactionBefore: "compaction.before" => CompactionBeforeParams => CompactionBeforeOutcomeWire,
@@ -281,7 +272,7 @@ impl PluginContributionSet {
 
         let mut hook_names = BTreeSet::new();
         for hook in &self.hooks {
-            if !hook_names.insert(hook.name) {
+            if !hook_names.insert(hook.name.clone()) {
                 return Err(PluginError::DuplicateContribution {
                     plugin: plugin.to_string(),
                     kind: "hook".to_string(),
@@ -493,7 +484,67 @@ pub enum PluginKindWire {
 #[serde(deny_unknown_fields)]
 pub struct HookRegistration {
     /// Hook identity.
-    pub name: HookName,
+    pub name: HookId,
+}
+
+/// A hook a plugin registers: a core [`HookName`], or a bundle-declared hook
+/// point `<bundle-id>:<point>` whose payloads the declaring bundle defines.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HookId {
+    /// A core hook.
+    Core(HookName),
+    /// A bundle-declared hook point.
+    Declared(String),
+}
+
+impl HookId {
+    /// Wire name without the `hook/` prefix.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Core(name) => name.as_str(),
+            Self::Declared(name) => name,
+        }
+    }
+
+    /// Full JSON-RPC hook method.
+    #[must_use]
+    pub fn method(&self) -> String {
+        format!("{HOOK_METHOD_PREFIX}{}", self.as_str())
+    }
+
+    /// Parse a wire hook name: a core name, or `<bundle-id>:<point>`.
+    #[must_use]
+    pub fn from_wire(name: &str) -> Option<Self> {
+        HookName::from_wire(name).map(Self::Core).or_else(|| {
+            name.split_once(':')
+                .is_some_and(|(bundle, point)| !bundle.is_empty() && !point.is_empty())
+                .then(|| Self::Declared(name.to_string()))
+        })
+    }
+}
+
+impl From<HookName> for HookId {
+    fn from(name: HookName) -> Self {
+        Self::Core(name)
+    }
+}
+
+impl Serialize for HookId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for HookId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Self::from_wire(&name).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown hook `{name}`: expected a core hook or `<bundle-id>:<point>`"
+            ))
+        })
+    }
 }
 
 /// Tool declaration in the initialize reply (`inputSchema` is camelCase on the wire).
@@ -1051,120 +1102,4 @@ pub enum ModelFallbackOutcomeWire {
     },
     /// No opinion: the next plugin decides, or the failure surfaces.
     GiveUp,
-}
-
-/// Wire params for `goal.evaluate`.
-#[derive(Serialize)]
-pub struct GoalEvaluateParams<'a> {
-    /// Goal condition being evaluated.
-    pub condition: &'a str,
-    /// Transcript supplied to the evaluator.
-    pub transcript: &'a str,
-}
-
-/// Wire verdict for `goal.evaluate`: tolerant `{"met": bool, "reason": str}` —
-/// `reason` may be omitted, anything else is a malformed reply.
-#[derive(Deserialize)]
-pub struct GoalVerdictWire {
-    /// Whether the condition was met.
-    pub met: bool,
-    #[serde(default)]
-    /// Reason for the goal verdict.
-    pub reason: String,
-}
-
-/// Wire params for `loop.verifier`.
-#[derive(Serialize)]
-pub struct LoopVerifyParams<'a> {
-    /// Goal of the loop.
-    pub target: &'a str,
-    /// Transcript supplied to the evaluator.
-    pub transcript: &'a str,
-}
-
-/// Wire params for `loop.planner`.
-#[derive(Serialize)]
-pub struct LoopPlanParams<'a> {
-    /// Goal of the loop.
-    pub target: &'a str,
-    /// Summaries of previous iterations.
-    pub history: &'a [String],
-    /// Latest verifier verdict.
-    pub last: VerifierVerdictWire,
-    /// Notes carried forward by the planner.
-    pub planner_notes: &'a str,
-}
-
-/// Wire params for `loop.should_stop`.
-#[derive(Serialize)]
-pub struct LoopShouldStopParams<'a> {
-    /// Goal of the loop.
-    pub target: &'a str,
-    /// Transcript supplied to the evaluator.
-    pub transcript: &'a str,
-}
-
-/// Wire reply for `loop.should_stop`: `{"stop": bool, "reason": str}` —
-/// `reason` may be omitted (it reads as "no reason given"), anything else is
-/// a malformed reply and fails open to "keep going".
-#[derive(Deserialize)]
-pub struct LoopShouldStopWire {
-    /// Whether to stop the loop.
-    pub stop: bool,
-    #[serde(default)]
-    /// Reason supplied for stopping.
-    pub reason: String,
-}
-
-/// Wire mirror of engine evidence quality (`missing`/`claim_only`/`supported`/`verified`).
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvidenceQualityWire {
-    /// No evidence was supplied.
-    Missing,
-    /// Evidence consists of an unsupported claim.
-    ClaimOnly,
-    /// Evidence supports the claim.
-    Supported,
-    /// Evidence directly verifies the claim.
-    Verified,
-}
-
-/// Wire mirror of the engine verifier verdict. Free-text fields may be omitted.
-#[derive(Serialize, Deserialize)]
-pub struct VerifierVerdictWire {
-    /// Verifier score.
-    pub score: u8,
-    /// Whether the verifier considers the target satisfied.
-    pub satisfied: bool,
-    /// Strength of the supplied evidence.
-    pub evidence_quality: EvidenceQualityWire,
-    #[serde(default)]
-    /// Gaps that still need to be addressed.
-    pub critical_gaps: Vec<String>,
-    #[serde(default)]
-    /// Summary of the iteration being evaluated.
-    pub iteration_summary: String,
-    #[serde(default)]
-    /// Reason for the verifier verdict.
-    pub reason: String,
-}
-
-/// Wire mirror of the engine planner output. Only `directive` is required.
-#[derive(Serialize, Deserialize)]
-pub struct PlannerOutputWire {
-    /// Instruction for the next iteration.
-    pub directive: String,
-    #[serde(default)]
-    /// Context for continuing the loop.
-    pub continuity_brief: String,
-    #[serde(default)]
-    /// Notes carried forward by the planner.
-    pub planner_notes: String,
-    #[serde(default)]
-    /// Whether the plan changes strategy.
-    pub strategy_change: bool,
-    #[serde(default)]
-    /// Explanation of a strategy change.
-    pub change_note: String,
 }

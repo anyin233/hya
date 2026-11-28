@@ -11,7 +11,7 @@ use hya_bundle::{
 };
 use hya_proto::{
     ActorClaim, AgentName, Envelope, Event, EventSeq, MemberId, ModelRef, OwnerRunId, Projection,
-    SessionId, SessionKind, WorkflowIdentity, WorkflowRevision, WorkflowRunId, WorkflowSourceId,
+    SessionId, SessionKind,
 };
 use hya_runtime_abi::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
@@ -25,12 +25,7 @@ use hya_runtime_abi::{
     ScopeCatalogSnapshot, SessionListFilter, SessionSummaryMeta, TurnOutcome,
     TurnRouteFailureClass, TurnRouteOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
 };
-use hya_tool::extension::{BUNDLE_WORKFLOW, ExtensionEvent};
-use hya_tool::{
-    AgentDef, SkillCatalogEntry, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,
-    WorkflowMemberRole, WorkflowProjection, WorkflowRouteFailureClass, WorkflowRunStatus,
-    WorkflowStageStatus,
-};
+use hya_tool::{AgentDef, SkillCatalogEntry};
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -40,12 +35,24 @@ use crate::catalog::{
     bundle_workflow_revision, discover_workflow_files_in_root, load_workflow_file,
     workflow_dirs_for_workdir, workflow_project_dir,
 };
+use crate::compile::{WorkflowSource, compile};
 use crate::error::{
     WorkflowControlError, WorkflowError, map_workflow_error_with_detail,
     map_workflow_preflight_error,
 };
-use crate::reducer::{WorkflowProjectionReducer, decode_workflow_projection, workflow_event_run};
-use crate::service::{WorkflowInvocation, WorkflowService, workflow_request_hash};
+use crate::events::WorkflowEvent;
+use crate::model::{
+    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowIdentity, WorkflowMemberRole,
+    WorkflowProjection, WorkflowRevision, WorkflowRouteFailureClass, WorkflowRunId,
+    WorkflowRunStatus, WorkflowSourceId, WorkflowStageStatus,
+};
+use crate::reducer::{
+    WorkflowProjectionReducer, decode_workflow_projection, extension_event_parts,
+    workflow_event_run,
+};
+use crate::service::{
+    WORKFLOW_BUNDLE_ID, WorkflowInvocation, WorkflowService, workflow_request_hash,
+};
 
 fn test_root(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -67,6 +74,8 @@ struct MockState {
     route_outcomes: Vec<TurnRouteOutcome>,
     activation_replies: Mutex<Vec<String>>,
     deny_agent: Option<String>,
+    project_roots: Vec<PathBuf>,
+    diagnostics: Vec<String>,
 }
 
 struct MockHostRuntime {
@@ -217,7 +226,7 @@ impl HostSessionStore for MockHostRuntime {
                 kind,
                 payload,
             } = &env.event
-                && bundle == BUNDLE_WORKFLOW
+                && bundle == WORKFLOW_BUNDLE_ID
             {
                 reducer.apply(
                     &mut ext_state,
@@ -234,7 +243,7 @@ impl HostSessionStore for MockHostRuntime {
         }
         if !ext_state.is_null() {
             proj.extensions
-                .insert(BUNDLE_WORKFLOW.to_string(), ext_state);
+                .insert(WORKFLOW_BUNDLE_ID.to_string(), ext_state);
         }
         Ok(Arc::new(proj))
     }
@@ -519,12 +528,13 @@ impl HostCatalogReader for MockHostRuntime {
             workdir: directory
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| st.workdir.clone()),
-            project_roots: Vec::new(),
+            project_roots: st.project_roots.clone(),
             bundles: st.bundles.clone(),
             runtime_fingerprint: "test-fingerprint-v1".to_string(),
+            diagnostics: st.diagnostics.clone(),
         })
     }
-    async fn authorize_workflow_agent(
+    async fn authorize_agent_run(
         &self,
         _session: SessionId,
         _caller: &AgentName,
@@ -625,7 +635,7 @@ fn process_command_changes_packaged_workflow_revision() {
     };
     let before = prepare("provider-before");
     let after = prepare("provider-after");
-    let compiled = hya_workflow::compile(hya_workflow::WorkflowSource::new(
+    let compiled = compile(WorkflowSource::new(
         "workflows/demo.hya.md",
         workflow_source,
     ))
@@ -653,20 +663,27 @@ fn preflight_and_capacity_error_mapping() {
     assert_eq!(cap_run.code(), "WORKFLOW_OVERLOADED");
 
     let run = WorkflowRunId::new();
-    let event = ExtensionEvent::WorkflowStageRouteOutcome {
-        session: SessionId::new(),
-        run,
-        stage: "execute".into(),
-        member: MemberId::new(),
-        role: WorkflowMemberRole::Worker,
-        iteration: 0,
-        step: 0,
-        candidate_index: 0,
-        model: ModelRef::new("fake/model"),
-        reasoning: "off".into(),
-        failure_class: WorkflowRouteFailureClass::None,
-    }
-    .into_event();
+    let (session, bundle, kind, payload) =
+        extension_event_parts(WorkflowEvent::WorkflowStageRouteOutcome {
+            session: SessionId::new(),
+            run,
+            stage: "execute".into(),
+            member: MemberId::new(),
+            role: WorkflowMemberRole::Worker,
+            iteration: 0,
+            step: 0,
+            candidate_index: 0,
+            model: ModelRef::new("fake/model"),
+            reasoning: "off".into(),
+            failure_class: WorkflowRouteFailureClass::None,
+        })
+        .unwrap();
+    let event = Event::Extension {
+        session,
+        bundle,
+        kind,
+        payload,
+    };
     assert_eq!(workflow_event_run(&event), Some(run));
 }
 
@@ -803,20 +820,19 @@ async fn service_recovers_stale_running_workflow_on_restart() {
 
     let prior_owner = OwnerRunId::new();
     let stale_run = WorkflowRunId::new();
-    let (sess, bundle, kind, payload) =
-        crate::reducer::extension_event_parts(ExtensionEvent::WorkflowRunStarted {
-            session,
-            run: stale_run,
-            workflow: WorkflowIdentity {
-                source: WorkflowSourceId::new("project:demo.hya.md"),
-                name: "demo".into(),
-                revision: WorkflowRevision::from_bytes([1; 32]),
-            },
-            request_hash: "abc".into(),
-            owner: prior_owner,
-            stages: Vec::new(),
-        })
-        .unwrap();
+    let (sess, bundle, kind, payload) = extension_event_parts(WorkflowEvent::WorkflowRunStarted {
+        session,
+        run: stale_run,
+        workflow: WorkflowIdentity {
+            source: WorkflowSourceId::new("project:demo.hya.md"),
+            name: "demo".into(),
+            revision: WorkflowRevision::from_bytes([1; 32]),
+        },
+        request_hash: "abc".into(),
+        owner: prior_owner,
+        stages: Vec::new(),
+    })
+    .unwrap();
     runtime
         .session_store()
         .append_extension_event(sess, &bundle, &kind, payload, None)
@@ -829,7 +845,7 @@ async fn service_recovers_stale_running_workflow_on_restart() {
     let state = decode_workflow_projection(
         runtime
             .session_store()
-            .read_extension_state(session, BUNDLE_WORKFLOW)
+            .read_extension_state(session, WORKFLOW_BUNDLE_ID)
             .await
             .unwrap(),
     );
@@ -987,6 +1003,283 @@ flowchart TD
     assert_eq!(
         runtime.state.lock().unwrap().activations,
         vec!["worker", "checker", "worker", "checker"]
+    );
+    service.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn prepared_compiler_revision_matches_the_bundle_compiler() {
+    let bundles = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+    for dir in ["builtin/workflow", "examples/argus-example"] {
+        let catalog =
+            prepare_package(BundleSource::read_directory(bundles.join(dir)).unwrap()).unwrap();
+        let prepared = catalog.bundles()[0].workflow().unwrap();
+        let compiled =
+            compile(WorkflowSource::new(&prepared.source_path, &prepared.source)).unwrap();
+        assert_eq!(
+            prepared.compiler_revision,
+            compiled.revision().to_string(),
+            "{dir}"
+        );
+    }
+}
+
+/// An event log written with the pre-bundle `hya_tool` event types, and the
+/// projection `hya_tool`'s reducer folded from it.
+const RECORDED_EVENTS: &str = include_str!("../tests/fixtures/workflow_events.json");
+
+#[test]
+fn recorded_event_log_folds_to_the_recorded_projection() {
+    let recorded: Value = serde_json::from_str(RECORDED_EVENTS).unwrap();
+    let session: SessionId = serde_json::from_value(recorded["session"].clone()).unwrap();
+    let events = recorded["events"].as_array().unwrap();
+    let kinds: std::collections::BTreeSet<_> = events
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds.len(), 7, "{kinds:?}");
+
+    let mut state = WorkflowProjectionReducer.initial_state();
+    for event in events {
+        let kind = event["kind"].as_str().unwrap();
+        let decoded = WorkflowEvent::from_parts(session, kind, &event["payload"]).unwrap();
+        let (_, bundle, encoded_kind, payload) = extension_event_parts(decoded).unwrap();
+        assert_eq!(
+            (bundle.as_str(), encoded_kind.as_str(), &payload),
+            (event["bundle"].as_str().unwrap(), kind, &event["payload"]),
+            "re-encoded {kind}"
+        );
+        WorkflowProjectionReducer
+            .apply(
+                &mut state,
+                &ExtensionEventContext {
+                    session,
+                    seq: EventSeq(0),
+                    ts_millis: 0,
+                    bundle,
+                    kind: encoded_kind,
+                    payload,
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(state, recorded["projection"]);
+}
+
+#[test]
+fn run_id_from_operation_keeps_its_namespace() {
+    let tool_call = hya_proto::ToolCallId::from_uuid(
+        uuid::Uuid::parse_str("018f032a-3d2f-7a21-a05c-2e61fc57dced").unwrap(),
+    );
+    let run = WorkflowRunId::from_operation(hya_proto::OperationId::from_tool_call(tool_call));
+    assert_eq!(run.to_string(), "wfrun_aca1b2cc13e959b7a9132634e71a804b");
+    assert_eq!(run.to_string().parse::<WorkflowRunId>().unwrap(), run);
+}
+
+#[tokio::test]
+async fn tool_without_a_started_service_reports_no_session() {
+    let tool = crate::tool::WorkflowTool::new(Arc::new(WorkflowService::new()));
+    let (permission, _) = hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default());
+    let ctx = hya_tool::ToolCtx::new(test_root("tool"), permission, CancellationToken::new());
+    let error = hya_tool::Tool::execute(&tool, &ctx, json!({ "action": "list" }))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, hya_tool::ToolError::Other(message) if message == "workflow tool requires a session"),
+        "{error:?}"
+    );
+}
+
+async fn cli_call(
+    api: &WorkflowBundleApiHandler,
+    endpoint: &str,
+    session: Option<SessionId>,
+    args: Value,
+    cwd: &Path,
+) -> hya_runtime_abi::DriverReport {
+    let reply = api
+        .handle(NativeBundleApiRequest {
+            api: endpoint.into(),
+            method: ApiMethod::Post,
+            scope: if session.is_some() {
+                ApiScope::Session
+            } else {
+                ApiScope::Global
+            },
+            path: format!("/cli/{}", endpoint.trim_start_matches("cli_")),
+            path_params: BTreeMap::new(),
+            query: BTreeMap::new(),
+            body: json!({ "args": args, "cwd": cwd.display().to_string() }),
+            session,
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.status, 200, "{}", reply.body);
+    serde_json::from_value(reply.body).unwrap()
+}
+
+#[tokio::test]
+async fn cli_endpoints_print_what_hya_workflow_printed() {
+    let root = test_root("cli");
+    let wf_dir = workflow_project_dir(&root);
+    std::fs::create_dir_all(&wf_dir).unwrap();
+    std::fs::write(wf_dir.join("demo.hya.md"), DEMO_WORKFLOW).unwrap();
+    let runtime = Arc::new(MockHostRuntime::new(root.clone()));
+    let session = SessionId::new();
+    runtime.seed_session(session, "hya-main", &root);
+    runtime.push_reply("planned");
+    runtime.push_reply("executed");
+    let service = Arc::new(WorkflowService::new());
+    service.start(runtime.clone()).await.unwrap();
+    let api = WorkflowBundleApiHandler::new(Arc::clone(&service));
+
+    let list = cli_call(&api, "cli_list", None, json!({}), &root).await;
+    assert_eq!(list.exit_code, 0, "{list:?}");
+    assert!(list.stdout.starts_with("demo\n"), "{}", list.stdout);
+    assert!(
+        list.stdout.contains("(Stages: plan, execute)"),
+        "{}",
+        list.stdout
+    );
+    let json_list = cli_call(&api, "cli_list", None, json!({ "json": true }), &root).await;
+    let parsed: WorkflowCommandResult = serde_json::from_str(&json_list.stdout).unwrap();
+    assert!(
+        matches!(parsed, WorkflowCommandResult::List { workflows } if workflows[0].name == "demo")
+    );
+    assert!(json_list.stdout.ends_with("}\n"));
+
+    let info = cli_call(&api, "cli_info", None, json!({ "name": "demo" }), &root).await;
+    assert!(
+        info.stdout
+            .contains("execute (after plan) <- Agent `worker` [once]"),
+        "{}",
+        info.stdout
+    );
+    let missing = cli_call(&api, "cli_info", None, json!({ "name": "nope" }), &root).await;
+    assert_eq!(
+        (
+            missing.stdout.as_str(),
+            missing.stderr.as_str(),
+            missing.exit_code
+        ),
+        (
+            "",
+            "Error: WORKFLOW_NOT_FOUND: Workflow `nope` was not found\n",
+            1
+        )
+    );
+
+    let bad_revision = cli_call(
+        &api,
+        "cli_use",
+        Some(session),
+        json!({ "name": "demo", "revision": "zz", "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert_eq!(
+        bad_revision.stderr,
+        "Error: invalid Workflow revision `zz`: Workflow revision must contain exactly 64 hexadecimal characters\n"
+    );
+    let selected = cli_call(
+        &api,
+        "cli_use",
+        Some(session),
+        json!({ "name": "demo", "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert_eq!(selected.exit_code, 0, "{selected:?}");
+    assert!(
+        selected
+            .stdout
+            .starts_with("selected workflow: demo (revision "),
+        "{}",
+        selected.stdout
+    );
+
+    let nameless = cli_call(
+        &api,
+        "cli_run",
+        Some(session),
+        json!({ "input": ["topic=x"] }),
+        &root,
+    )
+    .await;
+    assert_eq!(
+        nameless.stderr,
+        "Error: workflow run requires NAME unless --session identifies an owning Session\n"
+    );
+    let run = cli_call(
+        &api,
+        "cli_run",
+        Some(session),
+        json!({ "input": ["topic=rust"], "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert!(
+        run.stdout.starts_with("workflow demo: completed\n"),
+        "{run:?}"
+    );
+    assert_eq!((run.stderr.as_str(), run.exit_code), ("", 0));
+
+    let state = cli_call(
+        &api,
+        "cli_state",
+        Some(session),
+        json!({ "session": session.to_string() }),
+        &root,
+    )
+    .await;
+    assert!(
+        state.stdout.contains("latest run: demo ("),
+        "{}",
+        state.stdout
+    );
+    let unknown = cli_call(&api, "cli_state", Some(SessionId::new()), json!({}), &root).await;
+    assert!(
+        unknown
+            .stderr
+            .starts_with("Error: session_not_found: Session `"),
+        "{unknown:?}"
+    );
+
+    service.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn cli_list_and_info_read_project_roots_from_a_subdirectory_and_print_diagnostics() {
+    let root = test_root("cli-scope");
+    let (first, second) = (root.join("first"), root.join("second"));
+    let nested = first.join("src/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let second_workflows = workflow_project_dir(&second);
+    std::fs::create_dir_all(&second_workflows).unwrap();
+    std::fs::write(second_workflows.join("demo.hya.md"), DEMO_WORKFLOW).unwrap();
+    let runtime = Arc::new(MockHostRuntime::new(root.clone()));
+    {
+        let mut st = runtime.state.lock().unwrap();
+        st.project_roots = vec![first.clone(), second.clone()];
+        st.diagnostics = vec!["project bundle /p/broken: invalid".into()];
+    }
+    let service = Arc::new(WorkflowService::new());
+    service.start(runtime.clone()).await.unwrap();
+    let api = WorkflowBundleApiHandler::new(Arc::clone(&service));
+
+    let list = cli_call(&api, "cli_list", None, json!({}), &nested).await;
+    assert_eq!(list.exit_code, 0, "{list:?}");
+    assert!(list.stdout.starts_with("demo\n"), "{}", list.stdout);
+    assert_eq!(list.stderr, "warning: project bundle /p/broken: invalid\n");
+    let missing = cli_call(&api, "cli_info", None, json!({ "name": "nope" }), &nested).await;
+    assert_eq!(
+        (missing.stderr.as_str(), missing.exit_code),
+        (
+            "warning: project bundle /p/broken: invalid\nError: WORKFLOW_NOT_FOUND: Workflow `nope` was not found\n",
+            1
+        )
     );
     service.stop().await.unwrap();
     let _ = std::fs::remove_dir_all(&root);

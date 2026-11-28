@@ -51,13 +51,13 @@ test("lines group primary, subagent, then hidden system agents under divider rul
   const lines = agentsViewLines({ filter: "" }, rows)
   expect(lines.map((line) => line.kind === "divider" ? `— ${line.title}` : line.row.agentId)).toEqual([
     "— Primary agents", "hya-main", "hya-plan",
-    "— Subagents", "hya-scout", "hya-reviewer", "hya-task",
+    "— Child agents", "hya-scout", "hya-reviewer", "hya-task",
     "— System agents", "hya-compaction", "hya-summary", "hya-title",
   ])
 })
 
 test("a filter drops sections left empty and matches section titles", () => {
-  expect(agentsViewLines({ filter: "gpt" }, rows).map((line) => line.kind === "divider" ? line.title : line.row.agentId)).toEqual(["Subagents", "hya-scout"])
+  expect(agentsViewLines({ filter: "gpt" }, rows).map((line) => line.kind === "divider" ? line.title : line.row.agentId)).toEqual(["Child agents", "hya-scout"])
   expect(shownAgents({ filter: "system" }, rows).map((row) => row.agentId)).toEqual(["hya-compaction", "hya-summary", "hya-title"])
 })
 
@@ -88,7 +88,7 @@ test("settleAgentsView keeps the highlight when the row still exists", () => {
 
 test("Enter selects a primary agent; on a subagent or system agent it notices why", () => {
   expect(agentsViewKey(at("hya-plan"), key("return"), rows)).toEqual({ type: "select", agent: "hya-plan" })
-  expect(agentsViewKey(at("hya-scout"), key("return"), rows)).toEqual({ type: "update", view: { ...at("hya-scout"), notice: { tone: "info", text: "hya-scout is a subagent; only primary agents run a session" } } })
+  expect(agentsViewKey(at("hya-scout"), key("return"), rows)).toEqual({ type: "update", view: { ...at("hya-scout"), notice: { tone: "info", text: "hya-scout is a child agent; only primary agents run a session" } } })
   expect(agentsViewKey(at("hya-compaction"), key("return"), rows)).toEqual({ type: "update", view: { ...at("hya-compaction"), notice: { tone: "info", text: "hya-compaction is a system agent; only primary agents run a session" } } })
 })
 

@@ -58,13 +58,13 @@ async fn publish_during_preflight_uses_checked_router() -> Result<(), Box<dyn st
         current: FakeProvider::scripted(vec![FakeStep::Finish(FinishReason::Stop)]),
         replacement: Arc::new(ProviderRouter::new().with(replacement.clone())),
     });
-    let engine = Arc::new(SessionEngine::try_new(
+    let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await?,
         Arc::new(ProviderRouter::new().with(original.clone())),
         crate::test_support::runtime(hya_tool_loader::from_tool_families(&[])),
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
-    )?);
+    ));
     *original
         .engine
         .lock()
@@ -111,13 +111,13 @@ async fn handoff_uses_provider_published_after_the_first_handoff()
     let replacement = Arc::new(FakeProvider::scripted(vec![FakeStep::Text(
         "replacement".into(),
     )]));
-    let engine = SessionEngine::try_new(
+    let engine = SessionEngine::new(
         SessionStore::connect_memory().await?,
         Arc::new(ProviderRouter::new().with(original.clone())),
         crate::test_support::runtime(hya_tool_loader::from_tool_families(&[])),
         PermissionPlane::new(PermissionRules::default()).0,
         EventBus::default(),
-    )?;
+    );
     let summarizer = crate::ModelSummarizer::for_engine(&engine, model.clone());
     let engine = engine.with_terminal_handoff(
         Arc::new(summarizer),

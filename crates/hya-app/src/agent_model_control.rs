@@ -231,13 +231,13 @@ impl PersistentAgentModelControl {
         let (Some(files), Some(resolver)) = (&self.configuration_files, resolver) else {
             return Ok(None);
         };
-        let definition = binding.agent_catalog().resolve(agent_id).ok_or_else(|| {
+        let origin = binding.agent_model_file_origin(agent_id).ok_or_else(|| {
             AgentModelControlError::UnknownAgent {
                 agent_id: agent_id.to_string(),
             }
         })?;
         files
-            .path_in(resolver, definition.origin)
+            .path_in(resolver, origin)
             .map(|path| Some(path.to_string_lossy().into_owned()))
             .map_err(AgentModelControlError::Configuration)
     }
@@ -549,7 +549,11 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
             let model = preference.map(|identity| {
                 AgentModelIdentity::new(identity.provider_id, identity.model_id).model_ref()
             });
-            let bundle_id = definition.origin.bundle_id().map(str::to_string);
+            // The file that already holds this Agent's model leaf, so a write
+            // is never shadowed by the global file.
+            let bundle_id = binding
+                .agent_model_file_origin(&agent_id)
+                .and_then(|origin| origin.bundle_id().map(str::to_string));
             let bundle_configuration = bundle_id.is_some();
             // A bundle of the binding's Project owns its file in the project
             // source directory; its leaves reach only that Project's bindings
@@ -778,7 +782,7 @@ fn project_agent_model(
         agent_id: agent.stable_id.to_string(),
         description: agent.description.map(str::to_string),
         mode: agent.selector_mode().to_string(),
-        hidden: agent.private || binding.agent_catalog().is_reserved(agent.stable_id),
+        hidden: agent.private,
         configured,
         settable: !configured,
         preference,

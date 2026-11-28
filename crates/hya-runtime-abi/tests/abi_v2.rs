@@ -12,16 +12,16 @@ use hya_proto::{
 };
 use hya_runtime_abi::{
     ABI_VERSION_V2, AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary,
-    BundleClaimLease, BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry,
-    ExtensionEventContext, ExtensionKind, GoalDriver, GoalRunRequest, HookPoint, HostBundleStorage,
+    BundleClaimLease, BundleClaimRequest, BundleStateEntry, DriverReport, DriverRequest,
+    ExtensionEntry, ExtensionEventContext, ExtensionKind, HookPoint, HostBundleStorage,
     HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry, HostModelCaller,
-    HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver, LoopRunRequest, ModelCallRequest,
-    ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeAbiV2, NativeApiEndpoint,
-    NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest, NativeHook,
-    NativePluginContext, NativeRegistrations, NativeService, NativeToolBeforeInput,
-    NativeToolBeforeOutcome, ProjectionReducer, ServiceHealth, SessionListFilter,
-    SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, UriContent,
-    UriResolveCtx, UriSchemaHandler, abi_digest_v2, export_native_bundle_v2,
+    HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest, ModelCallResponse,
+    ModelStreamChunk, ModelWindowInfo, NativeAbiV2, NativeApiEndpoint, NativeBundleApiHandler,
+    NativeBundleApiReply, NativeBundleApiRequest, NativeDriver, NativeHook, NativePluginContext,
+    NativeRegistrations, NativeService, NativeToolBeforeInput, NativeToolBeforeOutcome,
+    ProjectionReducer, ServiceHealth, SessionListFilter, SessionSummaryMeta, TurnOutcome,
+    TurnSpawnRequest, TurnStart, TurnStartRequest, TurnStatus, UriContent, UriResolveCtx,
+    UriSchemaHandler, abi_digest_v2, export_native_bundle_v2,
 };
 use hya_tool::{AgentDef, SkillCatalogEntry, Tool, ToolCtx, ToolError};
 use serde_json::{Value, json};
@@ -324,12 +324,12 @@ impl HostTurnRunner for InMemoryHostRuntime {
         self.turns_run
             .lock()
             .map_err(|e| HostError::Internal(e.to_string()))?
-            .push(request.prompt.clone());
+            .push(request.prompt.clone().unwrap_or_default());
         Ok(TurnOutcome {
             session: request.session,
             message_id: None,
             finish_reason: Some(FinishReason::Stop),
-            output_text: format!("ran: {}", request.prompt),
+            output_text: format!("ran: {}", request.prompt.unwrap_or_default()),
             error: None,
         })
     }
@@ -671,44 +671,23 @@ impl UriSchemaHandler for MacroUri {
     }
 }
 
-struct MacroGoal;
+struct MacroDriver;
 
 #[async_trait]
-impl GoalDriver for MacroGoal {
-    fn id(&self) -> &str {
-        "macro-goal"
+impl NativeDriver for MacroDriver {
+    fn name(&self) -> &str {
+        "macro-driver"
     }
 
-    async fn run_goal(
+    async fn run(
         &self,
         _runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         _cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        Ok(DriverRunOutcome::Achieved {
-            iterations: 1,
-            reason: request.goal,
-        })
-    }
-}
-
-struct MacroLoop;
-
-#[async_trait]
-impl LoopDriver for MacroLoop {
-    fn id(&self) -> &str {
-        "macro-loop"
-    }
-
-    async fn run_loop(
-        &self,
-        _runtime: Arc<dyn HostRuntime>,
-        request: LoopRunRequest,
-        _cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        Ok(DriverRunOutcome::Achieved {
-            iterations: 1,
-            reason: request.target,
+    ) -> Result<DriverReport, HostError> {
+        Ok(DriverReport {
+            stdout: request.args.to_string(),
+            ..DriverReport::default()
         })
     }
 }
@@ -723,8 +702,7 @@ export_native_bundle_v2!(|ctx, out| {
     out.api_handlers.push(Arc::new(MacroApi));
     out.projection_reducers.push(Arc::new(MacroReducer));
     out.uri_schema_handlers.push(Arc::new(MacroUri));
-    out.goal_drivers.push(Arc::new(MacroGoal));
-    out.loop_drivers.push(Arc::new(MacroLoop));
+    out.drivers.push(Arc::new(MacroDriver));
     Ok::<(), HostError>(())
 });
 
@@ -765,8 +743,7 @@ fn ffi_export_macro_round_trip_and_error_handling() {
     assert_eq!(regs.api_handlers.len(), 1);
     assert_eq!(regs.projection_reducers.len(), 1);
     assert_eq!(regs.uri_schema_handlers.len(), 1);
-    assert_eq!(regs.goal_drivers.len(), 1);
-    assert_eq!(regs.loop_drivers.len(), 1);
+    assert_eq!(regs.drivers.len(), 1);
 
     let mut second = NativeRegistrations::new();
     second.extend(regs);
@@ -846,12 +823,15 @@ async fn host_runtime_subtraits_and_extension_traits_dispatch_cleanly()
         .run_turn(
             TurnStartRequest {
                 session,
-                prompt: "hello".to_string(),
+                prompt: Some("hello".to_string()),
                 agent: None,
                 model: None,
                 system_override: None,
                 metadata: None,
                 actor_claim: None,
+                guidance: None,
+                route: None,
+                start: TurnStart::Always,
             },
             CancellationToken::new(),
         )

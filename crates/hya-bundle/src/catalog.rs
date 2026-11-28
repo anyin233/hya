@@ -54,8 +54,9 @@ pub struct BundleCatalog {
 impl BundleCatalog {
     /// Build a catalog by indexing already-prepared installable payloads.
     ///
-    /// Rejects duplicate bundle/Agent ids, namespace/alias collisions, and
-    /// unsupported hook declarations. Empty input is valid.
+    /// Rejects duplicate bundle/Agent ids, namespace/alias collisions, two
+    /// `default_agent` declarers, and unsupported hook declarations. Empty
+    /// input is valid.
     pub fn from_prepared(bundles: &[Bundle]) -> Result<Self, BundleError> {
         Self::from_shared(bundles.iter().cloned().map(Arc::new).collect())
     }
@@ -72,11 +73,21 @@ impl BundleCatalog {
         };
         let mut bundle_ids = BTreeSet::new();
         let mut stable_agent_ids = BTreeSet::new();
+        let mut default_agent_bundle: Option<&str> = None;
         for (bundle_index, bundle) in catalog.bundles.iter().enumerate() {
             if !bundle_ids.insert(bundle.identity().id.as_str()) {
                 return Err(BundleError::DuplicateBundleId {
                     bundle_id: bundle.identity().id.clone(),
                 });
+            }
+            if bundle.default_agent().is_some() {
+                if let Some(first) = default_agent_bundle {
+                    return Err(BundleError::DuplicateDefaultAgent {
+                        first: first.to_string(),
+                        second: bundle.identity().id.clone(),
+                    });
+                }
+                default_agent_bundle = Some(bundle.identity().id.as_str());
             }
             for (agent_index, agent) in bundle.agents().iter().enumerate() {
                 if !stable_agent_ids.insert(agent.id.as_str()) {

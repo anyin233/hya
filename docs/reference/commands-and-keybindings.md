@@ -66,7 +66,7 @@ Press **`?`** on an empty input box (or run **`/help`**) anytime inside Hya to o
 | Command | Description |
 | --- | --- |
 | `/subagents` | Open the Subagents selector and live viewer panes (`Ctrl+A` toggle archived, `s` steer, `Esc` interrupt). Also supports `select`, `view`, `pin`, `follow`, `steer <id> <msg>`, `interrupt <id>`, `archive <id>`. |
-| `/workflow ...` (`/workflows`) | `list`, `info <name>`, `select <name>` (or `use`), `run [<name>] [k=v ...]`, `state`. |
+| `/workflow ...` (`/workflows`) | `list`, `info <name>`, `select <name>` (or `use`), `run [<name>] [k=v ...]`, `state`. Registered by the `hya/workflow` bundle's TUI extension; absent when the bundle is disabled. |
 | `/skills [<filter>]` | Browse all discovered Skills (`u` inserts `/skill:<name> ` into the input). |
 | `/skill:<name> [<request>]` | Invoke a specific Skill on demand for this turn. |
 | `/mcp` | Open **MCP Servers** (`Enter` inspect tools, `c` connect, `x` disconnect, `a` OAuth login, `r` refresh). |

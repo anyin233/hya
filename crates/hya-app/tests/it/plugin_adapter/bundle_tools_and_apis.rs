@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hya_app::plugin_adapter::{PluginHostAdapter, session_usage_reader};
 use hya_engine::bundle_apis::{SessionUsageReport, UsageReport};
-use hya_engine::hooks::{HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
+use hya_engine::hooks::{NativeHook, NativeToolBeforeInput, NativeToolBeforeOutcome};
 use hya_engine::{
     ApiMethod, BundleApiProvider, BundleApiRequest, CoreError, HostSessionReads, UsageScope,
 };
@@ -447,7 +447,7 @@ async fn private_activation_reports_loss_without_respawning() {
     assert_eq!(output["metadata"]["activation_id"], "private");
     assert_eq!(output["metadata"]["lifecycle"], "resident");
 
-    let input = || ToolExecuteBeforeInput {
+    let input = || NativeToolBeforeInput {
         session: ctx.session.unwrap(),
         message: MessageId::new(),
         call: ToolCallId::new(),
@@ -455,14 +455,14 @@ async fn private_activation_reports_loss_without_respawning() {
         input: json!({"crash": true}),
     };
     assert!(matches!(
-        adapter.tool_execute_before(input()).await,
-        ToolExecuteBeforeOutcome::Veto { .. }
+        adapter.tool_execute_before(input()).await.unwrap(),
+        NativeToolBeforeOutcome::Veto { .. }
     ));
     assert!(loss.is_cancelled());
-    assert!(!HookDispatcher::is_healthy(&adapter));
+    assert!(!NativeHook::is_healthy(&adapter));
     assert!(matches!(
-        adapter.tool_execute_before(input()).await,
-        ToolExecuteBeforeOutcome::Veto { .. }
+        adapter.tool_execute_before(input()).await.unwrap(),
+        NativeToolBeforeOutcome::Veto { .. }
     ));
     assert!(matches!(
         alpha.execute(&ctx, json!({})).await,
@@ -505,7 +505,7 @@ for line in sys.stdin:
     );
 
     let poke = || {
-        adapter.tool_execute_before(ToolExecuteBeforeInput {
+        adapter.tool_execute_before(NativeToolBeforeInput {
             session: SessionId::new(),
             message: MessageId::new(),
             call: ToolCallId::new(),

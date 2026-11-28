@@ -33,9 +33,6 @@ pub enum CoreError {
         /// Missing agent stable id.
         agent_id: String,
     },
-    /// A Workflow actor reported failure or ended before successful settlement.
-    #[error("{0}")]
-    WorkflowActivationFailed(String),
     /// Caller-supplied parameters or preflight checks failed.
     #[error("invalid: {0}")]
     Invalid(String),

@@ -196,13 +196,6 @@ pub(crate) fn listing_with_skills_and_builtins(
             Vec::new(),
             None,
         ),
-        command_info(
-            "workflow",
-            "inspect or run workflows",
-            "/workflow $ARGUMENTS".to_string(),
-            vec!["$ARGUMENTS"],
-            None,
-        ),
     ]);
     let mut diagnostics = Vec::new();
     let mut disk: Vec<CommandInfo> = Vec::new();

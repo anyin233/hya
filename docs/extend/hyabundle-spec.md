@@ -52,16 +52,16 @@ All 14 bundles in `bundles/builtin/` (10 native ABI v2 bundles—4 of which are 
 | Path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- |
 | `bundles/builtin/hashline` | `hya/hashline` | **Native ABI v2** (`cdylib`) | 4 tools (`overrides: hya/bare`): `read`, `write`, `edit`, `grep` + `HashlineRuntime` | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/hashline]` or `--bare` to fall back to `hya-bare` standard file tools |
-| `bundles/builtin/coding-extras` | `hya/coding-extras` | **Native ABI v2** (`cdylib`) | 7 tools (`ls`, `glob`, `find`, `apply_patch`, `ask_user`, `lsp`, `project_activity`), `lsp-formatter` `NativeService`, and `tool.execute.after` + `tool.visibility` `NativeHook`s | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/coding-extras]` or `--bare` |
+| `bundles/builtin/coding-extras` | `hya/coding-extras` | **Native ABI v2** (`cdylib`) | 7 tools (`ls`, `glob`, `find`, `apply_patch`, `ask_user`, `lsp`, `project_activity`), `lsp-formatter` `NativeService`, `tool.execute.after` + `tool.visibility` `NativeHook`s, and a `NativeBundleApiHandler` (`apis`: `GET /lsp/symbols`); the bundle owns its formatter and LSP state, the core has neither | **Full default** via `hya-tool-loader` (`load_v2`); disable via `bundles.builtin.disable: [hya/coding-extras]` or `--bare` |
 | `bundles/builtin/multi-agent` | `hya/multi-agent` | **Native ABI v2** (`cdylib`) + **TUI v2** | 5 tools (`list_agents`, `search_agent`, `task`, `archive`, `wait`), 3 built-in subagents (`hya-task`, `hya-scout`, `hya-reviewer`), `MultiAgentService` (`services`) with `bundle_claim`/`bundle_state` leases, `session.end` lifecycle `NativeHook` (`hooks`), `ProjectionReducer` (`extensions["hya/multi-agent"]`), `NativeBundleApiHandler` (`apis`: `/members`, `/archive`, `/steer`), and `@hya/tui-sdk` v2 `subagents` / `subagent-viewer` panes + `/subagents` command | **Full catalog + native ABI v2 + TUI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
 | `bundles/builtin/network` | `hya/network` | **Native ABI v2** (`cdylib`) | 2 tools (`webfetch`, `websearch`) + `NetworkService` + `ToolVisibility` hook (`config.yml`) | **Full default** via `hya-tool-loader`; disableable for air-gapped operation & skipped in `--bare` |
 | `bundles/builtin/agent-channels` | `hya/agent-channels` | **Native ABI v2** (`cdylib`) + static `channels:` + **TUI v2** | 4 tools (`send`, `list_channel`, `report`, and mail-aware `wait` with `overrides: hya/multi-agent`), `AgentChannelsService` (`services`), `channel://` `UriSchemaHandler` (`schemas`), `unread-mail-steer` `NativeHook` (`hooks`), read-only `BundleApi` (`apis`), `ProjectionReducer`, 2 default channel templates (`unit-default`, `parent-dm-default`), and `@hya/tui-sdk` v2 `send`/`list_channel`/`report` renderers + unread mail status badge | **Full default** via `hya-tool-loader` (`load_v2`); skipped in `--bare` |
-| `bundles/builtin/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`) + 1 `ProjectionReducer` (`Event::Extension`) | **Full required** via `hya_core::bundles::load_internal_with_runtime()`; skipped in `--bare` |
+| `bundles/builtin/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`, reads `keep_recent` from its own `config.yml`) + 1 `ProjectionReducer` (`extensions["hya/compaction"]`; eviction notices through `tool_output_overrides`) | Loaded through native bundle registration when enabled; disabled by the bare profile |
 | `bundles/builtin/plan` | `hya/plan` | **Native ABI v2** (`cdylib`) + **TUI v2** | `hya-plan` read-only main agent, `plan_exit` tool (hidden alias `plan`), `tool.visibility` native hook, and `@hya/tui-sdk` v2 `plan_exit` card renderer + `Plan` status badge | **Full catalog + native ABI v2 + TUI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
-| `bundles/builtin/goal` | `hya/goal` | **Native ABI v2** (`cdylib`) | `GoalDriver` (`drivers`) + `GoalDriverService` (`services`), 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::goal_driver()`; skipped in `--bare` (`hya -p` errors cleanly when disabled) |
-| `bundles/builtin/loop` | `hya/loop` | **Native ABI v2** (`cdylib`) | `LoopDriver` (`id: "loop"`), `LoopService` (`capabilities: [services, drivers]`), and `loop-verifier-prompt` / `loop-planner-prompt` skills | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::loop_driver()`; skipped in `--bare` (`hya loop` errors cleanly when disabled) |
+| `bundles/builtin/goal` | `hya/goal` | **Native ABI v2** (`cdylib`) | the `goal` driver (`drivers`, `hya/goal:goal`) + `GoalDriverService` (`services`), 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::goal_driver()`; skipped in `--bare` (`hya -p` errors cleanly when disabled) |
+| `bundles/builtin/loop` | `hya/loop` | **Native ABI v2** (`cdylib`) | the `loop` driver (`hya/loop:loop`), `LoopService` (`capabilities: [services, drivers]`), and `loop-verifier-prompt` / `loop-planner-prompt` skills | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::loop_driver()`; skipped in `--bare` (`hya loop` errors cleanly when disabled) |
 | `bundles/builtin/workflow` | `hya/workflow` | **Native ABI v2** (`cdylib`) + **TUI v2** | `workflow` tool, `WorkflowService` (`services`) DAG execution & durable replay, `ProjectionReducer` (`extensions["hya/workflow"]`), `NativeBundleApiHandler` (`apis`: `GET /workflows`, `GET /state`, `POST /command`), built-in default workflow (`workflows/plan-impl-review.hya.md`) + 3 private stage agents (`hya-pir-{planner,implementer,reviewer}`), and `@hya/tui-sdk` v2 `workflows` pane + `/workflow` slash commands | **Full catalog + native ABI v2 + TUI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` (`hya workflow` errors cleanly when disabled) |
-| `bundles/builtin/core-agents` | `hya/core-agents` | **Static** | 2 built-in agents (`hya-main`, `hya-title`) + `policy.yaml` | **Full required** via `hya-engine::builtin_agents` |
+| `bundles/builtin/core-agents` | `hya/core-agents` | **Static** | 2 agents: `hya-main` (`default_agent`, `can_spawn: ["*"]`) and the private `hya-title` | **Full default** through the bundle catalog like any agent bundle; without it the default agent is the core's `hya-bare` |
 | `bundles/builtin/core-skills` | `hya/core-skills` | **Static** | 2 built-in skills (`agent-bundle-authoring`, `secure-self-update`) | **Full required** via `hya-engine::skill_catalog` |
 | `bundles/builtin/core-commands` | `hya/core-commands` | **Static** | 2 built-in slash commands (`/init`, `/review`) | **Full required** via `hya-server::support::command_catalog` |
 | `bundles/builtin/basic-tui-components` | `hya/basic-tui-components` | **Static + TUI v2** (`@hya/tui-sdk`) | Standard TUI panels (Projects, Sessions, Todos, Context, Project View, Jobs) | **Full catalog** published by `hya-app::first_party_catalogs()`, loaded by `packages/hya-tui` |
@@ -141,6 +141,8 @@ version_ref: hya                # Optional: builtin bundles only; resolved to ve
 
 namespace: my-bundle            # Optional: defaults to <name>; reserved: mcp, harness, builtin, plugin
 overrides: hya/bare             # Optional: declare bundle-level override of another bundle (e.g. hya/bare)
+requires: [hya/agent-channels]  # Optional: bundles that must be enabled with this one (see "Prerequisites and default agent")
+default_agent: my-lead          # Optional: this bundle's `role: main` Agent that becomes the default primary agent
 
 # Unified runtime declaration: static (default) | js | native
 runtime:
@@ -193,7 +195,7 @@ agents:
   #   model_policy: { category: quick, reasoning: low }
   #   resource_view: { allow: [...], deny: [...], aliases: {...} }
   #   advertise: [...]
-  #   can_spawn: [...]
+  #   can_spawn: [...]         # Agent ids, or ["*"] for every non-private agent
   #   private: false
   #   handoff: model            # model | deterministic
   #   hook_refs: [tool.execute.before]
@@ -206,6 +208,7 @@ channels: []                    # Vertical/unit communication channel policies
 schemas: []                     # Custom URI schemes (e.g. db:// -> bundle tool, or native UriSchemaHandler)
 apis: []                        # Custom HTTP/gRPC endpoints (JS process mode OR Native ABI v2 NativeBundleApiHandler)
 permission_modes: []            # Custom permission modes paired with hook/permission.approve
+cli: []                         # `hya` commands this bundle contributes (see "CLI commands" below)
 tui:                            # Sandboxed TUI extension (@hya/tui-sdk v2; may be combined with runtime.kind: native)
   api_version: 2
   entry: tui/main.ts
@@ -222,6 +225,103 @@ assets:
 #### Strict `schema_version: 2` Enforcement
 
 Hya v2 accepts **`schema_version: 2` manifests exclusively** ([ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)). Legacy v1 manifests (`extensions.*` blocks, omitted `schema_version`, or legacy exposure policy files) are rejected at parse time; run `hya-migration run` to upgrade existing v1 user or project bundles (see **[Migrating from Hya v1 to v2](../guide/migration-v1-to-v2.md)**). Native bundles are never required to list `native/src/*.rs` files under `assets:`.
+
+#### CLI commands (`cli:`)
+
+A bundle can add commands to the `hya` command line ([ADR-0040](../adr/0040-context-kernel-is-the-only-core.md)). When the bundle is enabled, `hya --help` lists them and `hya <name> …` runs them; when it is disabled (or with `--bare` for built-in bundles) they do not exist. Each command routes to one of the bundle's own extension points:
+
+- `driver: <name>` runs the bundle's native driver `<bundle-id>:<name>` in a headless in-memory session. The driver receives the parsed arguments as `DriverRequest::args` and returns a `DriverReport` (`stdout`, `stderr`, `exit_code`), which `hya` prints and exits with. Only `runtime.kind: native` bundles have drivers.
+- `api: <endpoint-id>` calls one of the bundle's BundleApi endpoints with the JSON body `{"args": {…}, "cwd": "<absolute working directory of the caller>"}`; the reply body must be `{"stdout": …, "stderr": …, "exit_code": …}`, which `hya` prints (stdout, then stderr) and exits with when `exit_code` is nonzero. A failure the bundle detects is such a reply (for example `stderr: "Error: <message>\n"`, `exit_code: 1`); a missing endpoint, a non-2xx status, or a body of another shape is reported by `hya` itself (`Error: …`, exit 1). A Session-scope endpoint runs for a new session in the caller's directory; a Global endpoint gets no session. This works for JS (`apis:`) and native (`NativeBundleApiHandler`) bundles alike.
+
+By default an `api` route runs on a headless in-memory store. With `database: true` it runs against `--db` instead, under the same database lock as `hya exec` (see [CLI reference: Database lock & exit codes](../reference/cli.md#database-lock--exit-codes)):
+
+- When no live server holds the database, `hya` claims it, runs the call in process, and drains the store on exit. A command with a `value: session` argument given claims strictly; without one, an open timeout or storage fault falls back to an in-memory store, as `hya exec` does.
+- When a server owns the database, the call goes to it over `/v2` (`/v2/sessions/{session}/bundles/{bundle}/…` or `/v2/bundles/{bundle}/api/…`) with no client request timeout, so a long call is not cut off; permission asks and questions of the call's session tree are rejected while it runs. A Session-scope endpoint without a session argument gets a new session on the server (with `--model`/`--effort`).
+- A `value: session` argument names an existing Session: a Session-scope endpoint runs for it instead of a new one (``Error: <command> Session `<id>` was not found`` when it does not exist). It stays in `args` as the typed string.
+- `routed_refuse` lists what the owning server cannot take, in order. When the call would be routed and an entry's `arg` is given (a flag set, a string or integer present, a list non-empty) or its global `flag` (`bare`, `pure`, `yolo`) is set, `hya` prints ``hya <command>: database <db> is in use by hya server pid <pid> at <url>, and <reason>; stop it (`hya serve stop --db <db>`) or pass another --db`` and exits 75 before creating any session. In process the entries do not apply.
+
+With `database: read` the route only reads `--db`: `hya` never claims it or goes through its server, so the command works while either holds it. When `--db` names an existing file, `hya` opens it read-only to find the Project of the working directory; the call then runs in process on an in-memory store holding that Project (or, without one, a Project of the working directory alone), on the offline provider with no `config.yaml` providers, MCP servers, or plugins and no `.hya/plugins` project plugins, and writes no config file. A Global endpoint sees the Project's roots through `resolve_scope_catalog(None, Some(cwd))`, whose `diagnostics` list the installed bundles that could not be read (`installed bundle <id>: <error>`) and the project bundles that failed to load (`project bundle <dir>: <error>`). `hya workflow list|info` (`hya/workflow`) prints them as `warning:` lines.
+
+```yaml
+cli:
+  - name: notes
+    subcommands:
+      - name: show
+        api: show               # a Session-scope endpoint
+        database: true
+        args:
+          - { id: session, long: session, value: session }
+          - { id: revision, long: revision }
+        routed_refuse:
+          - { arg: revision, reason: "`notes show --revision` cannot be sent to it" }
+          - { flag: yolo, reason: "--yolo cannot apply to it" }
+```
+
+`kind: prompt` instead claims `hya -p/--prompt <PROMPT>` and adds its arguments as top-level flags; the driver receives the prompt as `args.prompt`. At most one enabled bundle may claim `-p`; without one, `hya -p` runs one headless turn.
+
+```yaml
+cli:
+  - name: echo                  # hya echo …   ([a-z][a-z0-9-]*, not a core command)
+    about: Print text through the bundle's driver.
+    driver: echo                # or `api: <endpoint-id>`
+    args:
+      - id: text                # key in the JSON arguments
+        long: text              # --text; omit long/short for a positional argument
+        required: true
+        help: Text to print.
+      - id: times
+        long: times
+        value: integer          # string (default) | integer | flag | list
+        default: "1"
+      - { id: loud, long: loud, value: flag, conflicts_with: [quiet] }
+      - { id: quiet, long: quiet, value: flag }
+      - { id: tag, long: tag, value: list, aliases: [label], value_name: TAG }
+  - name: group                 # a command with subcommands has no route itself
+    subcommands:
+      - { name: list, api: list }
+  - kind: prompt                # claims `hya -p`
+    driver: goal
+    args:
+      - { id: max_iterations, long: max-iterations, value: integer, default: "6" }
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `kind` | `command` (default) \| `prompt` | Adds `hya <name>`, or claims `hya -p`. |
+| `name` | string | Subcommand name (`kind: command` only). |
+| `about` | string | Help text. |
+| `driver` / `api` | string | The route of a leaf command (exactly one). |
+| `database` | `false` (default) \| `true` \| `read` | `true`: run the `api` route against `--db` (in process or through the owning server) instead of an in-memory store; `read`: read `--db` without claiming it (see above). |
+| `routed_refuse[]` | list | `database: true` only: `{arg: <argument id>, reason}` or `{flag: bare\|pure\|yolo, reason}`; the first set entry exits 75 when the call would be routed. |
+| `args[]` | list | `id`, `long`, `short`, `value` (`string`, `integer`, `flag`, `list`, `session`), `required`, `default`, `help`, `value_name`, `aliases`, `conflicts_with` (argument ids). Missing optional values are `null` in the JSON arguments; a flag is `true`/`false`; a list is an array; a `session` is the typed Session id string (at most one, `database: true` only). |
+| `subcommands[]` | list | Nested commands with the same shape (no `kind: prompt`). |
+
+Preparation rejects an invalid name, a leaf without exactly one route, a `driver` route on a non-native bundle, an `api` route to an undeclared endpoint of a JS bundle, duplicate names or flags, `conflicts_with` naming an unknown argument, `database` on a driver route or on `kind: prompt`, `value: session` or `routed_refuse` without `database: true`, more than one `value: session` argument, and a `routed_refuse` entry without exactly one known `arg` or `flag` and a `reason`. At startup `hya` rejects a command that shadows a core command or that two enabled bundles both contribute.
+
+A user-installed native bundle (`runtime.library`) contributes commands the same way, and keeps them under `--bare`; [`bundles/examples/cli-driver-example`](../../bundles/examples/cli-driver-example) routes one command to a driver, one to a native Global BundleApi endpoint, and two `database: true` commands to a Global and a Session-scope endpoint.
+
+#### Prerequisites and default agent (`requires:`, `default_agent:`, `can_spawn: ["*"]`)
+
+A bundle names the bundles it cannot work without in `requires:`, and may make one of its Agents the default primary agent with `default_agent:` ([ADR-0040](../adr/0040-context-kernel-is-the-only-core.md) §5: bare to full is composition).
+
+```yaml
+requires: [hya/agent-channels]  # bundle ids (<publisher>/<name>)
+default_agent: my-lead
+agents:
+  - id: my-lead
+    role: main
+    can_spawn: ["*"]            # may spawn every non-private agent of the catalog
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `requires` | list of `<publisher>/<name>` | Bundles that must be enabled with this one. A requirement is met by a bundle with that id or by a bundle that `overrides` it. Preparation sorts the list and removes duplicates. |
+| `default_agent` | Agent id | This bundle's Agent that becomes the default primary agent while the bundle is enabled. |
+| `agents[].can_spawn` | list of Agent ids, or `["*"]` | `"*"` grants spawning every non-private agent in the catalog, including agents installed later. |
+
+Preparation rejects a `requires` entry that is not a `<publisher>/<name>` id or names the bundle itself; a `default_agent` that does not name a non-private `role: main` Agent of the same bundle; `"*"` combined with other `can_spawn` entries; and `"*"` in a bundle with a `workflow:` (a Workflow's Agent closure needs explicit ids). When the enabled set misses a prerequisite, a built-in bundle fails startup with a message naming the missing bundle, and an installed or project bundle is left out with a warning; nothing is enabled implicitly. At most one enabled bundle may declare `default_agent`; with none, the core's `hya-bare` agent is the default.
+
+Prepared bundles carry both fields only when they are declared, so the digest of a bundle that uses neither does not change.
 
 ---
 
@@ -293,15 +393,23 @@ Aligned with Claude Code's `hooks/hooks.json` semantics:
 }
 ```
 
-#### The 20 Standard Hook Events
+#### The 16 Core Hook Events
 
 | Category | Hook events |
 | --- | --- |
 | **Tools & Permissions (5)** | `tool.execute.before` *(always fail-closed)*, `tool.execute.after`, `tool.visibility`, `permission.ask`, `permission.approve` |
 | **Requests & Routing (4)** | `chat.params`, `model.fallback`, `message.user.before`, `command.execute.before` |
 | **Text & Context (3)** | `experimental.text.complete`, `compaction.before`, `compaction.after` |
-| **Goal & Loop Evaluators (4)** | `goal.evaluate`, `loop.verifier`, `loop.planner`, `loop.should_stop` |
 | **Lifecycle Observation (4)** | `session.start`, `session.end`, `agent.spawn`, `event` |
+
+A hook may also implement a **bundle-declared hook point**, named
+`<bundle-id>:<point>` (for example `hya/goal:evaluate` or `hya/loop:verifier`).
+The declaring bundle registers the local point name in
+`NativeRegistrations::hook_points`, owns the JSON payload shapes, and
+dispatches the point through `HostExtensionRegistry::invoke_hook`. The first
+implementer that answers wins (`null` defers), and a failing implementer is
+skipped. A JSON-RPC process registers the full name in `hooks:` and receives
+`hook/<bundle-id>:<point>`.
 
 #### `handler.kind` Targets
 
@@ -358,7 +466,7 @@ model_policy:
   reasoning: low                # Optional: low | medium | high
 handoff: deterministic          # model (default) | deterministic
 private: false                  # true = internal to workflows or explicit callers
-can_spawn: []                   # Allowed child agent IDs
+can_spawn: []                   # Allowed child agent IDs, or ["*"] for every non-private agent
 advertise: []                   # Optional subset of tools advertised to the model
 hook_refs: []                   # Local hook IDs from this bundle only
 resource_view:
@@ -463,7 +571,7 @@ hya bundle install --project -y ./my-bundle.hyabundle
 flowchart TD
     Bare["hya --bare / hya serve --bare / hya exec --bare"] --> BareProfile["Unified SessionEngine (BuiltinBundleProfile::Bare)<br/>8 bare tools + code-mode (no agent()) + hya-bare agent<br/>Zero bundles/builtin/ loaded (optional user/project tiers)"]
 
-    Full["hya / hya serve / hya exec (Full Mode)"] --> L1["1. Kernel Rewriters (hya-core)<br/>bundles/builtin/compaction"]
+    Full["hya / hya serve / hya exec (Full Mode)"] --> L1["1. Native Rewriters (bundle registration)<br/>bundles/builtin/compaction"]
     L1 --> L2["2. Native Tool Plane (hya-tool-loader)<br/>hashline, coding-extras, multi-agent, network, agent-channels"]
     L2 --> L3["3. Built-in Presets (immutable)<br/>core-agents, core-skills, core-commands"]
     L3 --> L4["4. Built-in Catalogs (hya-app)<br/>multi-agent, agent-channels, plan, goal, loop, workflow, basic-tui-components"]
@@ -472,7 +580,7 @@ flowchart TD
 ```
 
 - **Precedence (highest to lowest):** `Project Tier` (`<root>/.hya/bundles/`, ordered by registered Project roots, first root wins) → `Global Installed Registry` (`registry.sqlite3`) → `Built-in Catalog Tier`.
-- **Immutability guard:** Reserved built-in identities (`hya/*` presets and reserved core agent IDs such as `hya-title`) cannot be uninstalled or shadowed by external bundles.
+- **Immutability guard:** Built-in identities (`hya/*` presets) cannot be uninstalled or replaced in place, and no bundle may declare the core's `hya-bare` agent id; any other agent id clash (such as a second `hya-main`) fails catalog composition as a duplicate agent id.
 
 ### 7.2 Physical Load Sources for `bundles/builtin/`
 

@@ -100,31 +100,7 @@ struct GitCapture {
 pub struct FileCapture(Capture);
 
 impl FileCapture {
-    /// Capture a bare tool's reads or potential writes before execution.
-    pub(super) async fn bare(tool: &str, input: &Value, workdir: &Path) -> Self {
-        let path = || {
-            text(input, "path")
-                .filter(|path| !path.is_empty() && !path.contains("://"))
-                .map(|path| super::tools::resolve(workdir, path))
-        };
-        match tool {
-            "read" | "grep" => Self(Capture::Read {
-                path: path(),
-                grep_workdir: (tool == "grep").then(|| workdir.to_path_buf()),
-            }),
-            "write" | "edit" => Self::paths(path()).await,
-            "bash" => {
-                if text(input, "command").is_none() {
-                    return Self::default();
-                }
-                let cwd = text(input, "cwd").map(|cwd| super::tools::resolve(workdir, cwd));
-                Self::git(cwd.as_deref().unwrap_or(workdir), workdir).await
-            }
-            _ => Self::default(),
-        }
-    }
-
-    /// Capture a full-mode tool's reads or potential writes before execution.
+    /// Capture a tool's reads or potential writes before execution.
     pub async fn full(tool: &str, input: &Value, workdir: &Path) -> Self {
         match tool {
             "read" | "lsp" | "grep" => {

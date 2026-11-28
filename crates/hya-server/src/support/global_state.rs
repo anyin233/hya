@@ -13,11 +13,9 @@ pub(crate) struct GlobalState {
 
 impl GlobalState {
     #[must_use]
-    pub(crate) fn new(lsp_enabled: bool) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            config: Arc::new(RwLock::new(
-                json!({"lsp": if lsp_enabled { json!({}) } else { json!(false) }}),
-            )),
+            config: Arc::new(RwLock::new(json!({}))),
         }
     }
 
@@ -36,9 +34,9 @@ mod tests {
     use super::GlobalState;
 
     #[tokio::test]
-    async fn lsp_flag_bootstraps_the_bag() {
-        let state = GlobalState::new(true);
-        assert_eq!(state.config().await, json!({"lsp": {}}));
+    async fn the_bag_starts_empty_and_is_replaced() {
+        let state = GlobalState::new();
+        assert_eq!(state.config().await, json!({}));
         state.update_config(json!({"x": 1})).await;
         assert_eq!(state.config().await, json!({"x": 1}));
     }

@@ -65,12 +65,18 @@ Finishing one task and moving on to a related one in the same session? You can f
 - **`/compact`** or **`/summarize`** folds earlier turns right away (using provider-native compaction if available, or Hya's clean `Rewrite` marker otherwise).
 - **`/new`** starts a completely fresh session when you are switching to an unrelated topic.
 
-### Optional tuning in `config.yaml`
+### Optional tuning
 
-Most people never need to touch compaction settings, but you can tune how many recent messages/steps `shake` keeps untouched before shelving older tool outputs:
+Most people never need to touch these settings. How many recent messages/steps `shake` keeps untouched before shelving older tool outputs lives in the compaction bundle's own file, `~/.config/hya/bundles/hya%2Fcompaction/config.yml` (env `HYA_COMPACTION_KEEP_RECENT` wins):
 
 ```yaml
 compaction:
   keep_recent: 6           # Keep the last 6 recent messages/tool steps intact (default: 6)
+```
+
+How Hya measures how full the window is belongs to the core, in `~/.config/hya/config.yaml` (env `HYA_TOKEN_ACCOUNTING` wins):
+
+```yaml
+context:
   token_accounting: auto   # auto | provider | estimate
 ```

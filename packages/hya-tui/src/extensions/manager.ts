@@ -33,7 +33,7 @@ import {
   type RendererContribution, type ReplaceableSurface, type ResolvedBundleApiRequest, type SlashCommandContribution,
 } from "./wire"
 
-import { JSONRPC_VERSION, type SurfaceRef, type ToolCallInput, type TuiMethod, type TuiMethodMap } from "./wire.generated"
+import { JSONRPC_VERSION, type SurfaceRef, type ToolCardPresentation, type ToolCallInput, type TuiMethod, type TuiMethodMap } from "./wire.generated"
 export type ExtensionState = "starting" | "running" | "failed" | "disabled" | "blocked"
 
 /** One catalog extension as `/extensions` shows it. */
@@ -62,7 +62,7 @@ export interface PaneEntry extends PaneContribution { readonly key: string; read
 export interface CommandEntry extends SlashCommandContribution { readonly key: string; readonly extension: string }
 
 /** What a view shows for a surface: a validated tree, an error, or nothing yet. */
-export interface SurfaceView { readonly node?: RenderNode; readonly error?: string }
+export interface SurfaceView { readonly node?: RenderNode; readonly error?: string; readonly card?: CardPresentation }
 
 export type { ToolCallInput } from "./wire.generated"
 export type { ResolvedBundleApiRequest } from "./wire"
@@ -70,7 +70,9 @@ export type { ResolvedBundleApiRequest } from "./wire"
 /** One renderer's tree and who answers its actions. */
 export interface HookTree { readonly node: RenderNode; readonly extension: string; readonly renderer: string }
 /** Built-in rendering wrapped by extensions: an optional replacement, then decorators innermost first. */
-export interface HookTrees { readonly replace?: HookTree; readonly decorators: readonly HookTree[] }
+type CardPresentation = Omit<ToolCardPresentation, "body">
+export interface HookCard extends CardPresentation { readonly body?: HookTree }
+export interface HookTrees { readonly card?: HookCard; readonly replace?: HookTree; readonly decorators: readonly HookTree[] }
 
 export interface ManagerOptions {
   readonly cacheRoot: string
@@ -589,15 +591,15 @@ export class ExtensionManager {
   }
 
   /** Extension trees around one tool card; `undefined` parts keep the built-in card. */
-  toolCall(input: ToolCallInput): HookTrees {
+  toolCall(input: ToolCallInput, resultJson?: string): HookTrees {
     this.hookVersion()
-    return this.hookTrees("tool_call", `${input.id}:${Bun.hash(JSON.stringify([input.status, input.summary, input.output, input.error]))}`, 0, input)
+    return this.hookTrees("tool_call", 0, input, resultJson)
   }
 
   /** Decorations around the composer (the composer itself always stays the host's). */
   composer(width: number): HookTrees {
     this.hookVersion()
-    return this.hookTrees("composer", `w${width}`, width, undefined)
+    return this.hookTrees("composer", width)
   }
 
   /** Extension pretty printing of a tool output; `base` until the formatters answer. */
@@ -786,18 +788,26 @@ export class ExtensionManager {
     return out.sort((a, b) => a.item.priority - b.item.priority || a.entry.catalog.bundleId.localeCompare(b.entry.catalog.bundleId))
   }
 
-  private hookTrees(target: RendererContribution["target"], inputKey: string, width: number, input: ToolCallInput | undefined): HookTrees {
-    const renderers = this.ordered((contributions) => contributions.renderers.filter((renderer) => renderer.target === target))
+  private hookTrees(target: RendererContribution["target"], width: number, input?: ToolCallInput, resultJson?: string): HookTrees {
+    const renderers = this.ordered((contributions) => contributions.renderers.filter((renderer) => renderer.target === target && (!renderer.tools || (input && renderer.tools.includes(input.tool)))))
     if (renderers.length === 0) return { decorators: [] }
+    const inputKey = input ? `${input.id}:${Bun.hash(JSON.stringify([input, resultJson]))}` : `w${width}`
     const decorators: HookTree[] = []
     let replace: HookTree | undefined
+    let card: HookCard | undefined
     for (const { entry, item } of renderers) {
       const slot = `renderer:${item.id}:${inputKey}`
       const cacheKey = String(entry.generation)
       const cached = entry.surfaces.get(slot)
       if (cached?.key !== cacheKey && !entry.inflight.has(slot)) {
         entry.inflight.add(slot)
-        const scoped = input && !entry.catalog.permissions.includes("tui.transcript.read") ? { id: input.id, tool: input.tool, status: input.status, summary: input.summary } : input
+        let output: JsonValue | undefined
+        if (item.tools && resultJson !== undefined && entry.catalog.permissions.includes("tui.transcript.read")) {
+          try { output = JSON.parse(resultJson) } catch { output = resultJson }
+        }
+        const scoped = input && !entry.catalog.permissions.includes("tui.transcript.read")
+          ? { id: input.id, tool: input.tool, status: input.status, summary: item.tools ? "" : input.summary }
+          : input && item.tools ? { ...input, ...(output === undefined ? { output: undefined } : { output }) } : input
         void this.renderSurface(entry, { kind: "renderer", id: item.id }, width, 0, scoped as JsonValue | undefined, item.mode === "decorate" ? "require" : "forbid").then((rendered) => {
           entry.inflight.delete(slot)
           // The composer is never re-parented (its input keeps focus): its decoration must be a column with the slot as a direct child.
@@ -809,24 +819,38 @@ export class ExtensionManager {
           this.bumpHooks()
         })
       }
-      const node = cached?.view.node
-      if (!node) continue
-      const tree = { node, extension: entry.catalog.bundleId, renderer: item.id }
-      if (item.mode === "replace") replace = tree
-      else decorators.push(tree)
+      const view = cached?.view
+      const tree = view?.node && { node: view.node, extension: entry.catalog.bundleId, renderer: item.id }
+      if (item.tools && view?.card) {
+        card = { ...view.card, ...(tree ? { body: tree } : {}) }
+        replace = undefined
+      } else if (tree && !item.tools) {
+        if (item.mode === "replace") { replace = tree; card = undefined }
+        else decorators.push(tree)
+      }
     }
-    return { ...(replace ? { replace } : {}), decorators }
+    return { ...(replace ? { replace } : {}), ...(card ? { card } : {}), decorators }
   }
 
   private async renderSurface(entry: Running, surface: SurfaceRef, width: number, height: number, input: JsonValue | undefined, slot: "forbid" | "require"): Promise<SurfaceView> {
     const result = await this.call(entry, "tui/render", { surface, width, height, now: Date.now(), ...(input === undefined ? {} : { input }) })
-    if (!result || result.root === null || result.root === undefined) return {}
+    if (!result) return {}
+    const summary = safeText(result.card?.summary)
+    const chip = safeText(result.card?.statusChip)
+    const card = summary === undefined ? {} : {
+      card: {
+        summary: summary.replace(/\s+/g, " ").slice(0, 512),
+        ...(result.card?.expandedByDefault === true ? { expandedByDefault: true } : {}),
+        ...(chip ? { statusChip: chip.replace(/\s+/g, " ").slice(0, 64) } : {}),
+      },
+    }
+    if (result.root === null || result.root === undefined) return card
     const node = validateRenderNode(result.root, {
       slot,
       actions: entry.catalog.permissions.includes("tui.action"),
       transcriptEmbed: entry.catalog.permissions.includes("tui.transcript.embed"),
     })
-    return typeof node === "string" ? { error: `${entry.catalog.bundleId}: ${node}` } : { node }
+    return typeof node === "string" ? { error: `${entry.catalog.bundleId}: ${node}` } : { node, ...card }
   }
 
   /** One request; failures resolve `undefined` (the caller falls back) and are recorded as warnings. A timeout fails the extension. */
@@ -921,16 +945,16 @@ export class ExtensionManager {
       const plan = await planSandbox({ argv: [bun, join(sdk.dir, "src", "main.ts")], policy: this.options.sandbox ?? "best-effort", readable: [sdk.dir, this.options.cacheRoot], cacheRoot: this.options.cacheRoot })
       this.hostIsolated = plan.isolated
       this.hostWarning = plan.warning
-      const channel: HostChannel = new HostChannel({
+      const link: HostChannel = new HostChannel({
         argv: plan.argv,
         timeoutMs: this.options.timeoutMs ?? 5_000,
         ...(this.options.spawn ? { spawn: this.options.spawn } : {}),
         serve: (method, params) => this.serveHost(method, params),
         log: (ext, line) => this.hostLog(ext, line),
-        onExit: (reason) => this.hostExited(channel, reason),
+        onExit: (reason) => this.hostExited(link, reason),
       })
-      this.host = channel
-      return channel
+      this.host = link
+      return link
     })().finally(() => { this.hostStart = undefined })
     return this.hostStart
   }
@@ -1017,8 +1041,8 @@ export class ExtensionManager {
   }
 
   /** The host died: every extension in it failed; the running ones restart (in a new host) within their budget. */
-  private hostExited(channel: HostChannel, reason: string): void {
-    if (this.host !== channel) return
+  private hostExited(link: HostChannel, reason: string): void {
+    if (this.host !== link) return
     this.host = undefined
     for (const entry of this.running.values()) {
       if (entry.state !== "running") continue
@@ -1145,6 +1169,7 @@ function validateHostCommand(value: unknown): HostCommand | string {
   ]
   if (!known.includes(command)) return `unknown command ${command}`
   if (["session.open", "session.menu", "project.switch", "project.menu", "project.rename", "project.set_roots", "project.delete"].includes(command) && typeof row.id !== "string") return `${command} requires id`
+  if (command === "session.open" && row.exact !== undefined && typeof row.exact !== "boolean") return "session.open exact must be a boolean"
   if (["project.create", "project.rename"].includes(command) && typeof row.name !== "string") return `${command} requires name`
   if (["project.create", "project.set_roots"].includes(command) && (!Array.isArray(row.roots) || row.roots.some((root) => typeof root !== "string"))) return `${command} requires roots`
   if (command === "fs.complete" && (typeof row.input !== "string" || typeof row.token !== "string")) return "fs.complete requires input and token"

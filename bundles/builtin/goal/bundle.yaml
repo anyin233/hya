@@ -24,3 +24,22 @@ resources:
 agents:
   - path: agents/hya-goal-guide.md
   - path: agents/hya-goal-verifier.md
+cli:
+  - kind: prompt
+    about: >-
+      Headless goal mode: iterate the agent until an independent evaluator
+      reports the goal met, or the iteration cap trips.
+    driver: goal
+    args:
+      - id: max_iterations
+        long: max-iterations
+        value: integer
+        default: "6"
+        help: Iteration cap for `-p` goal mode.
+      - id: evaluator_model
+        long: evaluator-model
+        value_name: PROVIDER/MODEL
+        help: >-
+          Evaluator model for `-p` goal mode as `provider/model`. Overrides the
+          bundle config `goal.evaluator_model`; without either, the worker's
+          current model judges (unless a hook implements `hya/goal:evaluate`).

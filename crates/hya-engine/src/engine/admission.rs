@@ -1,16 +1,105 @@
-use hya_proto::{ActorClaim, Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
+use std::sync::Arc;
+
+use hya_proto::{
+    ActorClaim, AgentName, Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId,
+};
+use hya_runtime_abi::{
+    HookPoint, HostError, NativeHook, NativeTurnAdmitInput, NativeTurnAdmitOutcome,
+};
+use tokio_util::sync::CancellationToken;
 
 use super::SessionEngine;
-use crate::TurnBinding;
 use crate::error::CoreError;
-use crate::hooks::{
-    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome,
-};
+use crate::hooks::{NativeCommandBeforeInput, NativeMessageUserBeforeInput, activation_hook_for};
 use crate::store_bridge::{
     RecoveredActorClaim, RecoveredResidentWork, ResidentArchive, ResidentArchiveOwner,
     SessionStoreExt as _,
 };
+use crate::{HookChain, TurnBinding};
+
+// Keep the external-entry restriction until its bundle owns admission.
+struct ExternalTurnGuard(Vec<Envelope>);
+
+#[async_trait::async_trait]
+impl NativeHook for ExternalTurnGuard {
+    fn id(&self) -> &str {
+        "external-turn-guard"
+    }
+
+    fn hook_points(&self) -> &[HookPoint] {
+        &[HookPoint::TurnAdmit]
+    }
+
+    async fn turn_admit(
+        &self,
+        input: NativeTurnAdmitInput,
+    ) -> Result<NativeTurnAdmitOutcome, HostError> {
+        // Registration survives archive and revival.
+        if self.0.iter().any(|envelope| {
+            matches!(
+                hya_tool::extension::ExtensionEvent::from_event(&envelope.event),
+                Some(hya_tool::extension::ExtensionEvent::AgentRegistered {
+                    agent_session, ..
+                }) if agent_session == input.session
+            )
+        }) {
+            return Ok(NativeTurnAdmitOutcome::Refuse {
+                reason: "this subagent's episodes own its turns; steer this subagent with mail"
+                    .into(),
+            });
+        }
+        Ok(NativeTurnAdmitOutcome::Admit)
+    }
+}
+
+fn map_admission_error(error: HostError) -> CoreError {
+    match error {
+        HostError::Cancelled => CoreError::Cancelled,
+        HostError::InvalidInput(reason) => CoreError::Invalid(reason),
+        other => CoreError::Tool(Arc::new(other.into())),
+    }
+}
+
+fn completed_text_events(session: SessionId, role: Role, text: String) -> (MessageId, [Event; 5]) {
+    let message = MessageId::new();
+    let part = PartId::new();
+    (
+        message,
+        [
+            Event::MessageStarted {
+                session,
+                message,
+                role,
+                agent: None,
+                model: None,
+            },
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+            Event::TextDelta {
+                session,
+                message,
+                part,
+                delta: text,
+            },
+            Event::TextEnd {
+                session,
+                message,
+                part,
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role,
+                finish: FinishReason::Stop,
+                tokens: None,
+                cause: None,
+            },
+        ],
+    )
+}
 
 impl SessionEngine {
     async fn admission_binding(
@@ -50,29 +139,24 @@ impl SessionEngine {
         if hooks.is_empty() {
             return text;
         }
-        let dispatcher = crate::HookChain::new(hooks);
-        match dispatcher
-            .message_user_before(MessageUserBeforeInput { session, text })
+        crate::HookChain::new(hooks)
+            .message_user_before(NativeMessageUserBeforeInput { session, text })
             .await
-        {
-            MessageUserBeforeOutcome::Continue { text } => text,
-        }
     }
 
     async fn apply_bundle_command_hook(
         &self,
         binding: &TurnBinding,
         stable_id: &str,
-        input: CommandExecuteBeforeInput,
+        input: NativeCommandBeforeInput,
     ) -> String {
         let hooks = binding.bundle_hooks_for_agent(stable_id);
         if hooks.is_empty() {
             return input.text;
         }
-        let dispatcher = crate::HookChain::new(hooks);
-        let CommandExecuteBeforeOutcome::Continue { text } =
-            dispatcher.command_execute_before(input).await;
-        text
+        crate::HookChain::new(hooks)
+            .command_execute_before(input)
+            .await
     }
     pub(crate) async fn recover_resident_actor_durable(
         &self,
@@ -167,21 +251,56 @@ impl SessionEngine {
     /// [`CoreError::Invalid`] with mail guidance for a team member; store failures.
     pub async fn ensure_external_turn_allowed(&self, session: SessionId) -> Result<(), CoreError> {
         let (root, depth) = self.session_lineage(session).await?;
-        // Registration is a permanent identity fact. Unlike the current roster
-        // or claim, its event survives archive/revive and needs no episode lock.
-        if depth > 0
-            && self.replay(root).await?.iter().any(|envelope| {
-                matches!(
-                    hya_tool::extension::ExtensionEvent::from_event(&envelope.event),
-                    Some(hya_tool::extension::ExtensionEvent::AgentRegistered {
-                        agent_session, ..
-                    }) if agent_session == session
-                )
-            })
-        {
-            return Err(CoreError::Invalid(
-                "this subagent's episodes own its turns; steer this subagent with mail".into(),
-            ));
+        if depth > 0 {
+            let guard: Arc<dyn NativeHook> = Arc::new(ExternalTurnGuard(self.replay(root).await?));
+            let agent = self
+                .store
+                .with_projection(session, |projection| projection.session.agent.clone())
+                .await?;
+            HookChain::of_hooks([guard])
+                .turn_admit(NativeTurnAdmitInput {
+                    session,
+                    root,
+                    agent,
+                    actor_claim: None,
+                })
+                .await
+                .map_err(map_admission_error)?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn apply_turn_admission_hooks(
+        &self,
+        session: SessionId,
+        agent: AgentName,
+        claim: Option<&ActorClaim>,
+        cancel: &CancellationToken,
+    ) -> Result<(), CoreError> {
+        let global = self.global_hooks();
+        let scoped = activation_hook_for(session);
+        let hooks = HookChain::concat([Some(&global), scoped.as_deref()].into_iter().flatten());
+        if !hooks.handles(HookPoint::TurnAdmit) {
+            return Ok(());
+        }
+        let (root, _) = self.session_lineage(session).await?;
+        let input = NativeTurnAdmitInput {
+            session,
+            root,
+            agent: Some(agent),
+            actor_claim: claim.copied(),
+        };
+        let steering = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(CoreError::Cancelled),
+            result = hooks.turn_admit(input) => result.map_err(map_admission_error)?,
+        };
+        if !steering.is_empty() {
+            let events = steering
+                .into_iter()
+                .flat_map(|text| completed_text_events(session, Role::System, text).1)
+                .collect();
+            self.emit_batch_for_actor(claim, session, events).await?;
         }
         Ok(())
     }
@@ -216,59 +335,10 @@ impl SessionEngine {
         content: String,
         role: Role,
     ) -> Result<MessageId, CoreError> {
-        let message = MessageId::new();
-        let part = PartId::new();
-        self.emit(
-            session,
-            Event::MessageStarted {
-                session,
-                message,
-                role,
-                agent: None,
-                model: None,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextStart {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextDelta {
-                session,
-                message,
-                part,
-                delta: content,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TextEnd {
-                session,
-                message,
-                part,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::MessageFinished {
-                session,
-                message,
-                role,
-                finish: FinishReason::Stop,
-                tokens: None,
-                cause: None,
-            },
-        )
-        .await?;
+        let (message, events) = completed_text_events(session, role, content);
+        for event in events {
+            self.emit(session, event).await?;
+        }
         Ok(message)
     }
 
@@ -282,15 +352,18 @@ impl SessionEngine {
             .await
     }
 
-    /// Admit a user prompt using a pre-captured runtime [`TurnBinding`].
+    /// Admit a user prompt using a pre-captured runtime [`TurnBinding`],
+    /// fenced by `actor_claim` when one is given.
     pub async fn admit_user_prompt_with_binding(
         &self,
+        actor_claim: Option<&ActorClaim>,
         session: SessionId,
         text: String,
         binding: &TurnBinding,
         stable_id: &str,
     ) -> Result<MessageId, CoreError> {
         self.admit_user_prompt_with_id_and_binding(
+            actor_claim,
             session,
             MessageId::new(),
             text,
@@ -309,8 +382,10 @@ impl SessionEngine {
     ) -> Result<MessageId, CoreError> {
         self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
-        self.admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
-            .await
+        self.admit_user_prompt_with_id_and_binding(
+            None, session, message, text, &binding, &stable_id,
+        )
+        .await
     }
 
     /// The user text after the `message.user.before` hooks (global, then
@@ -322,13 +397,10 @@ impl SessionEngine {
         session: SessionId,
         text: String,
     ) -> String {
-        let mut text = text;
-        for hooks in self.native_hooks.iter().chain(self.hooks.iter()) {
-            let MessageUserBeforeOutcome::Continue { text: next } = hooks
-                .message_user_before(MessageUserBeforeInput { session, text })
-                .await;
-            text = next;
-        }
+        let text = self
+            .hooks
+            .message_user_before(NativeMessageUserBeforeInput { session, text })
+            .await;
         self.apply_bundle_message_hook(binding, stable_id, session, text)
             .await
     }
@@ -431,6 +503,7 @@ impl SessionEngine {
 
     pub(crate) async fn admit_user_prompt_with_id_and_binding(
         &self,
+        actor_claim: Option<&ActorClaim>,
         session: SessionId,
         message: MessageId,
         text: String,
@@ -445,7 +518,7 @@ impl SessionEngine {
             .await;
         let part = PartId::new();
         self.emit_batch_for_actor(
-            None,
+            actor_claim,
             session,
             vec![
                 Event::MessageStarted {
@@ -532,23 +605,20 @@ impl SessionEngine {
     ) -> Result<MessageId, CoreError> {
         self.ensure_external_turn_allowed(session).await?;
         let (binding, stable_id) = self.admission_binding(session).await?;
-        let mut text = text;
-        for hooks in self.native_hooks.iter().chain(self.hooks.iter()) {
-            let CommandExecuteBeforeOutcome::Continue { text: next } = hooks
-                .command_execute_before(CommandExecuteBeforeInput {
-                    session,
-                    command: command.clone(),
-                    arguments: arguments.clone(),
-                    text,
-                })
-                .await;
-            text = next;
-        }
+        let text = self
+            .hooks
+            .command_execute_before(NativeCommandBeforeInput {
+                session,
+                command: command.clone(),
+                arguments: arguments.clone(),
+                text,
+            })
+            .await;
         let text = self
             .apply_bundle_command_hook(
                 &binding,
                 &stable_id,
-                CommandExecuteBeforeInput {
+                NativeCommandBeforeInput {
                     session,
                     command: command.clone(),
                     arguments: arguments.clone(),
@@ -557,7 +627,9 @@ impl SessionEngine {
             )
             .await;
         let message = self
-            .admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
+            .admit_user_prompt_with_id_and_binding(
+                None, session, message, text, &binding, &stable_id,
+            )
             .await?;
         self.emit(
             session,
@@ -585,6 +657,113 @@ mod tests {
 
     use super::*;
     use crate::{CreateSession, EventBus};
+
+    struct TestAdmissionHook {
+        outcome: std::sync::Mutex<Option<NativeTurnAdmitOutcome>>,
+        entered: CancellationToken,
+    }
+
+    impl TestAdmissionHook {
+        fn once(outcome: NativeTurnAdmitOutcome) -> Arc<Self> {
+            Arc::new(Self {
+                outcome: std::sync::Mutex::new(Some(outcome)),
+                entered: CancellationToken::new(),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl NativeHook for TestAdmissionHook {
+        fn id(&self) -> &str {
+            "test-admission"
+        }
+
+        fn hook_points(&self) -> &[HookPoint] {
+            &[HookPoint::TurnAdmit]
+        }
+
+        async fn turn_admit(
+            &self,
+            _input: NativeTurnAdmitInput,
+        ) -> Result<NativeTurnAdmitOutcome, HostError> {
+            self.entered.cancel();
+            Ok(self.outcome.lock().unwrap().take().unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn admission_waits_in_order_and_commits_steering_only_after_acceptance() {
+        let store = hya_store::SessionStore::connect_memory().await.unwrap();
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+        let engine = SessionEngine::new(
+            store,
+            Arc::new(ProviderRouter::new()),
+            crate::test_support::runtime(hya_tool_loader::builtins()),
+            permission,
+            EventBus::default(),
+        );
+        let agent = AgentName::new("build");
+        let session = engine
+            .create(CreateSession {
+                parent: None,
+                agent: agent.clone(),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
+            })
+            .await
+            .unwrap();
+        let original_seq = engine
+            .read_projection_shared(session)
+            .await
+            .unwrap()
+            .last_seq;
+        let steer = || {
+            TestAdmissionHook::once(NativeTurnAdmitOutcome::Steer {
+                message: "steering".into(),
+            })
+        };
+        let refused = engine.clone().with_hook_list(vec![
+            steer(),
+            TestAdmissionHook::once(NativeTurnAdmitOutcome::Refuse {
+                reason: "admission refused".into(),
+            }),
+        ]);
+        let cancel = CancellationToken::new();
+        let error = refused
+            .apply_turn_admission_hooks(session, agent.clone(), None, &cancel)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CoreError::Invalid(reason) if reason == "admission refused"));
+        assert_eq!(
+            engine
+                .read_projection_shared(session)
+                .await
+                .unwrap()
+                .last_seq,
+            original_seq
+        );
+
+        let (ready, until) = tokio::sync::oneshot::channel();
+        let deferred = TestAdmissionHook::once(NativeTurnAdmitOutcome::Defer { until });
+        let entered = deferred.entered.clone();
+        let accepted = engine.with_hook_list(vec![deferred, steer()]);
+        let admission = accepted.apply_turn_admission_hooks(session, agent, None, &cancel);
+        let mut admission = std::pin::pin!(admission);
+        tokio::select! {
+            outcome = &mut admission => panic!("admitted before readiness: {outcome:?}"),
+            () = entered.cancelled() => {}
+        }
+        assert!(futures::poll!(&mut admission).is_pending());
+        ready.send(()).unwrap();
+        admission.await.unwrap();
+        let events = accepted.replay(session).await.unwrap();
+        assert_eq!(events.last().unwrap().seq.0, original_seq + 5);
+        assert!(events.iter().any(|envelope| {
+            matches!(&envelope.event, Event::TextDelta { delta, .. } if delta == "steering")
+        }));
+    }
 
     #[tokio::test]
     async fn ordinary_user_message_commits_once() {

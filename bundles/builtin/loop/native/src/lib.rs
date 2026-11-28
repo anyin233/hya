@@ -1,4 +1,4 @@
-//! Native implementation of the `hya/loop` built-in bundle (`LoopDriver` and
+//! Native implementation of the `hya/loop` built-in bundle (`hya/loop:loop` driver and
 //! `LoopService`) exported via Lockstep Native ABI v2.
 //!
 //! All host interactions flow exclusively through `Arc<dyn HostRuntime>`:
@@ -20,7 +20,9 @@ pub mod service;
 /// Core loop domain types, traits, budget validation, and transcript rendering.
 pub mod types;
 
-pub use driver::{IterationDriver, NativeLoopDriver, WorkerSessionExecutor, drive_loop, run_loop};
+pub use driver::{
+    IterationDriver, LoopRunRequest, NativeLoopDriver, WorkerSessionExecutor, drive_loop, run_loop,
+};
 pub use evaluators::{
     DEFAULT_LOOP_PLANNER_SYSTEM, DEFAULT_LOOP_VERIFIER_SYSTEM, HookLoopPlanner, HookLoopVerifier,
     ModelLoopPlanner, ModelLoopVerifier, RuntimeShouldStopHook,
@@ -43,8 +45,10 @@ hya_runtime_abi::export_native_bundle_v2!(|out| {
     let service = Arc::new(LoopService::new());
     out.services
         .push(Arc::clone(&service) as Arc<dyn hya_runtime_abi::NativeService>);
-    out.loop_drivers
-        .push(Arc::new(NativeLoopDriver::new(service)) as Arc<dyn hya_runtime_abi::LoopDriver>);
+    out.hook_points
+        .extend(types::LOOP_HOOK_POINTS.map(str::to_string));
+    out.drivers
+        .push(Arc::new(NativeLoopDriver::new(service)) as Arc<dyn hya_runtime_abi::NativeDriver>);
 });
 
 #[cfg(test)]

@@ -252,7 +252,10 @@ mod tests {
             !member.contains("NEVER call `report`")
                 && member.contains("Finish your task with `report`")
         );
-        for agent in crate::builtin_agents::preset_agents() {
+        let Ok(core_agents) = hya_bundle::first_party_bundle("hya/core-agents") else {
+            panic!("first-party hya/core-agents must load");
+        };
+        for agent in core_agents.bundles()[0].agents() {
             if let Some(prompt) = agent.prompt.as_deref() {
                 assert!(
                     !prompt.contains("NEVER call `report`"),

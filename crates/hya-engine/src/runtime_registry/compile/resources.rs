@@ -23,17 +23,17 @@ pub enum AgentToolPlane {
 impl AgentToolPlane {
     /// Plane for an agent of this origin.
     ///
-    /// Built-in agents (`hya/core-agents`) and trusted first-party interactive
-    /// agent bundles (`hya/multi-agent`, `hya/plan`) run on the full Harness
-    /// plane so workers like `hya-task` and `hya-plan` see project skills,
-    /// Harness MCP, and plugin tools. All other bundle agents stay clamped to
-    /// [`Self::InternalPublic`].
+    /// The compiled-in `hya-bare` and the trusted first-party interactive
+    /// agent bundles (`hya/core-agents`, `hya/multi-agent`, `hya/plan`) run on
+    /// the full Harness plane so agents like `hya-main`, `hya-task` and
+    /// `hya-plan` see project skills, Harness MCP, and plugin tools. All other
+    /// bundle agents stay clamped to [`Self::InternalPublic`].
     #[must_use]
     pub fn for_origin(origin: &AgentOrigin<'_>) -> Self {
         match origin {
             AgentOrigin::Builtin => Self::Full,
             AgentOrigin::Bundle {
-                bundle_id: "hya/multi-agent" | "hya/plan",
+                bundle_id: "hya/core-agents" | "hya/multi-agent" | "hya/plan",
             } => Self::Full,
             AgentOrigin::Bundle { .. } => Self::InternalPublic,
         }
@@ -160,21 +160,9 @@ impl TurnBinding {
         let definition = self.snapshot.catalog.require(stable_id)?;
         let plane = AgentToolPlane::for_origin(&definition.origin);
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
-        // Built-ins own no bundle: their view comes from the core-agents
-        // preset (read-only agents deny the write tools), and they carry no hooks.
+        // `hya-bare` owns no bundle: the default view, no hooks, no advertising.
         let (resource_view, hook_refs, advertise) = match bundle_id.as_deref() {
-            None => self
-                .snapshot
-                .catalog
-                .preset_agent(stable_id)
-                .map(|agent| {
-                    (
-                        agent.resource_view.clone(),
-                        Vec::new(),
-                        agent.advertise.clone(),
-                    )
-                })
-                .unwrap_or_default(),
+            None => Default::default(),
             Some(id) => {
                 let (_, agent) = self
                     .snapshot
@@ -262,18 +250,7 @@ impl TurnBinding {
         let definition = self.snapshot.catalog.require(stable_id)?;
         let bundle_id = definition.origin.bundle_id().map(str::to_string);
         let (resource_view, hook_refs, advertise) = match bundle_id.as_deref() {
-            None => self
-                .snapshot
-                .catalog
-                .preset_agent(stable_id)
-                .map(|agent| {
-                    (
-                        agent.resource_view.clone(),
-                        Vec::new(),
-                        agent.advertise.clone(),
-                    )
-                })
-                .unwrap_or_default(),
+            None => Default::default(),
             Some(_) => {
                 let (_, agent) = self
                     .snapshot

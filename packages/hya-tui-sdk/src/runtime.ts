@@ -7,7 +7,7 @@ import {
   type ToolCallInput, type TuiResponse,
 } from "./protocol";
 import type { RenderNode } from "./render";
-import type { FsEvent } from "./wire";
+import type { FsEvent, ToolCardPresentation } from "./wire";
 
 export type { FsEvent } from "./wire";
 export interface FsEntry { readonly name: string; readonly kind: "file" | "dir" | "other" }
@@ -161,6 +161,14 @@ interface RendererBase {
   readonly priority?: number;
   readonly onAction?: ActionHandler;
 }
+export interface ToolRendererOptions {
+  readonly id: string;
+  readonly tools: readonly string[];
+  readonly priority?: number;
+  readonly render: (input: ToolCallInput, context: RenderContext) => MaybePromise<ToolCardPresentation | null | undefined>;
+  readonly onAction?: ActionHandler;
+}
+
 export type RendererOptions =
   | RendererBase & { readonly target: "tool_call"; readonly render: (input: ToolCallInput, context: RenderContext) => MaybePromise<Renderable> }
   /** The composer is decorate-only: its input and keys always stay the host's. */
@@ -189,6 +197,7 @@ export interface TuiExtensionApi {
   readonly registerPane: (pane: PaneOptions) => void;
   readonly registerCommand: (command: SlashCommandOptions) => void;
   readonly registerStatusItem: (item: StatusItemOptions) => void;
+  readonly registerToolRenderer: (renderer: ToolRendererOptions) => void;
   readonly registerRenderer: (renderer: RendererOptions) => void;
   readonly registerFormatter: (formatter: FormatterOptions) => void;
   readonly registerInterceptor: (interceptor: InterceptorOptions) => void;
@@ -251,7 +260,7 @@ export class TuiExtensionRunner {
   private readonly panes = new Map<string, PaneOptions>();
   private readonly commands = new Map<string, SlashCommandOptions>();
   private readonly statuses = new Map<string, StatusItemOptions>();
-  private readonly renderers = new Map<string, RendererOptions>();
+  private readonly renderers = new Map<string, RendererOptions | (ToolRendererOptions & { target: "tool_call"; mode: "replace" })>();
   private readonly formatters = new Map<string, FormatterOptions>();
   private readonly interceptors = new Map<string, InterceptorOptions>();
   private readonly contextHandlers: ((context: ExtensionContext) => MaybePromise<boolean | void>)[] = [];
@@ -307,6 +316,14 @@ export class TuiExtensionRunner {
             return result(frame.id, { root: text ? { kind: "text", text } : null });
           }
           const renderer = this.lookup(this.renderers, surface.id);
+          if ("tools" in renderer) {
+            const input = params.input as unknown as ToolCallInput;
+            const card = renderer.tools.includes(input.tool) ? await renderer.render(input, size) : null;
+            return result(frame.id, card ? {
+              root: card.body ?? null,
+              card: { summary: card.summary, statusChip: card.statusChip, expandedByDefault: card.expandedByDefault },
+            } : { root: null });
+          }
           return result(frame.id, { root: toNode(await renderer.render(params.input as never, size)) });
         }
         case "tui/format": {
@@ -425,7 +442,7 @@ export class TuiExtensionRunner {
         ...(command.argumentHint ? { argument_hint: command.argumentHint } : {}),
       })),
       status_items: [...this.statuses.values()].map((item) => ({ id: item.id, label: item.label, priority: item.priority ?? 7 })),
-      renderers: [...this.renderers.values()].map((renderer) => ({ id: renderer.id, target: renderer.target, mode: renderer.mode ?? "decorate", priority: renderer.priority ?? 0 })),
+      renderers: [...this.renderers.values()].map((renderer) => ({ id: renderer.id, target: renderer.target, mode: renderer.mode ?? "decorate", priority: renderer.priority ?? 0, ...("tools" in renderer ? { tools: renderer.tools } : {}) })),
       formatters: [...this.formatters.values()].map((formatter) => ({ id: formatter.id, priority: formatter.priority ?? 0 })),
       interceptors: [...this.interceptors.values()].map((interceptor) => ({ id: interceptor.id, target: interceptor.target, priority: interceptor.priority ?? 0 })),
     };
@@ -514,6 +531,9 @@ export class TuiExtensionRunner {
       registerStatusItem: (item) => {
         if (item.priority !== undefined && (item.priority < 1 || item.priority > 9)) throw new Error(`status item ${item.id}: priority must be 1..9`);
         add(this.statuses, "status item", item);
+      },
+      registerToolRenderer: (renderer) => {
+        add(this.renderers, "renderer", { ...renderer, target: "tool_call", mode: "replace" });
       },
       registerRenderer: (renderer) => {
         const mode: string | undefined = renderer.mode;

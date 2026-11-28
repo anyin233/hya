@@ -77,6 +77,8 @@ export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "identity",
   "namespace",
   "overrides",
+  "requires",
+  "default_agent",
   "runtime",
   "check",
   "schemas",
@@ -88,6 +90,7 @@ export const ALLOWED_TOP_LEVEL_KEYS = new Set([
   "agents",
   "channels",
   "workflow",
+  "cli",
 ]);
 
 export const ALLOWED_MCP_KEYS = new Set([
@@ -973,11 +976,11 @@ export function validateBundleStatic(bundleDir) {
   }
 
   // Validate Agents (inline and standalone agents/*.md frontmatter)
+  const seenAgents = new Map();
   if (manifest.agents !== undefined) {
     if (!Array.isArray(manifest.agents)) {
       errors.push(`${manifestFile}: agents must be a list`);
     } else {
-      const seenAgents = new Set();
       for (let i = 0; i < manifest.agents.length; i++) {
         let agent = manifest.agents[i];
         const where = `agents[${i}]`;
@@ -1012,7 +1015,7 @@ export function validateBundleStatic(bundleDir) {
         } else if (seenAgents.has(agent.id)) {
           errors.push(`${where}.id duplicate agent id \`${agent.id}\``);
         } else {
-          seenAgents.add(agent.id);
+          seenAgents.set(agent.id, agent);
         }
         if (agent.role !== "main" && agent.role !== "subagent") {
           errors.push(`${where}.role must be \`main\` or \`subagent\` (got ${JSON.stringify(agent.role)})`);
@@ -1038,6 +1041,29 @@ export function validateBundleStatic(bundleDir) {
       if (markdownBody !== null && (manifest.agents.length !== 1 || manifest.agents[0]?.prompt)) {
         errors.push(`${manifestFile}: Markdown body requires exactly one agent without an explicit prompt`);
       }
+    }
+  }
+
+  // Prerequisite bundles and the bundle's default primary Agent
+  if (manifest.requires !== undefined) {
+    if (!Array.isArray(manifest.requires)) {
+      errors.push(`${manifestFile}: requires must be a list of bundle ids`);
+    } else {
+      for (const required of manifest.requires) {
+        if (typeof required !== "string" || !/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(required)) {
+          errors.push(`${manifestFile}: requires entries must be <publisher>/<name> (got ${JSON.stringify(required)})`);
+        } else if (required === manifest.identity?.id) {
+          errors.push(`${manifestFile}: a bundle cannot require itself`);
+        }
+      }
+    }
+  }
+  if (manifest.default_agent !== undefined) {
+    const agent = seenAgents.get(manifest.default_agent);
+    if (agent === undefined) {
+      errors.push(`${manifestFile}: default_agent ${JSON.stringify(manifest.default_agent)} must name an Agent of this bundle`);
+    } else if (agent.role !== "main" || agent.private === true) {
+      errors.push(`${manifestFile}: default_agent \`${manifest.default_agent}\` must be a non-private \`role: main\` Agent`);
     }
   }
 

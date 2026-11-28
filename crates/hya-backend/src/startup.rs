@@ -1,18 +1,15 @@
 //! Runtime composition for headless CLI commands.
 
 use anyhow::Context as _;
-use hya_app::{BuiltSessionEngine, config};
+use hya_app::BuiltSessionEngine;
 use hya_engine::{AgentSpec, CreateSession};
 use hya_proto::SessionId;
-use hya_provider::ProviderRouter;
 use hya_store::SessionStore;
 
 pub(crate) struct StartedEngine {
     pub(crate) built: BuiltSessionEngine,
     pub(crate) agent: AgentSpec,
     pub(crate) default_agent: Option<String>,
-    pub(crate) evaluator_router: ProviderRouter,
-    pub(crate) evaluator_model: String,
 }
 
 pub(crate) async fn start(
@@ -29,23 +26,45 @@ pub(crate) async fn start(
             .await;
         return Err(error);
     }
-    let runtime = hya_app::resolve_runtime(model)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure)
-        .with_bare(bare);
+    let runtime = hya_app::resolve_runtime(model).await;
     hya_app::startup_trace::mark("runtime_resolved", None);
-    let agent = hya_app::agent_for_runtime(&runtime, None);
-    let evaluator_router = runtime.router.clone();
-    let evaluator_model = config::resolve_evaluator_model(
-        None,
-        runtime.settings.goal().evaluator_model.as_deref(),
-        &runtime.model,
-    )
-    .to_string();
+    start_with(store, runtime, yolo, bare, pure, true).await
+}
+
+/// [`start`] on an already resolved runtime configuration; `project_plugins`
+/// false loads no `<root>/.hya/plugins` manifests.
+async fn start_with(
+    store: SessionStore,
+    runtime: hya_app::RuntimeConfig,
+    yolo: bool,
+    bare: bool,
+    pure: bool,
+    project_plugins: bool,
+) -> anyhow::Result<StartedEngine> {
+    let exit_store = store.clone();
+    let runtime = runtime.with_yolo(yolo).with_pure(pure).with_bare(bare);
+    let agent = match hya_app::agent_for_runtime(&runtime, None) {
+        Ok(agent) => agent,
+        Err(error) => {
+            exit_store
+                .drain_and_report_exit(hya_store::EXIT_DRAIN_TIMEOUT)
+                .await;
+            return Err(error);
+        }
+    };
     let tool_config = (runtime.permission, runtime.settings);
     let built_res = if pure {
         hya_app::build_session_engine_pure(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            tool_config,
+        )
+        .await
+    } else if !project_plugins {
+        hya_app::build_session_engine_without_project_plugins(
             store,
             runtime.router,
             &agent,
@@ -78,17 +97,139 @@ pub(crate) async fn start(
         built,
         agent,
         default_agent: runtime.default_agent,
-        evaluator_router,
-        evaluator_model,
     })
+}
+
+/// A headless runtime whose permission asks and questions are rejected,
+/// before or without a session.
+pub(crate) struct HeadlessRuntime {
+    pub(crate) built: BuiltSessionEngine,
+    pub(crate) agent: AgentSpec,
+    default_agent: Option<String>,
+    explicit_model: bool,
+    responder: RejectResponder,
+    root_drivers: Vec<hya_engine::resident::RootDriverActivity>,
+}
+
+impl HeadlessRuntime {
+    pub(crate) async fn start(
+        store: SessionStore,
+        model: Option<String>,
+        yolo: bool,
+        bare: bool,
+        pure: bool,
+    ) -> anyhow::Result<Self> {
+        let explicit_model = model.is_some();
+        Self::from_started(start(store, model, yolo, bare, pure).await?, explicit_model).await
+    }
+
+    /// A runtime on the offline provider that reads no `config.yaml`
+    /// providers, MCP servers, or plugins, loads no project plugins, and
+    /// writes no config file.
+    pub(crate) async fn start_offline(
+        store: SessionStore,
+        model: Option<String>,
+        bare: bool,
+        pure: bool,
+    ) -> anyhow::Result<Self> {
+        let explicit_model = model.is_some();
+        let runtime = hya_app::offline_runtime(model, false);
+        Self::from_started(
+            start_with(store, runtime, false, bare, pure, false).await?,
+            explicit_model,
+        )
+        .await
+    }
+
+    async fn from_started(started: StartedEngine, explicit_model: bool) -> anyhow::Result<Self> {
+        let StartedEngine {
+            mut built,
+            agent,
+            default_agent,
+        } = started;
+        let responder = match built.take_asks().context("asks receiver missing") {
+            Ok(asks) => RejectResponder(hya_app::permission::spawn_reject_responder(asks)),
+            Err(error) => {
+                shutdown(&mut built).await?;
+                return Err(error);
+            }
+        };
+        let _ = built.take_questions();
+        Ok(Self {
+            built,
+            agent,
+            default_agent,
+            explicit_model,
+            responder,
+            root_drivers: Vec::new(),
+        })
+    }
+
+    /// Check that `session` exists (`<command> Session … was not found`), or
+    /// create a root session in the agent's directory, and recover its tree.
+    pub(crate) async fn open_session(
+        &mut self,
+        session: Option<SessionId>,
+        command: &str,
+    ) -> anyhow::Result<SessionId> {
+        let engine = self.built.engine();
+        let session = if let Some(session) = session {
+            let projection = engine.read_projection_shared(session).await?;
+            anyhow::ensure!(
+                projection.session.id.is_some(),
+                "{command} Session `{session}` was not found"
+            );
+            session
+        } else {
+            let agent = &mut self.agent;
+            let project = crate::ensure_project_for_workdir(engine.store(), &agent.workdir).await?;
+            agent.name = hya_app::resolve_headless_agent_name(
+                &engine,
+                &agent.workdir,
+                None,
+                self.default_agent.as_deref(),
+            )
+            .await
+            .context("resolve default agent")?;
+            let model = if self.explicit_model {
+                agent.model.clone()
+            } else {
+                self.built
+                    .effective_root_model(agent, &agent.workdir)
+                    .await?
+            };
+            engine
+                .create(CreateSession {
+                    parent: None,
+                    agent: agent.name.clone(),
+                    model,
+                    workdir: agent.workdir.to_string_lossy().into_owned(),
+                    project: Some(project),
+                    kind: hya_proto::SessionKind::Project,
+                })
+                .await
+                .context("create session")?
+        };
+        self.root_drivers = self
+            .built
+            .resident_supervisor()
+            .start_recovered_headless(session)
+            .await?;
+        engine.notify_runtime_restored().await;
+        Ok(session)
+    }
+
+    /// Stop permission intake before awaiting every runtime child.
+    pub(crate) async fn shutdown(&mut self) -> anyhow::Result<()> {
+        self.responder.0.abort();
+        shutdown(&mut self.built).await
+    }
 }
 
 pub(crate) struct HeadlessSession {
     pub(crate) built: BuiltSessionEngine,
     pub(crate) agent: AgentSpec,
     pub(crate) session: SessionId,
-    pub(crate) evaluator_router: ProviderRouter,
-    pub(crate) evaluator_model: String,
     responder: RejectResponder,
     _root_drivers: Vec<hya_engine::resident::RootDriverActivity>,
 }
@@ -120,6 +261,8 @@ impl HeadlessSession {
         shutdown(&mut self.built).await
     }
 
+    /// A [`HeadlessRuntime`] with [`HeadlessRuntime::open_session`]: a new
+    /// root session, or the existing `session` reopened.
     pub(crate) async fn start(
         store: SessionStore,
         model: Option<String>,
@@ -128,76 +271,27 @@ impl HeadlessSession {
         pure: bool,
         session: Option<SessionId>,
     ) -> anyhow::Result<Self> {
-        let explicit_model = model.is_some();
-        let StartedEngine {
-            mut built,
-            mut agent,
-            default_agent,
-            evaluator_router,
-            evaluator_model,
-        } = start(store, model, yolo, bare, pure).await?;
-        let prepared = async {
-            let engine = built.engine();
-            let asks = built.take_asks().context("asks receiver missing")?;
-            let _ = built.take_questions();
-            let responder = RejectResponder(hya_app::permission::spawn_reject_responder(asks));
-            let session = if let Some(session) = session {
-                let projection = engine.read_projection_shared(session).await?;
-                anyhow::ensure!(
-                    projection.session.id.is_some(),
-                    "workflow Session `{session}` was not found"
-                );
-                session
-            } else {
-                let project =
-                    crate::ensure_project_for_workdir(engine.store(), &agent.workdir).await?;
-                agent.name = hya_app::resolve_headless_agent_name(
-                    &engine,
-                    &agent.workdir,
-                    None,
-                    default_agent.as_deref(),
-                )
-                .await
-                .context("resolve default agent")?;
-                let model = if explicit_model {
-                    agent.model.clone()
-                } else {
-                    built.effective_root_model(&agent, &agent.workdir).await?
-                };
-                engine
-                    .create(CreateSession {
-                        parent: None,
-                        agent: agent.name.clone(),
-                        model,
-                        workdir: agent.workdir.to_string_lossy().into_owned(),
-                        project: Some(project),
-                        kind: hya_proto::SessionKind::Project,
-                    })
-                    .await
-                    .context("create session")?
-            };
-            let drivers = built
-                .resident_supervisor()
-                .start_recovered_headless(session)
-                .await?;
-            Ok::<_, anyhow::Error>((session, responder, drivers))
-        }
-        .await;
-        let (session, responder, drivers) = match prepared {
-            Ok(prepared) => prepared,
+        let mut runtime = HeadlessRuntime::start(store, model, yolo, bare, pure).await?;
+        let session = match runtime.open_session(session, "headless").await {
+            Ok(session) => session,
             Err(error) => {
-                shutdown(&mut built).await?;
+                runtime.shutdown().await?;
                 return Err(error);
             }
         };
+        let HeadlessRuntime {
+            built,
+            agent,
+            responder,
+            root_drivers,
+            ..
+        } = runtime;
         Ok(Self {
             built,
             agent,
             session,
-            evaluator_router,
-            evaluator_model,
             responder,
-            _root_drivers: drivers,
+            _root_drivers: root_drivers,
         })
     }
 }

@@ -13,8 +13,8 @@ use axum::http::StatusCode;
 use futures::StreamExt;
 use hya_api::v2 as pb;
 use hya_engine::{
-    AgentSpec, CompactionConfig, EventBus, ResidentSupervisor, SessionEngine, SummarizeOptions,
-    Summarizer,
+    AgentSpec, EventBus, ResidentSupervisor, SessionEngine, SummarizeOptions, Summarizer,
+    TerminalHandoffOptions,
 };
 use hya_proto::{
     AgentName, Event, FinishReason, MessageId, ModelRef, PartId, Role, SessionId, TokenUsage,
@@ -840,7 +840,7 @@ async fn status_state(provider: FakeProvider, workdir: std::path::PathBuf) -> Ap
             perm,
             EventBus::default(),
         )
-        .with_compaction(Arc::new(FixedSummary), CompactionConfig::default()),
+        .with_terminal_handoff(Arc::new(FixedSummary), TerminalHandoffOptions::default()),
     );
     state_of(engine, workdir)
 }

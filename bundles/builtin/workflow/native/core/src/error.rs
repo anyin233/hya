@@ -1,8 +1,11 @@
 //! Error types and stable error-code mappings for `hya/workflow`.
 
-use hya_proto::{SessionId, WorkflowRevision, WorkflowRunId};
+use hya_proto::SessionId;
 use hya_runtime_abi::HostError;
 use thiserror::Error;
+
+use crate::compile::{WorkflowCompileError, WorkflowRenderError};
+use crate::model::{WorkflowRevision, WorkflowRunId};
 
 /// Failures surfaced by workflow discovery, compilation, preflight, or DAG execution.
 #[derive(Debug, Error)]
@@ -17,10 +20,10 @@ pub enum WorkflowError {
     },
     /// The shared compiler rejected a Workflow document.
     #[error(transparent)]
-    Compile(#[from] hya_workflow::WorkflowCompileError),
+    Compile(#[from] WorkflowCompileError),
     /// Runtime values did not satisfy the compiled input/evidence contract.
     #[error(transparent)]
-    Render(#[from] hya_workflow::WorkflowRenderError),
+    Render(#[from] WorkflowRenderError),
     /// The compiled Workflow cannot run under the supplied runtime context.
     #[error("invalid workflow `{workflow}`: {detail}")]
     Invalid {

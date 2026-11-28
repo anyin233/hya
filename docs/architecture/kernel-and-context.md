@@ -16,7 +16,11 @@ A running session's state reduces to three pieces derived from the event log:
 
 ## 2. The Three Primitives (`hya-core::kernel`)
 
-Every round in `hya-core` updates Context through strictly three primitives:
+Every turn uses `SessionEngine` to drive `kernel::drive`. The runtime composes
+the enabled bundle registrations with that turn path. Round retries and the
+80% context rewrite apply even when the turn has no hook entries.
+
+Each round updates Context through three primitives:
 
 | Primitive | What it means | Key Events |
 | --- | --- | --- |
@@ -24,27 +28,33 @@ Every round in `hya-core` updates Context through strictly three primitives:
 | **2. Tool append** | Deterministic observations from outside the model: a tool result paired with a call, or a user prompt. Invalid JSON tool arguments, unknown tools, and cancellations become structured `ToolError`s—never synthesized fake outputs. | `ToolResult`, `ToolError`, `TodosUpdated`, `FilesChanged`, `FilesObserved`, user `Message*` |
 | **3. Rewrite** | Destructive context reset when the window fills up (or when the model calls `rewrite`): drops visible history before the current step and inserts a clean system marker repeating all prior user messages verbatim plus the current `todo` list ($g$). Dropped messages stay safely in SQLite for human replay. | System marker message + `ContextCompacted { strategy: rewrite }` |
 
-Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec --bare`) runs the unified `SessionEngine` with `BuiltinBundleProfile::Bare`—zero built-in bundles loaded (even when `bundles/builtin/` is completely absent), the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the minimal `hya-bare` default agent, and standard `AGENTS.md`/skills/MCP/user-bundle adapters. Combining `--bare` with `--pure` (`hya exec --bare --pure`) also skips external `AGENTS.md`, disk skills, MCP servers, user/project plugins, and the `code-mode` sidecar for pure kernel benchmarks (see [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md)).
+The runtime's only input is the set of enabled built-in bundles (`bundles.builtin` in `config.yaml`). The default profile enables every built-in bundle; the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec --bare`) is the empty set; any subset in between is a valid configuration ([ADR-0040](../adr/0040-context-kernel-is-the-only-core.md)). With the empty set, the unified `SessionEngine` runs with zero built-in bundles loaded (even when `bundles/builtin/` is completely absent), the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), built-in `code-mode` (without `agent()`), the compiled-in `hya-bare` agent, and standard `AGENTS.md`/skills/MCP/user-bundle adapters. Combining `--bare` with `--pure` (`hya exec --bare --pure`) also skips external `AGENTS.md`, disk skills, MCP servers, user/project plugins, and the `code-mode` sidecar for pure kernel benchmarks; `--pure` is a separate axis that never reads the bundle selection.
 
-### Global `--bare` Runtime Profile (`BuiltinBundleProfile::Bare`)
+### Composing the built-in bundle set
 
-| Surface / Capability | Full Mode (`profile: full`) | Global `--bare` (`BuiltinBundleProfile::Bare`) | `--bare --pure` |
+| Surface / Capability | Every built-in (`profile: full`) | Empty set (`--bare`, `profile: bare`) | `--bare --pure` |
 | --- | --- | --- | --- |
-| Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` | `SessionEngine::new_bare` on `hya-core::kernel` |
+| Engine & Kernel loop | `SessionEngine` on `hya-core::kernel` | `SessionEngine` on `hya-core::kernel` | `SessionEngine` on `hya-core::kernel` |
 | Built-in bundles (`bundles/builtin/`) | Loaded per `bundles.builtin` selection | **None loaded** (zero disk dependency on `bundles/builtin/`) | **None loaded** |
-| Default agent | `hya-main` (from `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
+| Default agent | `hya-main` (the `default_agent` of `hya/core-agents`) | `hya-bare` (`hya_engine::BARE_AGENT_ID`) | `hya-bare` |
 | Core tools | Built-in native ABI v2 bundles (`hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/plan`, `hya/workflow`) + core `bash`, `skill`, and kernel `todo`/`rewrite` | 8 standard bare tools: `read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill` | 8 standard bare tools (`skill` catalog empty) |
 | Built-in `code-mode` | Enabled when configured (`agent()` gated on `hya/multi-agent`) | Enabled when configured (no `agent()`) | Disabled |
 | Context & external extensions | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | `AGENTS.md`, disk skills, MCP, user/project bundles & plugins | **Skipped** |
 | Compaction | `shake` + `remote` (`hya/compaction`) → Kernel `Rewrite` | Kernel `Rewrite` only | Kernel `Rewrite` only |
 
-- **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`.
+- **CLI usage:** `hya --bare` (interactive TUI/WebUI + auto-started `--bare` daemon), `hya serve --bare` / `hya serve start --bare` (HTTP/gRPC server), `hya exec --bare "<prompt>"`, `hya exec --bare --pure "<prompt>"`, `hya --bare agent list`. "Bare plus A" is `profile: bare` with `enable: [A]` in `config.yaml`.
 - **Rust / config interfaces:**
-  - `hya_app::RuntimeConfig::with_bare(bool)` applies `BuiltinBundleProfile::Bare` (equivalent to `bundles.builtin.profile: bare` in `config.yaml`).
-  - `hya_engine::BARE_AGENT_ID` (`"hya-bare"`), `hya_engine::AgentCatalog::new_bare()`, and `hya_engine::SessionEngine::new_bare(...)` construct the bare engine without calling `hya_core::bundles::load_internal()` or reading `bundles/builtin/`.
-  - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles).
+  - `hya_app::builtin_selection(bare: bool) -> BuiltinBundleSelection` is the one selection a CLI invocation resolves: `BuiltinBundleSelection::bare()` under `--bare`, else `config.yaml` `bundles.builtin`. `hya_app::RuntimeConfig::with_bare(bool)` applies it.
+  - **One roster.** `hya_engine::AgentCatalog::new(bundles)` builds the agent roster from the enabled bundles alone. The default agent is the `default_agent` an enabled bundle declares (at most one may); when none does, the compiled-in `hya-bare` is part of the roster and is the default. `hya/core-agents` is an ordinary catalog bundle that declares `default_agent: hya-main`, so with it enabled `hya-bare` is not listed. All profiles construct the engine with `SessionEngine::new`; the application passes enabled native registrations through `with_rewriters` and the other extension builders.
+  - `hya_server::AppState::with_core_commands(bool)` disables `hya/core-commands` loading in bare servers (`GET /v2/commands` returns only workspace/skill/bundle commands; `GET /v2/agents` returns `hya-bare`; `GET /v2/bundles` reports zero built-in bundles). `AppState::with_auto_title(bool)` is on when the startup roster has `hya-title`.
 
 ---
+
+A tool may override `hya_tool::Tool::ends_turn(&self) -> bool` to end the turn
+after the calls in its current round finish. For example, a tool that submits
+a deliverable returns `true` from `ends_turn` and `Ok(output)` on successful
+submission. When a deadline notice addresses an agent with an offered
+turn-ending tool, it names the tool the model can call to deliver its result.
 
 ## 2a. The Seven Standard Kernel Tools (`hya_core::kernel::tools`)
 
@@ -83,7 +93,7 @@ Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec
     ```
 - **Permanent reservation of `todo` and `rewrite`:**
   - `hya_tool::RESERVED_KERNEL_TOOLS` / `hya_core::kernel::tools::is_reserved(name)` mark `todo` and `rewrite` as permanently kernel-exclusive.
-  - `ToolRegistry` rejects registering or aliasing either name, ABI v2 bundle loading (`hya-tool-loader`) rejects bundles exporting either name, and `hya_core::kernel::run` always advertises the canonical kernel schemas and intercepts calls inside the kernel loop.
+  - `ToolRegistry` rejects registering or aliasing either name, ABI v2 bundle loading (`hya-tool-loader`) rejects bundles exporting either name, and `SessionEngine` advertises the canonical kernel schemas, and `kernel::drive` intercepts the calls.
 
 ---
 
@@ -121,19 +131,19 @@ flowchart LR
     Rewrite --> Send
 ```
 
-- **`shake` (`context_evicted`):** Owned by the built-in native ABI v2 bundle `bundles/builtin/compaction` (`hya/compaction`). Evicts completed tool outputs outside the last `keep_recent` (default `6`) messages/steps, spilling bodies ≥ 512 bytes to `artifact://...` so the model can still `read` them back if needed. Eviction notices are persisted as `Event::Extension { bundle: "hya/compaction", kind: "context_evicted", payload }` and folded onto both `projection.extensions["hya/compaction"]` (via the bundle's ABI v2 `ProjectionReducer`) and `PartProjection::Tool.eviction_notice` so prompt prefixes stay byte-stable for provider KV caching.
+- **`shake` (`context_evicted`):** Owned by the built-in native ABI v2 bundle `bundles/builtin/compaction` (`hya/compaction`). Evicts completed tool outputs outside the last `keep_recent` (default `6`) messages/steps, spilling bodies ≥ 512 bytes to `artifact://...` so the model can still `read` them back if needed. Eviction notices are persisted as `Event::Extension { bundle: "hya/compaction", kind: "context_evicted", payload }` and folded by the bundle's ABI v2 `ProjectionReducer` into `projection.extensions["hya/compaction"]`; its `tool_output_overrides` set `PartProjection::Tool.eviction_notice`, so prompt prefixes stay byte-stable for provider KV caching. With `hya/compaction` disabled no reducer folds these records, and old evicted outputs are sent in full again (the kernel's 80% `Rewrite` still bounds the window).
 - **`remote` (`ContextCompacted { strategy: native }`):** Calls upstream `/responses/compact` on routes that support native window folding (falling back to `HostModelCaller::compact_window` on `Arc<dyn HostRuntime>`), persisting `HYA_COMPACTED_CONTEXT` plus the active `todo` list.
 - **Manual `/compact` & `/summarize`:** Acquires the session turn lease, tries `remote` first, and falls back to Kernel `Rewrite` (`threshold: 0`, marked `manual: true`).
 - **Configuration & ABI v2 Interfaces (`hya/compaction`):**
-  - Per-bundle config file: `~/.config/hya/bundles/hya%2Fcompaction/config.yml` (loaded via `HostCatalogReader::bundle_config("hya/compaction")` or env overrides `HYA_COMPACTION_KEEP_RECENT`, `HYA_COMPACTION_SUMMARY_MAX_TOKENS`, `HYA_TOKEN_ACCOUNTING`).
+  - Per-bundle config file: `~/.config/hya/bundles/hya%2Fcompaction/config.yml`. The rewriter reads `keep_recent` itself on first use (`HostCatalogReader::bundle_config("hya/compaction")`, then `HYA_COMPACTION_KEEP_RECENT`); hya-app reads `summary_max_tokens` (env `HYA_COMPACTION_SUMMARY_MAX_TOKENS`) for the terminal handoff. A `token_accounting` key in this file fails startup: it moved to the core.
     ```yaml
     compaction:
       keep_recent: 6
       summary_max_tokens: 4096
-      token_accounting: auto   # auto | provider | estimate
     ```
+  - Token accounting is a core setting, read whatever bundles are enabled: `config.yaml` `context.token_accounting: auto | provider | estimate` (env `HYA_TOKEN_ACCOUNTING` wins). It drives the request overhead estimate, the pre-send check, and reaches rewriters as `RewriteCtx::token_accounting`.
   - Native ABI v2 exports (`export_native_bundle_v2!` / `hya_native_register_v2`): registers `CompactionRewriter` (`hya_context::rewrite::Rewriter`) and `CompactionProjectionReducer` (`hya_runtime_abi::ProjectionReducer` for `bundle_id: "hya/compaction"`).
   - Extension event schemas (`Event::Extension`, `bundle: "hya/compaction"`):
     - `kind: "context_status"`: `{ "tokens": u64, "source": "provider" | "estimate", "mode": "auto" | "provider" | "estimate", "threshold": u64 }` → folds into `projection.extensions["hya/compaction"].context_status`.
-    - `kind: "context_evicted"`: `{ "parts": [{ "part": string, "notice": string }] }` → folds into `projection.extensions["hya/compaction"].evicted_parts` and `PartProjection::Tool.eviction_notice`.
+    - `kind: "context_evicted"`: `{ "parts": [{ "part": string, "notice": string }] }` → folds into `projection.extensions["hya/compaction"].evicted_parts`; the reducer's `tool_output_overrides` set `PartProjection::Tool.eviction_notice`.
   - Disabling `hya/compaction` (via `--bare` or `bundles.builtin.disable: [hya/compaction]`) skips loading `libhya_compaction` and relies strictly on Kernel `Rewrite`.

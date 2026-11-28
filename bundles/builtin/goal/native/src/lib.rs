@@ -12,12 +12,13 @@ pub mod evaluator;
 pub mod service;
 
 pub use driver::{
-    GOAL_DRIVER_ID, GateOutcome, GoalGate, IterationDriver, IterationExecutor, IterationGate,
-    LeadTurnExecutor, NativeGoalDriver, SafetyCaps, prepare_goal, render_transcript, run_goal,
-    validate_goal_condition, wrap_up_directive,
+    DEFAULT_MAX_ITERATIONS, GOAL_DRIVER_ID, GateOutcome, GoalGate, GoalRunRequest, IterationDriver,
+    IterationExecutor, IterationGate, LeadTurnExecutor, NativeGoalDriver, SafetyCaps, prepare_goal,
+    render_transcript, run_goal, validate_goal_condition, wrap_up_directive,
 };
 pub use evaluator::{
-    DEFAULT_EVALUATOR_SYSTEM_PROMPT, GoalEvaluator, MALFORMED_VERDICT_REASON, ModelGoalEvaluator,
+    DEFAULT_EVALUATOR_SYSTEM_PROMPT, EVALUATE_HOOK, EVALUATE_HOOK_POINT, EvaluateHookInput,
+    EvaluateHookReply, GoalEvaluator, MALFORMED_VERDICT_REASON, ModelGoalEvaluator,
     PLUGIN_HOOK_ERROR_REASON, PluginGoalEvaluator, Verdict, resolve_evaluator_model,
     skill_prompt_body,
 };
@@ -25,7 +26,8 @@ pub use service::{BUNDLE_ID, GOAL_SERVICE_ID, GoalDriverService};
 
 hya_runtime_abi::export_native_bundle_v2!(|out| {
     out.services.push(Arc::new(GoalDriverService::new()));
-    out.goal_drivers.push(Arc::new(NativeGoalDriver));
+    out.hook_points.push(EVALUATE_HOOK_POINT.to_string());
+    out.drivers.push(Arc::new(NativeGoalDriver));
 });
 
 #[cfg(test)]
@@ -36,6 +38,14 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use async_trait::async_trait;
+
+    async fn run_goal_request(
+        runtime: Arc<dyn HostRuntime>,
+        request: GoalRunRequest,
+        cancel: CancellationToken,
+    ) -> Result<DriverRunOutcome, HostError> {
+        prepare_goal(runtime, request, cancel).await?.await
+    }
     use hya_proto::{
         ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId,
         ModelRef, PartId, Projection, Role, SessionId,
@@ -43,11 +53,11 @@ mod tests {
     use hya_runtime_abi::{
         BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
         BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionKind,
-        GoalDriver, GoalRunRequest, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
-        HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner,
-        ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo,
-        NativeGoalEvaluateVerdict, NativeService, SessionListFilter, SessionSummaryMeta,
-        TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, abi_digest_v2,
+        HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
+        HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest,
+        ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService, SessionListFilter,
+        SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+        abi_digest_v2,
     };
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
@@ -62,7 +72,7 @@ mod tests {
         model_replies: Mutex<VecDeque<Result<String, HostError>>>,
         model_requests: Mutex<Vec<ModelCallRequest>>,
         has_hook: AtomicBool,
-        hook_replies: Mutex<VecDeque<Result<Option<NativeGoalEvaluateVerdict>, HostError>>>,
+        hook_replies: Mutex<VecDeque<Result<Option<Value>, HostError>>>,
         hook_transcripts: Mutex<Vec<String>>,
         bundle_config: Mutex<Value>,
         bundle: Mutex<Option<hya_bundle::Bundle>>,
@@ -99,7 +109,7 @@ mod tests {
 
         fn with_hook_replies(
             self: Arc<Self>,
-            replies: Vec<Result<Option<NativeGoalEvaluateVerdict>, HostError>>,
+            replies: Vec<Result<Option<Value>, HostError>>,
         ) -> Arc<Self> {
             self.has_hook.store(true, Ordering::Release);
             *self.hook_replies.lock().unwrap() = replies.into();
@@ -278,7 +288,7 @@ mod tests {
             self.turn_prompts
                 .lock()
                 .unwrap()
-                .push(request.prompt.clone());
+                .push(request.prompt.clone().unwrap_or_default());
             let reply = self
                 .turn_replies
                 .lock()
@@ -308,7 +318,7 @@ mod tests {
                     session: request.session,
                     message: user_msg,
                     part: user_part,
-                    delta: request.prompt,
+                    delta: request.prompt.unwrap_or_default(),
                 },
                 Event::MessageFinished {
                     session: request.session,
@@ -541,23 +551,26 @@ mod tests {
             Err(HostError::Unavailable("unused".into()))
         }
 
-        async fn has_goal_evaluate_hook(
+        async fn has_hook(
             &self,
             _session: Option<SessionId>,
+            point: &str,
         ) -> Result<bool, HostError> {
+            assert_eq!(point, EVALUATE_HOOK);
             Ok(self.has_hook.load(Ordering::Acquire))
         }
 
-        async fn invoke_goal_evaluate_hook(
+        async fn invoke_hook(
             &self,
             _session: Option<SessionId>,
-            _condition: &str,
-            transcript: &str,
-        ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
+            point: &str,
+            input: Value,
+        ) -> Result<Option<Value>, HostError> {
+            assert_eq!(point, EVALUATE_HOOK);
             self.hook_transcripts
                 .lock()
                 .unwrap()
-                .push(transcript.to_string());
+                .push(input["transcript"].as_str().unwrap().to_string());
             self.hook_replies
                 .lock()
                 .unwrap()
@@ -730,23 +743,22 @@ mod tests {
             .with_goal_bundle("CUSTOM_EVALUATOR_PROMPT_BODY");
 
         let driver = NativeGoalDriver;
-        assert_eq!(driver.id(), GOAL_DRIVER_ID);
-        let outcome = driver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "make tests pass".into(),
-                    max_iterations: 5,
-                    max_wall_clock_secs: 60,
-                    agent: Some(AgentName::new("hya-main")),
-                    model: Some(ModelRef::new("worker/model")),
-                    config: Value::Null,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        assert_eq!(hya_runtime_abi::NativeDriver::name(&driver), GOAL_DRIVER_ID);
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "make tests pass".into(),
+                max_iterations: 5,
+                max_wall_clock_secs: 60,
+                agent: Some(AgentName::new("hya-main")),
+                model: Some(ModelRef::new("worker/model")),
+                config: Value::Null,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             outcome,
             DriverRunOutcome::Achieved {
@@ -772,22 +784,21 @@ mod tests {
             .with_model_replies(vec![Ok(r#"{"met":true,"reason":"ok"}"#.into())])
             .with_bundle_config(json!({"goal": {"evaluator_model": "bundle/judge"}}));
 
-        let outcome = NativeGoalDriver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "ship it".into(),
-                    max_iterations: 3,
-                    max_wall_clock_secs: 60,
-                    agent: None,
-                    model: Some(ModelRef::new("worker/model")),
-                    config: json!({"evaluator_model": "cli/judge"}),
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "ship it".into(),
+                max_iterations: 3,
+                max_wall_clock_secs: 60,
+                agent: None,
+                model: Some(ModelRef::new("worker/model")),
+                config: json!({"evaluator_model": "cli/judge"}),
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert!(matches!(
             outcome,
             DriverRunOutcome::Achieved { iterations: 1, .. }
@@ -806,22 +817,21 @@ mod tests {
             ])
             .with_model_replies(vec![Ok("not json".into()), Ok("still not json".into())]);
 
-        let outcome = NativeGoalDriver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "do the thing".into(),
-                    max_iterations: 2,
-                    max_wall_clock_secs: 60,
-                    agent: None,
-                    model: Some(ModelRef::new("fake/model")),
-                    config: Value::Null,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "do the thing".into(),
+                max_iterations: 2,
+                max_wall_clock_secs: 60,
+                agent: None,
+                model: Some(ModelRef::new("fake/model")),
+                config: Value::Null,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             outcome,
             DriverRunOutcome::BudgetLimited {
@@ -843,32 +853,29 @@ mod tests {
         let host = MockHost::new()
             .with_turns(vec![Ok("step 1".into()), Ok("step 2".into())])
             .with_hook_replies(vec![
-                Ok(Some(NativeGoalEvaluateVerdict::Verdict {
-                    met: false,
-                    reason: "add meow".into(),
-                })),
-                Ok(Some(NativeGoalEvaluateVerdict::Verdict {
-                    met: true,
-                    reason: "hook approved".into(),
-                })),
+                Ok(Some(
+                    serde_json::json!({"met": false, "reason": "add meow"}),
+                )),
+                Ok(Some(
+                    serde_json::json!({"met": true, "reason": "hook approved"}),
+                )),
             ]);
 
-        let outcome = NativeGoalDriver
-            .run_goal(
-                host.clone(),
-                GoalRunRequest {
-                    session: SessionId::new(),
-                    goal: "write readme".into(),
-                    max_iterations: 4,
-                    max_wall_clock_secs: 60,
-                    agent: None,
-                    model: None,
-                    config: Value::Null,
-                },
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap();
+        let outcome = run_goal_request(
+            host.clone(),
+            GoalRunRequest {
+                session: SessionId::new(),
+                goal: "write readme".into(),
+                max_iterations: 4,
+                max_wall_clock_secs: 60,
+                agent: None,
+                model: None,
+                config: Value::Null,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             outcome,
             DriverRunOutcome::Achieved {
@@ -884,7 +891,7 @@ mod tests {
 
         // Malformed hook falls back to ModelGoalEvaluator.
         let fb_host = MockHost::new()
-            .with_hook_replies(vec![Ok(Some(NativeGoalEvaluateVerdict::Malformed))])
+            .with_hook_replies(vec![Ok(Some(serde_json::json!({"verdict": "garbled"})))])
             .with_model_replies(vec![Ok(r#"{"met":true,"reason":"fallback ok"}"#.into())]);
         let fallback = Arc::new(ModelGoalEvaluator::new(fb_host.clone(), None));
         let eval = PluginGoalEvaluator::new(fb_host.clone(), None).with_fallback(fallback);

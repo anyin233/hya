@@ -298,6 +298,16 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
         1
     );
     assert!(requested_mail_wake(&full).await);
+    // The prompt line and the file-operations rule come with the loaded families.
+    assert_eq!(
+        full.snapshot().prompt_line("wait"),
+        Some("block until your subagents finish or new mail arrives")
+    );
+    assert!(
+        full.snapshot()
+            .file_operations_rule(|t| t == "ls")
+            .is_some()
+    );
 
     let without_channels = hya_tool_loader::from_tool_families(&[
         "hya/coding-extras",
@@ -310,12 +320,59 @@ async fn wait_override_selects_mail_aware_or_member_only_variant() {
         Some("hya/multi-agent")
     );
     assert!(!requested_mail_wake(&without_channels).await);
+    assert_eq!(
+        without_channels.snapshot().prompt_line("wait"),
+        Some("block until your subagents finish")
+    );
 
     let channel_only = hya_tool_loader::from_tool_families(&["hya/agent-channels"]);
     assert_eq!(
         channel_only.builtin_bundle_origin("wait"),
         Some("hya/agent-channels")
     );
+    assert_eq!(channel_only.snapshot().file_operations_rule(|_| true), None);
+}
+
+#[test]
+fn prompt_lines_and_file_operations_rules_are_recorded_with_registration() {
+    let alpha: Arc<dyn Tool> = Arc::new(NamedTestTool("alpha"));
+    let beta: Arc<dyn Tool> = Arc::new(NamedTestTool("beta"));
+    let build = |line: &str, rule: &str| {
+        let registry = ToolRegistry::default();
+        registry.register_builtin(
+            Arc::clone(&alpha),
+            ToolPermission::Tool,
+            [],
+            "acme/alpha",
+            Some(line),
+        );
+        registry.register_builtin(
+            Arc::clone(&beta),
+            ToolPermission::Tool,
+            [],
+            "acme/alpha",
+            None,
+        );
+        registry.add_file_operations_rule(vec!["alpha".to_string()], rule);
+        registry
+    };
+    let frozen = build("do alpha", "Use alpha").snapshot();
+    assert_eq!(frozen.prompt_line("alpha"), Some("do alpha"));
+    assert_eq!(frozen.prompt_line("beta"), None);
+    assert_eq!(
+        frozen.file_operations_rule(|t| t == "alpha"),
+        Some("Use alpha")
+    );
+    assert_eq!(frozen.file_operations_rule(|t| t == "beta"), None);
+
+    let copy = ToolRegistry::from_snapshot(&frozen);
+    assert!(copy.logically_matches(&frozen));
+    copy.remove("alpha");
+    assert_eq!(copy.snapshot().prompt_line("alpha"), None);
+
+    assert!(build("do alpha", "Use alpha").logically_matches(&frozen));
+    assert!(!build("do alpha differently", "Use alpha").logically_matches(&frozen));
+    assert!(!build("do alpha", "Use beta").logically_matches(&frozen));
 }
 
 #[test]

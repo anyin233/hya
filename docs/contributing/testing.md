@@ -41,7 +41,7 @@ cargo test -p hya-engine -p hya-server                   # full crate tests befo
 Run Track P when touching `crates/hya-e2e` or cross-process seams (MCP, skills, subagents, bundles, Relay, headless `exec`). Build `hya` first, then run the specific `pNN_*` module:
 
 ```sh
-cargo build -p hya-backend --bin hya
+cargo build-hya
 cargo test -p hya-e2e --test it p04_subagents_and_mailbox:: -- --test-threads=4
 cargo test -p hya-e2e --test it p38_relay:: -- --test-threads=4
 ```
@@ -72,7 +72,7 @@ cd crates/hya-plugin-bun/adapter && bun run typecheck && bun test
 cd crates/hya-plugin-claude/adapter && bun run typecheck && bun test
 
 # WebUI host unit tests + targeted real-PTY seam spec (build hya first)
-cargo build -p hya-backend --bin hya -p xtask --bin xtask
+cargo build-hya -p xtask --bin xtask
 cd packages/hya-tui-web
 bun run typecheck && bun test ./test
 bun run test:tui-exp:parity -- e2e/hya-tui-launch-daemon.spec.ts

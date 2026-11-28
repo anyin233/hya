@@ -14,14 +14,14 @@ use hya_proto::{
 };
 use hya_runtime_abi::{
     AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionEventContext,
-    ExtensionKind, GoalRunRequest, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
+    BundleClaimRequest, BundleStateEntry, DriverRequest, ExtensionEntry, ExtensionEventContext,
+    ExtensionKind, HostBundleStorage, HostCatalogReader, HostError, HostEventBus,
     HostExtensionRegistry, HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner,
-    LoopRunRequest, ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo,
-    NativeBundleApiRequest, NativeCompactionBeforeInput, NativeCompactionDecision,
-    NativeCompactionTrigger, NativeToolBeforeInput, NativeToolBeforeOutcome, SessionListFilter,
-    SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest,
-    TurnStartRequest, TurnStatus, UriResolveCtx,
+    ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeBundleApiRequest,
+    NativeCompactionBeforeInput, NativeCompactionDecision, NativeCompactionTrigger,
+    NativeToolBeforeInput, NativeToolBeforeOutcome, SessionListFilter, SessionSummaryMeta,
+    ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome, TurnSpawnRequest, TurnStartRequest,
+    TurnStatus, UriResolveCtx,
 };
 use hya_tool::{AgentDef, PermissionPlane, PermissionRules, SkillCatalogEntry, ToolCtx};
 use hya_tool_loader::{NativeBundleLoader, load_v2_from_path, try_from_tool_families};
@@ -226,7 +226,7 @@ impl HostTurnRunner for MockHostRuntime {
             session: request.session,
             message_id: None,
             finish_reason: Some(FinishReason::Stop),
-            output_text: format!("goal-turn: {}", request.prompt),
+            output_text: format!("goal-turn: {}", request.prompt.unwrap_or_default()),
             error: None,
         })
     }
@@ -533,8 +533,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
     assert_eq!(regs.api_handlers.len(), 1);
     assert_eq!(regs.projection_reducers.len(), 1);
     assert_eq!(regs.uri_schema_handlers.len(), 1);
-    assert_eq!(regs.goal_drivers.len(), 1);
-    assert_eq!(regs.loop_drivers.len(), 1);
+    assert_eq!(regs.drivers.len(), 1);
 
     let session = SessionId::new();
     let parent = SessionId::new();
@@ -561,7 +560,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         overhead_tokens: 0,
         pressure: None,
         workdir: &ctx.workdir,
-        config: &Value::Null,
+        token_accounting: hya_context::tokens::TokenAccountingMode::Auto,
         log: &DummySessionLog,
         transcript: &DummyTranscript,
         models: Some(&DummyModelHost),
@@ -595,6 +594,7 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
             agent: None,
             candidate_tools: vec!["read".to_string(), "edit".to_string()],
             interactive: true,
+            depth: 0,
         })
         .await?;
     assert_eq!(
@@ -612,6 +612,68 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         })
         .await?;
     assert!(matches!(comp, NativeCompactionDecision::Replace { .. }));
+
+    // Every CHR-43 lifecycle point crosses the cdylib boundary to the bundle's
+    // implementation, not the trait default.
+    let hook = &regs.hooks[0];
+    let permit = hook
+        .model_stream_permit(hya_runtime_abi::NativeStreamPermitInput {
+            session,
+            root: parent,
+            depth: 2,
+        })
+        .await?;
+    assert!(permit.is_some());
+    hook.turn_stop(hya_runtime_abi::NativeTurnStopInput {
+        session,
+        cause: hya_proto::FinishCause::UserCancel,
+    })
+    .await?;
+    assert!(
+        hook.turn_stop(hya_runtime_abi::NativeTurnStopInput {
+            session,
+            cause: hya_proto::FinishCause::Archived,
+        })
+        .await
+        .is_err()
+    );
+    assert!(matches!(
+        hook.session_close(hya_runtime_abi::NativeSessionCloseInput {
+            session,
+            kind: hya_runtime_abi::SessionCloseKind::Delete,
+        })
+        .await,
+        Err(HostError::PermissionDenied(_))
+    ));
+    hook.session_close(hya_runtime_abi::NativeSessionCloseInput {
+        session,
+        kind: hya_runtime_abi::SessionCloseKind::Archive,
+    })
+    .await?;
+    assert_eq!(
+        hook.headless_run(hya_runtime_abi::NativeHeadlessRunInput {
+            session,
+            phase: hya_runtime_abi::HeadlessRunPhase::Start,
+        })
+        .await?
+        .as_deref(),
+        Some("probe Start")
+    );
+    assert_eq!(
+        hook.session_restore(hya_runtime_abi::NativeSessionRestoreInput { session })
+            .await?,
+        Some(format!("restore {session}"))
+    );
+    assert_eq!(
+        hook.runtime_restored().await,
+        Err(HostError::Unavailable("probe restored".into()))
+    );
+    assert_eq!(
+        regs.projection_reducers[0].observed_bundles(),
+        ["hya/observed"]
+    );
+    assert!(regs.tools[0].ends_turn());
+    assert!(regs.tools[0].suppresses_notices());
 
     // NativeBundleApiHandler
     let api_reply = regs.api_handlers[0]
@@ -670,55 +732,22 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
         .await?;
     assert_eq!(write_res["bytes"], 5);
 
-    // GoalDriver & LoopDriver
-    let goal_outcome = regs.goal_drivers[0]
-        .run_goal(
+    // NativeDriver
+    let report = regs.drivers[0]
+        .run(
             Arc::clone(&runtime),
-            GoalRunRequest {
+            DriverRequest {
                 session,
-                goal: "ship v2".to_string(),
-                max_iterations: 3,
-                max_wall_clock_secs: 60,
                 agent: None,
                 model: None,
-                config: Value::Null,
+                workdir: std::env::temp_dir(),
+                args: serde_json::json!({ "prompt": "ship v2" }),
             },
             CancellationToken::new(),
         )
         .await?;
-    assert_eq!(
-        goal_outcome,
-        DriverRunOutcome::Achieved {
-            iterations: 1,
-            reason: "goal-turn: ship v2".to_string(),
-        }
-    );
-
-    let loop_outcome = regs.loop_drivers[0]
-        .run_loop(
-            Arc::clone(&runtime),
-            LoopRunRequest {
-                session,
-                target: "all tests green".to_string(),
-                budget: 5,
-                max_wall_clock_secs: 60,
-                satisfaction_threshold: 80,
-                max_no_progress: 2,
-                predicate: None,
-                agent: None,
-                model: None,
-                config: Value::Null,
-            },
-            CancellationToken::new(),
-        )
-        .await?;
-    assert_eq!(
-        loop_outcome,
-        DriverRunOutcome::Achieved {
-            iterations: 2,
-            reason: "verified: all tests green".to_string(),
-        }
-    );
+    assert_eq!(report.stdout, "goal-turn: ship v2");
+    assert_eq!(report.exit_code, 0);
 
     // Verify registration error propagation from cdylib without panicking.
     let err = load_v2_from_path("hya/fail-register", &lib_path, runtime)
@@ -784,10 +813,50 @@ fn selective_loader_skips_disabled_and_errors_cleanly_on_missing()
         .ok_or("expected DisabledOrMissing error for absent bundle")?;
     assert!(matches!(missing_err, AbiError::DisabledOrMissing { .. }));
 
-    // Non-panicking v1 selective loader rejects unknown family cleanly.
+    // An id that is no first-party native bundle fails to load, cleanly.
     let v1_err = try_from_tool_families(&["hya/unknown-family"])
         .err()
-        .ok_or("expected error for unknown v1 tool family")?;
-    assert!(v1_err.contains("unknown tool family"));
+        .ok_or("expected a load error for an unknown bundle")?;
+    assert!(v1_err.contains("load hya/unknown-family"), "{v1_err}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_native_bundle_library_fails_startup_load() -> Result<(), Box<dyn std::error::Error>> {
+    const CHILD: &str = "HYA_TEST_MISSING_NATIVE_LIBRARY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        // The host's startup load path (`hya-app` runtime) for an enabled bundle.
+        let Err(error) = hya_tool_loader::load_native_bundles(
+            &["hya/compaction"],
+            Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+        ) else {
+            panic!("startup must return a bundle load error");
+        };
+        assert!(error.contains("hya/compaction"), "{error}");
+        return Ok(());
+    }
+
+    // A fresh process with no adjacent libraries cannot reuse the loader cache.
+    let exe = std::env::current_exe()?;
+    let dir = exe.with_file_name(format!("missing-native-library-{}", SessionId::new()));
+    std::fs::create_dir(&dir)?;
+    let child = dir.join("fixture");
+    let result = std::fs::hard_link(exe, &child).and_then(|()| {
+        std::process::Command::new(child)
+            .args([
+                "--exact",
+                "missing_native_bundle_library_fails_startup_load",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+    });
+    std::fs::remove_dir_all(dir)?;
+    let output = result?;
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{output:?}"
+    );
     Ok(())
 }

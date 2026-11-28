@@ -15,9 +15,8 @@ use hya_runtime_abi::{
     BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
     BundleClaimRequest, BundleStateEntry, DriverRunOutcome, ExtensionEntry, ExtensionKind,
     HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
-    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver, LoopRunRequest,
-    ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeLoopPlanInput,
-    NativePlannerOutput, NativeService, NativeVerifierVerdict, SessionListFilter,
+    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ModelCallRequest,
+    ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeService, SessionListFilter,
     SessionSummaryMeta, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, abi_digest_v2,
 };
 use serde_json::{Value, json};
@@ -41,8 +40,8 @@ struct MockHostState {
     bundle: Option<Bundle>,
     should_stop: Option<String>,
     should_stop_calls: usize,
-    hook_verdict: Option<Result<Option<NativeVerifierVerdict>, HostError>>,
-    hook_plan: Option<Result<Option<NativePlannerOutput>, HostError>>,
+    hook_verdict: Option<Result<Option<Value>, HostError>>,
+    hook_plan: Option<Result<Option<Value>, HostError>>,
 }
 
 struct MockHostRuntime {
@@ -479,42 +478,25 @@ impl HostExtensionRegistry for MockHostRuntime {
         Err(HostError::Unavailable("mock".into()))
     }
 
-    async fn invoke_loop_should_stop(
+    async fn invoke_hook(
         &self,
-        _session: SessionId,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<String>, HostError> {
+        _session: Option<SessionId>,
+        point: &str,
+        _input: Value,
+    ) -> Result<Option<Value>, HostError> {
         let mut st = self.state.lock().unwrap();
-        st.should_stop_calls += 1;
-        Ok(st.should_stop.clone())
-    }
-
-    async fn invoke_loop_verify(
-        &self,
-        _session: SessionId,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        self.state
-            .lock()
-            .unwrap()
-            .hook_verdict
-            .clone()
-            .unwrap_or(Ok(None))
-    }
-
-    async fn invoke_loop_plan(
-        &self,
-        _session: SessionId,
-        _input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        self.state
-            .lock()
-            .unwrap()
-            .hook_plan
-            .clone()
-            .unwrap_or(Ok(None))
+        match point {
+            crate::types::SHOULD_STOP_HOOK => {
+                st.should_stop_calls += 1;
+                Ok(st
+                    .should_stop
+                    .clone()
+                    .map(|reason| serde_json::json!({ "stop": true, "reason": reason })))
+            }
+            crate::types::VERIFIER_HOOK => st.hook_verdict.clone().unwrap_or(Ok(None)),
+            crate::types::PLANNER_HOOK => st.hook_plan.clone().unwrap_or(Ok(None)),
+            other => panic!("unexpected hook point {other}"),
+        }
     }
 }
 
@@ -836,21 +818,18 @@ async fn model_loop_verifier_and_planner_parsing_and_degradation_matrix() {
 async fn hook_evaluators_take_priority_and_failures_use_fallback() {
     let session = SessionId::new();
     let hook_rt: Arc<dyn HostRuntime> = MockHostRuntime::new(MockHostState {
-        hook_verdict: Some(Ok(Some(NativeVerifierVerdict {
-            score: 91,
-            satisfied: true,
-            evidence_quality: "verified".into(),
-            critical_gaps: vec![],
-            iteration_summary: "hook".into(),
-            reason: "hook verdict".into(),
-        }))),
-        hook_plan: Some(Ok(Some(NativePlannerOutput {
-            directive: "hook directive".into(),
-            continuity_brief: "hook".into(),
-            planner_notes: String::new(),
-            strategy_change: false,
-            change_note: String::new(),
-        }))),
+        hook_verdict: Some(Ok(Some(serde_json::json!({
+            "score": 91,
+            "satisfied": true,
+            "evidence_quality": "verified",
+            "critical_gaps": [],
+            "iteration_summary": "hook",
+            "reason": "hook verdict",
+        })))),
+        hook_plan: Some(Ok(Some(serde_json::json!({
+            "directive": "hook directive",
+            "continuity_brief": "hook",
+        })))),
         ..MockHostState::default()
     });
     let unused = ScriptedLoop::constant(false);
@@ -900,7 +879,9 @@ async fn loop_gate_should_stop_hook_and_broken_predicate_precedence() {
         .await
         .unwrap()
     {
-        GateOutcome::Stop { reason } => assert_eq!(reason, "loop.should_stop: worker says done"),
+        GateOutcome::Stop { reason } => {
+            assert_eq!(reason, "hya/loop:should_stop: worker says done")
+        }
         _ => panic!("expected hook stop"),
     }
     assert_eq!(
@@ -1215,7 +1196,7 @@ async fn native_loop_driver_runs_with_host_runtime_skills_events_and_service_hea
     assert!(service.health().await.healthy);
 
     let driver = NativeLoopDriver::new(Arc::clone(&service));
-    assert_eq!(driver.id(), LOOP_DRIVER_ID);
+    assert_eq!(hya_runtime_abi::NativeDriver::name(&driver), LOOP_DRIVER_ID);
 
     let outcome = driver
         .run_loop(
@@ -1367,7 +1348,7 @@ async fn native_loop_driver_supports_predicate_and_should_stop_and_rejects_bad_b
         outcome,
         DriverRunOutcome::Achieved {
             iterations: 1,
-            reason: "loop.should_stop: external gate says stop".into(),
+            reason: "hya/loop:should_stop: external gate says stop".into(),
         }
     );
     assert_eq!(hook_mock.state.lock().unwrap().should_stop_calls, 1);

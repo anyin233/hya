@@ -18,7 +18,7 @@ cd hya
 
 (cd packages/hya-tui && bun install --frozen-lockfile)
 (cd packages/hya-tui-web && bun install --frozen-lockfile)
-cargo build -p hya-backend --bin hya
+cargo build-hya
 
 # Launch your local debug build!
 ./target/debug/hya
@@ -62,5 +62,5 @@ Before opening a PR or committing, check formatting across the Rust workspace an
 cargo fmt --all --check
 cargo clippy -p <changed-crate> --all-targets -- -D warnings
 cargo test -p <changed-crate>
-cargo build -p hya-backend --bin hya
+cargo build-hya
 ```

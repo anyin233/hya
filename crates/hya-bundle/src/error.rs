@@ -315,6 +315,26 @@ pub enum BundleError {
         /// Which limit fired (for example `archive bytes`).
         limit: &'static str,
     },
+    /// An enabled bundle requires a bundle that is not enabled.
+    #[error(
+        "bundle `{bundle_id}` requires bundle `{requires}`, which is not enabled (enable it under `bundles.builtin.enable`, or disable `{bundle_id}`)"
+    )]
+    MissingPrerequisite {
+        /// Bundle that declares the prerequisite.
+        bundle_id: String,
+        /// The missing prerequisite bundle id.
+        requires: String,
+    },
+    /// Two bundles of one catalog both declare `default_agent`.
+    #[error(
+        "bundles `{first}` and `{second}` both declare `default_agent`; enable only one of them"
+    )]
+    DuplicateDefaultAgent {
+        /// First declaring bundle id.
+        first: String,
+        /// Second declaring bundle id.
+        second: String,
+    },
     /// A trusted first-party bundle is unknown, missing, or has another identity.
     #[error("first-party bundle `{identity}`: {detail}")]
     FirstPartyBundle {

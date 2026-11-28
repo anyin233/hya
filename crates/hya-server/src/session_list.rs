@@ -10,10 +10,10 @@
 //! One tracker task per hub (the first `router` built claims it) turns busy
 //! signals into deduplicated transitions: it re-checks `is_busy` for a
 //! session whenever its server run starts or ends, an engine turn opens or
-//! closes a message, or a Workflow run starts or finishes, and sweeps the
-//! sessions it believes busy once a second, so an idle transition whose
-//! signal raced the release (an engine-internal turn, a Workflow run) still
-//! arrives. Each turn so yields one `busy: true` and one `busy: false`
+//! closes a message, or a bundle appends an event (a bundle service run
+//! starts or ends with one), and sweeps the sessions it believes busy once a
+//! second, so an idle transition whose signal raced the release (an
+//! engine-internal turn, a service run) still arrives. Each turn so yields one `busy: true` and one `busy: false`
 //! notice — never per-token traffic.
 
 use std::collections::HashSet;
@@ -132,16 +132,9 @@ pub(crate) fn spawn_busy_tracker(state: ServerState) {
 /// Engine events that can coincide with a busy transition.
 fn turn_signal(event: &Event) -> Option<SessionId> {
     match event {
-        Event::MessageStarted { session, .. } | Event::MessageFinished { session, .. } => {
-            Some(*session)
-        }
-        Event::Extension { .. } => match hya_tool::extension::ExtensionEvent::from_event(event)? {
-            hya_tool::extension::ExtensionEvent::WorkflowRunStarted { session, .. }
-            | hya_tool::extension::ExtensionEvent::WorkflowRunFinished { session, .. } => {
-                Some(session)
-            }
-            _ => None,
-        },
+        Event::MessageStarted { session, .. }
+        | Event::MessageFinished { session, .. }
+        | Event::Extension { session, .. } => Some(*session),
         _ => None,
     }
 }

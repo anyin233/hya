@@ -6,31 +6,31 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 use async_trait::async_trait;
-use hya_proto::{
-    AgentName, OwnerRunId, SessionId, WorkflowIdentity, WorkflowModelResolvedCandidate,
-    WorkflowRevision, WorkflowRunId, WorkflowSummary,
-};
+use hya_proto::{AgentName, OwnerRunId, SessionId};
 use hya_runtime_abi::{HostError, HostRuntime, NativeService, ResolvedModelRoute, ServiceHealth};
-use hya_tool::extension::{BUNDLE_WORKFLOW, ExtensionEvent};
-use hya_tool::{
-    ToolOperation, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowProjection,
-    WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan,
-};
-use hya_workflow::CompiledWorkflow;
+use hya_tool::ToolOperation;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::catalog::{WorkflowCatalog, WorkflowCatalogRoots};
+use crate::compile::CompiledWorkflow;
 use crate::dag::{PreparedWorkflowRun, WorkflowStatus, prepare_workflow_run};
 use crate::error::{
     WorkflowControlError, bounded_error, map_workflow_error_with_detail,
     map_workflow_preflight_error,
 };
+use crate::events::WorkflowEvent;
+use crate::model::{
+    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowIdentity,
+    WorkflowModelResolvedCandidate, WorkflowProjection, WorkflowRevision, WorkflowRunId,
+    WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus, WorkflowStagePlan,
+    WorkflowSummary,
+};
 use crate::reducer::{decode_workflow_projection, extension_event_parts, historical_run};
 
 /// Canonical bundle identity for `hya/workflow`.
-pub const WORKFLOW_BUNDLE_ID: &str = BUNDLE_WORKFLOW;
+pub const WORKFLOW_BUNDLE_ID: &str = "hya/workflow";
 
 /// Service identifier registered by `hya/workflow`.
 pub const WORKFLOW_SERVICE_ID: &str = "workflow-supervisor";
@@ -163,7 +163,19 @@ impl WorkflowService {
         };
         let roots = WorkflowCatalogRoots::for_scope(dir, &scope.project_roots);
         let catalog = WorkflowCatalog::from_bundles(roots, &scope.bundles)?;
-        Ok(catalog.list())
+        Ok(catalog.summaries())
+    }
+
+    /// The scope `hya workflow list|info` show for the client's `cwd`.
+    pub(crate) async fn cli_scope(
+        &self,
+        cwd: &Path,
+    ) -> Result<hya_runtime_abi::ScopeCatalogSnapshot, WorkflowControlError> {
+        Ok(self
+            .runtime()?
+            .catalog_reader()
+            .resolve_scope_catalog(None, Some(cwd))
+            .await?)
     }
 
     /// Execute one typed [`WorkflowCommand`] against `session`.
@@ -187,13 +199,13 @@ impl WorkflowService {
                 WorkflowCommand::List => {
                     let catalog = self.session_catalog(session).await?;
                     Ok(WorkflowCommandResult::List {
-                        workflows: catalog.list(),
+                        workflows: catalog.summaries(),
                     })
                 }
                 WorkflowCommand::Info { name } => {
                     let catalog = self.session_catalog(session).await?;
                     Ok(WorkflowCommandResult::Info {
-                        workflow: catalog.info(&name)?,
+                        workflow: catalog.describe(&name)?,
                     })
                 }
                 WorkflowCommand::Select {
@@ -241,6 +253,29 @@ impl WorkflowService {
             }
             result = &mut execution => result,
         }
+    }
+
+    /// [`Self::execute`] in this service's task set, so the command keeps
+    /// running when the caller stops waiting for it.
+    ///
+    /// # Errors
+    /// Returns the command's [`WorkflowControlError`], or
+    /// [`WorkflowControlError::Execution`] when its task panicked.
+    pub async fn execute_detached(
+        self: &Arc<Self>,
+        session: SessionId,
+        invocation: WorkflowInvocation,
+        command: WorkflowCommand,
+    ) -> Result<WorkflowCommandResult, WorkflowControlError> {
+        let service = Arc::clone(self);
+        self.tasks
+            .spawn(async move {
+                service
+                    .execute(session, invocation, command, CancellationToken::new())
+                    .await
+            })
+            .await
+            .map_err(|error| WorkflowControlError::Execution(format!("Workflow task: {error}")))?
     }
 
     async fn session_catalog(
@@ -304,7 +339,7 @@ impl WorkflowService {
             WorkflowCatalogRoots::for_scope(Some(scope.workdir.as_path()), &scope.project_roots);
         let catalog = WorkflowCatalog::from_bundles(roots, &scope.bundles)?;
         let mut state =
-            decode_workflow_projection(projection.extensions.get(BUNDLE_WORKFLOW).cloned());
+            decode_workflow_projection(projection.extensions.get(WORKFLOW_BUNDLE_ID).cloned());
         decorate_projection(&catalog, &mut state);
         Ok(state)
     }
@@ -338,7 +373,7 @@ impl WorkflowService {
         let current = decode_workflow_projection(
             runtime
                 .session_store()
-                .read_extension_state(session, BUNDLE_WORKFLOW)
+                .read_extension_state(session, WORKFLOW_BUNDLE_ID)
                 .await?,
         );
         if let Some(active) = current
@@ -353,7 +388,7 @@ impl WorkflowService {
 
         let actor_claim = operation.and_then(ToolOperation::actor_claim);
         let (target_session, bundle, kind, payload) =
-            extension_event_parts(ExtensionEvent::WorkflowSelected {
+            extension_event_parts(WorkflowEvent::WorkflowSelected {
                 session,
                 workflow: entry.identity().clone(),
             })?;
@@ -384,7 +419,7 @@ impl WorkflowService {
             return Err(WorkflowControlError::SessionNotFound { session });
         };
         let workflow_proj =
-            decode_workflow_projection(projection.extensions.get(BUNDLE_WORKFLOW).cloned());
+            decode_workflow_projection(projection.extensions.get(WORKFLOW_BUNDLE_ID).cloned());
         let selected = workflow_proj.selection.clone();
         let active_run = workflow_proj
             .run
@@ -515,7 +550,7 @@ impl WorkflowService {
             let current = decode_workflow_projection(
                 runtime
                     .session_store()
-                    .read_extension_state(session, BUNDLE_WORKFLOW)
+                    .read_extension_state(session, WORKFLOW_BUNDLE_ID)
                     .await?,
             );
             if let Some(active) = current
@@ -528,7 +563,7 @@ impl WorkflowService {
                 });
             }
             let (target_session, bundle, kind, payload) =
-                extension_event_parts(ExtensionEvent::WorkflowRunStarted {
+                extension_event_parts(WorkflowEvent::WorkflowRunStarted {
                     session,
                     run,
                     workflow: entry.identity().clone(),
@@ -595,7 +630,7 @@ impl WorkflowService {
             Err(error) => {
                 let detail = bounded_error(&error.to_string());
                 let (target_session, bundle, kind, payload) =
-                    extension_event_parts(ExtensionEvent::WorkflowRunFinished {
+                    extension_event_parts(WorkflowEvent::WorkflowRunFinished {
                         session,
                         run,
                         status: if cancel.is_cancelled() {
@@ -618,7 +653,7 @@ impl WorkflowService {
             WorkflowStatus::Cancelled => WorkflowRunStatus::Cancelled,
         };
         let (target_session, bundle, kind, payload) =
-            extension_event_parts(ExtensionEvent::WorkflowRunFinished {
+            extension_event_parts(WorkflowEvent::WorkflowRunFinished {
                 session,
                 run,
                 status,
@@ -700,8 +735,8 @@ impl WorkflowService {
             .read_events(session, None, None)
             .await?;
         let Some(existing_hash) = events.iter().find_map(
-            |envelope| match ExtensionEvent::from_event(&envelope.event) {
-                Some(ExtensionEvent::WorkflowRunStarted {
+            |envelope| match WorkflowEvent::from_event(&envelope.event) {
+                Some(WorkflowEvent::WorkflowRunStarted {
                     run: existing,
                     request_hash,
                     ..
@@ -725,13 +760,13 @@ impl WorkflowService {
         };
         let sessions = runtime
             .session_store()
-            .find_sessions_with_extension(BUNDLE_WORKFLOW, "workflow_run_started")
+            .find_sessions_with_extension(WORKFLOW_BUNDLE_ID, "workflow_run_started")
             .await?;
         for session in sessions {
             let state = decode_workflow_projection(
                 runtime
                     .session_store()
-                    .read_extension_state(session, BUNDLE_WORKFLOW)
+                    .read_extension_state(session, WORKFLOW_BUNDLE_ID)
                     .await?,
             );
             let Some(run) = state.run else {
@@ -741,7 +776,7 @@ impl WorkflowService {
                 continue;
             }
             let (target_session, bundle, kind, payload) =
-                extension_event_parts(ExtensionEvent::WorkflowRunFinished {
+                extension_event_parts(WorkflowEvent::WorkflowRunFinished {
                     session,
                     run: run.id,
                     status: WorkflowRunStatus::Interrupted,

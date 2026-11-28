@@ -5,14 +5,14 @@ identity:
   id: hya/core-agents
   version: 0.0.0
   publisher: hya
-assets:
-  - id: policy
-    path: policy.yaml
+default_agent: hya-main
 agents:
   - id: hya-main
     description: Default primary agent. Owns the request end to end and delegates focused work to hya-scout, hya-task, and hya-reviewer.
     role: main
     prompt: prompts/hya-main.md
+    can_spawn: ["*"]
   - id: hya-title
     role: subagent
     prompt: prompts/hya-title.md
+    private: true

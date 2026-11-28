@@ -10,9 +10,9 @@ use crate::RuntimeRegistry;
 use crate::agent_catalog::AgentCatalog;
 
 pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
-    // `build`, `general`, and the reserved system agents are compiled-in
-    // built-ins now, so the fixture only has to add the non-builtin ids these
-    // unit tests spawn.
+    // `hya-main`, `hya-title`, and the multi-agent workers come from their
+    // first-party bundles, so the fixture only has to add the ids these unit
+    // tests spawn.
     let bundles = ["resident", "reviewer"]
         .into_iter()
         .map(|stable_id| Bundle {
@@ -57,13 +57,14 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
             overrides: None,
         })
         .collect::<Vec<_>>();
     let mut bundles = bundles.into_iter().collect::<Vec<_>>();
-    if let Ok(multi_agent) = hya_bundle::first_party_bundle("hya/multi-agent") {
-        bundles.extend(multi_agent.bundles().iter().cloned());
-    }
+    bundles.extend(first_party(&["hya/multi-agent", "hya/core-agents"]));
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("unit-test catalog must be valid: {catalog:?}");
@@ -73,4 +74,17 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
         panic!("unit-test agent catalog must be valid: {catalog:?}");
     };
     Arc::new(RuntimeRegistry::new(tools, Arc::new(catalog)))
+}
+
+/// The prepared bundles of first-party packages (`hya/core-agents` gives the
+/// `hya-main` roster).
+pub(crate) fn first_party(ids: &[&str]) -> Vec<Bundle> {
+    ids.iter()
+        .flat_map(|id| {
+            let Ok(catalog) = hya_bundle::first_party_bundle(id) else {
+                panic!("first-party {id} must load");
+            };
+            catalog.bundles().to_vec()
+        })
+        .collect()
 }

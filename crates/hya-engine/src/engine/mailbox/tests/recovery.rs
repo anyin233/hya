@@ -8,47 +8,23 @@ struct RevivalHook {
 }
 
 #[async_trait::async_trait]
-impl crate::hooks::HookDispatcher for RevivalHook {
-    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
-    async fn command_execute_before(
-        &self,
-        i: crate::hooks::CommandExecuteBeforeInput,
-    ) -> crate::hooks::CommandExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.command_execute_before(i).await
+impl crate::hooks::NativeHook for RevivalHook {
+    fn id(&self) -> &str {
+        "RevivalHook"
     }
-    async fn text_complete(
-        &self,
-        i: crate::hooks::TextCompleteInput,
-    ) -> crate::hooks::TextCompleteOutcome {
-        crate::hooks::NoopHookHost.text_complete(i).await
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::MessageUserBefore]
     }
+
     async fn message_user_before(
         &self,
-        i: crate::hooks::MessageUserBeforeInput,
-    ) -> crate::hooks::MessageUserBeforeOutcome {
+        i: crate::hooks::NativeMessageUserBeforeInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         if self.block.swap(false, std::sync::atomic::Ordering::SeqCst) {
             self.entered.notify_one();
             self.release.notified().await;
         }
-        crate::hooks::MessageUserBeforeOutcome::Continue { text: i.text }
-    }
-    async fn chat_params(
-        &self,
-        i: crate::hooks::ChatParamsInput,
-    ) -> crate::hooks::ChatParamsOutcome {
-        crate::hooks::NoopHookHost.chat_params(i).await
-    }
-    async fn tool_execute_before(
-        &self,
-        i: crate::hooks::ToolExecuteBeforeInput,
-    ) -> crate::hooks::ToolExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.tool_execute_before(i).await
-    }
-    async fn tool_execute_after(
-        &self,
-        i: crate::hooks::ToolExecuteAfterInput,
-    ) -> crate::hooks::ToolExecuteAfterOutcome {
-        crate::hooks::NoopHookHost.tool_execute_after(i).await
+        Ok(i.text)
     }
 }
 

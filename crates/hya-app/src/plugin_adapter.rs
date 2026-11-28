@@ -22,6 +22,8 @@ pub(crate) mod source;
 pub struct PluginHostAdapter {
     host: Arc<PluginHost>,
     plugins: Vec<PreparedPlugin>,
+    points: Vec<hya_engine::HookPoint>,
+    declared: Vec<String>,
 }
 
 impl PluginHostAdapter {
@@ -29,7 +31,13 @@ impl PluginHostAdapter {
     #[must_use]
     pub fn new(host: Arc<PluginHost>) -> Self {
         let plugins = host.prepared_plugins();
-        Self { host, plugins }
+        let (points, declared) = Self::registered_points(&plugins);
+        Self {
+            host,
+            plugins,
+            points,
+            declared,
+        }
     }
 
     pub(crate) fn named_tool(self: &Arc<Self>, name: String, tool: Arc<dyn Tool>) -> Arc<dyn Tool> {

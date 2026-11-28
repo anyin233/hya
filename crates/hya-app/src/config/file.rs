@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use hya_bundle::BuiltinBundleSelection;
 use hya_engine::{
-    CategoryEntry, CategoryRegistry, CompactionConfig, SubagentLimits, TokenAccountingMode,
+    CategoryEntry, CategoryRegistry, SubagentLimits, TerminalHandoffOptions, TokenAccountingMode,
 };
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
@@ -69,6 +69,9 @@ pub(super) struct FileConfig {
     /// Absent → [`hya_engine::CatalogScopeCacheConfig`] defaults.
     #[serde(default)]
     catalog_scopes: Option<CatalogScopesFile>,
+    /// Context-window settings (`context:` block).
+    #[serde(default)]
+    context: Option<ContextFile>,
 }
 
 /// Immutable on-disk startup settings shared with the engine builder.
@@ -115,20 +118,6 @@ impl EngineSettings {
             .load_with_builtin(&self.file.agents)
     }
 
-    /// Goal evaluator settings resolved from the `hya/goal` (or legacy
-    /// `hya/goal-loop`) bundle config.
-    pub fn goal(&self) -> GoalSettings {
-        if !self.file.bundles.builtin.is_enabled("hya/goal")
-            && !self.file.bundles.builtin.is_enabled("hya/goal-loop")
-        {
-            return GoalSettings::default();
-        }
-        let block = self
-            .read_bundle_config_value(&["hya/goal", "hya/goal-loop"])
-            .and_then(|val| decode_bundle_section::<GoalFile>(&val, Some("goal")));
-        GoalSettings::from_block(block)
-    }
-
     pub(crate) fn categories(&self) -> CategoryRegistry {
         resolve_categories(&self.file)
     }
@@ -140,14 +129,30 @@ impl EngineSettings {
         resolve_subagent_limits(block.as_ref())
     }
 
-    pub(crate) fn context(&self) -> ContextSettings {
+    /// The terminal handoff cap and the token-accounting mode.
+    ///
+    /// # Errors
+    /// Fails when `hya/compaction`'s `config.yml` still sets `token_accounting`,
+    /// which moved to `config.yaml` `context.token_accounting`.
+    pub(crate) fn context(&self) -> anyhow::Result<ContextSettings> {
         let block = if self.file.bundles.builtin.is_enabled("hya/compaction") {
             self.read_bundle_config_value(&["hya/compaction"])
                 .and_then(|val| decode_bundle_section::<CompactionFile>(&val, Some("compaction")))
         } else {
             None
         };
-        resolve_context_settings(block.as_ref())
+        if block
+            .as_ref()
+            .is_some_and(|block| block.token_accounting.is_some())
+        {
+            anyhow::bail!(
+                "`token_accounting` in the `hya/compaction` bundle config.yml moved to config.yaml `context.token_accounting`; move the value there"
+            );
+        }
+        Ok(resolve_context_settings(
+            self.file.context.as_ref(),
+            block.as_ref(),
+        ))
     }
 
     pub(crate) fn reasoning(&self) -> Option<ReasoningEffort> {
@@ -170,36 +175,6 @@ impl EngineSettings {
 
     pub(crate) fn plugin_ids(&self) -> Vec<String> {
         self.file.plugins.keys().cloned().collect()
-    }
-
-    pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
-        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
-            return hya_tool::FormatterPlane::default();
-        }
-        let raw: crate::formatter_config::RawFormatterConfig = self
-            .read_bundle_config_value(&["hya/coding-extras"])
-            .and_then(|val| {
-                val.get("formatter")
-                    .cloned()
-                    .and_then(|sub| serde_norway::from_value(sub).ok())
-            })
-            .unwrap_or_default();
-        hya_coding_extras_core::build_formatter_plane(raw)
-    }
-
-    pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
-        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
-            return Ok(hya_tool::LspPlane::default());
-        }
-        let selection = self
-            .read_bundle_config_value(&["hya/coding-extras"])
-            .and_then(|val| {
-                val.get("lsp")
-                    .cloned()
-                    .and_then(|sub| serde_norway::from_value(sub).ok())
-            });
-        hya_coding_extras_core::build_lsp_plane(selection)
-            .map_err(|error| anyhow::anyhow!("{error}"))
     }
 }
 
@@ -367,19 +342,27 @@ struct SubagentLimitsFile {
     per_team_message_budget: Option<u64>,
 }
 
-/// `compaction:` block of `~/.config/hya/config.yaml`.
+/// The keys hya-app reads from the `compaction:` block of `hya/compaction`'s
+/// `config.yml` (the bundle reads `keep_recent` itself).
 ///
-/// Absent fields keep the engine's [`CompactionConfig`] default; per-field
-/// `HYA_COMPACTION_*` and `HYA_TOKEN_ACCOUNTING` env overrides win over these.
+/// An absent `summary_max_tokens` keeps the engine default;
+/// `HYA_COMPACTION_SUMMARY_MAX_TOKENS` wins over it.
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompactionFile {
     #[serde(default)]
-    keep_recent: Option<usize>,
-    #[serde(default)]
     summary_max_tokens: Option<u32>,
-    /// `auto`, `provider`, or `estimate`; anything else is ignored.
+    /// Moved to `config.yaml` `context.token_accounting`; read only to say so.
     #[serde(default)]
-    token_accounting: Option<String>,
+    token_accounting: Option<serde_norway::Value>,
+}
+
+/// `context:` block of `config.yaml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextFile {
+    /// How window occupancy is measured; `HYA_TOKEN_ACCOUNTING` wins over it.
+    #[serde(default)]
+    token_accounting: Option<TokenAccountingMode>,
 }
 
 pub(super) const DEFAULT_CONFIG_YAML: &str = "schema_version: 2\ndefault_model: hya/offline\nproviders: {}\nmcp: {}\nplugins: {}\nbundles:\n  builtin:\n    profile: full\n    enable: []\n    disable: []\npermission:\n  model: default\n  rules: []\n";
@@ -674,47 +657,36 @@ pub fn load_configured_plugin_ids() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Compaction settings plus the token-accounting mode `ContextStatus` is
-/// measured with.
-#[derive(Clone, Copy, Debug, Default)]
+/// The terminal handoff's output cap and the token-accounting mode.
+#[derive(Clone, Copy, Debug)]
 pub struct ContextSettings {
-    /// Compaction and terminal handoff values resolved from the shared config block.
-    pub compaction: CompactionConfig,
+    /// Output cap for the summarizer call that writes the terminal handoff.
+    pub summary_max_tokens: u32,
     /// How window occupancy is measured.
     pub token_accounting: TokenAccountingMode,
 }
 
-/// Resolve context settings from an optional file block, then apply per-field
-/// `HYA_COMPACTION_*` and `HYA_TOKEN_ACCOUNTING` env overrides (env wins).
+/// Resolve context settings from `config.yaml`'s `context:` block and the
+/// compaction bundle's file, then apply `HYA_COMPACTION_SUMMARY_MAX_TOKENS` and
+/// `HYA_TOKEN_ACCOUNTING` (env wins).
 ///
-/// Unset file fields and unparseable values fall back to the engine default
-/// rather than to a guess: an unrecognized accounting mode keeps whatever the
-/// file asked for, and an unparseable number keeps the default.
-fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
-    let defaults = CompactionConfig::default();
+/// Unset fields and unparseable env values fall back rather than guess: an
+/// unrecognized accounting mode keeps whatever the file asked for, and an
+/// unparseable number keeps the default.
+fn resolve_context_settings(
+    context: Option<&ContextFile>,
+    compaction: Option<&CompactionFile>,
+) -> ContextSettings {
     let mut settings = ContextSettings {
-        compaction: CompactionConfig {
-            keep_recent: file
-                .and_then(|f| f.keep_recent)
-                .unwrap_or(defaults.keep_recent),
-            summary_max_tokens: file
-                .and_then(|f| f.summary_max_tokens)
-                .unwrap_or(defaults.summary_max_tokens),
-        },
-        token_accounting: file
-            .and_then(|f| f.token_accounting.as_deref())
-            .and_then(TokenAccountingMode::parse)
-            .unwrap_or_default(),
+        summary_max_tokens: compaction
+            .and_then(|f| f.summary_max_tokens)
+            .unwrap_or(TerminalHandoffOptions::default().max_output_tokens),
+        token_accounting: context.and_then(|f| f.token_accounting).unwrap_or_default(),
     };
-    if let Ok(v) = std::env::var("HYA_COMPACTION_KEEP_RECENT")
-        && let Ok(parsed) = v.trim().parse()
-    {
-        settings.compaction.keep_recent = parsed;
-    }
     if let Ok(v) = std::env::var("HYA_COMPACTION_SUMMARY_MAX_TOKENS")
         && let Ok(parsed) = v.trim().parse()
     {
-        settings.compaction.summary_max_tokens = parsed;
+        settings.summary_max_tokens = parsed;
     }
     if let Ok(v) = std::env::var("HYA_TOKEN_ACCOUNTING")
         && let Some(parsed) = TokenAccountingMode::parse(&v)
@@ -722,51 +694,6 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
         settings.token_accounting = parsed;
     }
     settings
-}
-
-/// File shape of the `goal:` block of `~/.config/hya/config.yaml`.
-#[derive(Clone, Debug, Default, Deserialize)]
-struct GoalFile {
-    /// `provider/model` ref that judges goal mode when no `--evaluator-model`
-    /// flag is given. Absent/blank → the worker's current model.
-    #[serde(default)]
-    evaluator_model: Option<String>,
-}
-
-/// Goal-mode settings resolved from config. There are no env overrides for
-/// this block by design: the CLI flag is the only layer above it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GoalSettings {
-    /// Evaluator model from `goal.evaluator_model` (trimmed); `None` → the
-    /// worker's current model judges.
-    pub evaluator_model: Option<String>,
-}
-
-impl GoalSettings {
-    fn from_block(block: Option<GoalFile>) -> Self {
-        Self {
-            evaluator_model: block
-                .and_then(|goal| goal.evaluator_model)
-                .map(|model| model.trim().to_string())
-                .filter(|model| !model.is_empty()),
-        }
-    }
-}
-
-/// Resolve the goal evaluator model: the CLI flag wins over the config
-/// `goal.evaluator_model`; without either, the worker's current model judges.
-/// Blank/whitespace values count as unset at every layer, so an accidentally
-/// empty setting can never shadow a lower layer or break resolution.
-#[must_use]
-pub fn resolve_evaluator_model<'a>(
-    cli_flag: Option<&'a str>,
-    config_value: Option<&'a str>,
-    worker_current: &'a str,
-) -> &'a str {
-    let non_empty = |value: Option<&'a str>| value.map(str::trim).filter(|model| !model.is_empty());
-    non_empty(cli_flag)
-        .or_else(|| non_empty(config_value))
-        .unwrap_or(worker_current)
 }
 
 #[cfg(test)]

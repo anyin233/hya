@@ -1323,21 +1323,13 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "http-body-util",
- "hya-agent-channels",
  "hya-api",
  "hya-bundle",
  "hya-child-io",
- "hya-coding-extras",
- "hya-coding-extras-core",
  "hya-core",
  "hya-engine",
- "hya-goal",
- "hya-hashline",
- "hya-loop",
  "hya-mcp",
  "hya-multi-agent",
- "hya-network",
- "hya-plan",
  "hya-plugin",
  "hya-proto",
  "hya-provider",
@@ -1347,8 +1339,6 @@ dependencies = [
  "hya-tool",
  "hya-tool-loader",
  "hya-version",
- "hya-workflow-bundle",
- "hya-workflow-bundle-core",
  "libc",
  "libsqlite3-sys",
  "rand_core 0.9.5",
@@ -1366,6 +1356,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1438,6 +1429,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-cli-driver-example"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "hya-runtime-abi",
+ "serde_json",
+ "tokio-util",
+]
+
+[[package]]
 name = "hya-coding-extras"
 version = "0.0.0"
 dependencies = [
@@ -1460,6 +1461,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "similar",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
@@ -1498,17 +1500,12 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "hya-bundle",
- "hya-coding-extras",
- "hya-compaction",
  "hya-context",
- "hya-hashline",
  "hya-proto",
  "hya-provider",
  "hya-runtime-abi",
  "hya-store",
  "hya-tool",
- "hya-tool-loader",
  "image",
  "libc",
  "notify",
@@ -1555,11 +1552,9 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "hya-agent-channels",
  "hya-agent-channels-core",
  "hya-bundle",
  "hya-coding-extras",
- "hya-coding-extras-core",
  "hya-compaction",
  "hya-context",
  "hya-core",
@@ -1945,13 +1940,8 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "futures",
- "hya-agent-channels",
- "hya-coding-extras",
  "hya-context",
- "hya-hashline",
  "hya-multi-agent",
- "hya-network",
- "hya-plan",
  "hya-proto",
  "hya-runtime-abi",
  "hya-tool-error",
@@ -2051,14 +2041,16 @@ dependencies = [
  "hya-proto",
  "hya-runtime-abi",
  "hya-tool",
- "hya-workflow",
  "serde",
+ "serde_ignored",
  "serde_json",
+ "serde_norway",
  "sha2",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5153,6 +5145,7 @@ dependencies = [
  "hya-tool-loader",
  "hya-version",
  "pbjson-build",
+ "proc-macro2",
  "prost",
  "prost-types",
  "protoc-bin-vendored",

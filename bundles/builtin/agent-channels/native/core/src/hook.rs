@@ -4,25 +4,31 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hya_proto::Event;
 use hya_runtime_abi::{
     HookPoint, HostError, NativeHook, NativeToolAfterInput, NativeToolAfterOutcome,
     NativeToolResult,
 };
 use serde_json::{Value, json};
 
-use crate::service::AgentChannelsService;
+use crate::service::{AGENT_CHANNELS_BUNDLE_ID, AgentChannelsService};
 
 /// Hook id registered by `hya/agent-channels`.
 pub const UNREAD_MAIL_STEER_HOOK_ID: &str = "unread-mail-steer";
 
+/// Transient-state key the host sets to `true` around after-hooks whose
+/// result shows no further notices (`report` latch, deferred steer, `wait`,
+/// user shell commands).
+pub(crate) const STEER_SUPPRESSED_KEY: &str = "steer_suppressed";
+
 /// In-turn unread-mail steer hook running on `HookPoint::ToolExecuteAfter`.
 ///
-/// For any successful non-`wait` / non-`report` tool call where steering is not
-/// suppressed on the host (`report` latch or deferred steer), checks the
-/// session's durable team inbox past its acknowledged cursor, splices any
-/// policy-permitted `[NEW MAIL]` notice into the tool result, and stages the
-/// corresponding `mail_consumed` event on the host so the tool result and inbox
-/// acknowledgment commit atomically in one store transaction.
+/// For any successful non-`wait` / non-`report` tool call where the host has
+/// not set the `steer_suppressed` transient key, checks the session's durable
+/// team inbox past its acknowledged cursor, splices any policy-permitted
+/// `[NEW MAIL]` notice into the tool result, and stages the `mail_consumed`
+/// event with the tool result so both commit in one store transaction. The
+/// host's mail watermark advances only after that commit.
 pub struct UnreadMailSteerHook {
     service: Arc<AgentChannelsService>,
 }
@@ -69,10 +75,12 @@ impl NativeHook for UnreadMailSteerHook {
                 result: NativeToolResult::Ok { output, time_ms },
             });
         };
-        if runtime
-            .turn_runner()
-            .is_mail_steer_suppressed(input.session)
-        {
+        let suppressed = runtime.bundle_storage().get_transient_state(
+            AGENT_CHANNELS_BUNDLE_ID,
+            input.session,
+            STEER_SUPPRESSED_KEY,
+        )?;
+        if suppressed == Some(Value::Bool(true)) {
             return Ok(NativeToolAfterOutcome::Continue {
                 result: NativeToolResult::Ok { output, time_ms },
             });
@@ -80,9 +88,32 @@ impl NativeHook for UnreadMailSteerHook {
         if let Some(prepared) =
             AgentChannelsService::prepare_unread_steer(runtime.as_ref(), input.session).await?
         {
-            runtime
-                .turn_runner()
-                .stage_mail_steer_ack(input.session, prepared.ack);
+            let Event::Extension {
+                session: root,
+                bundle,
+                kind,
+                payload,
+            } = prepared.ack
+            else {
+                return Err(HostError::Internal(
+                    "mail acknowledgement is not an extension event".into(),
+                ));
+            };
+            let notifier = Arc::clone(&runtime);
+            let (session, mark, incoming) =
+                (input.session, prepared.mark, prepared.consumed_incoming);
+            runtime.session_store().stage_extension_event(
+                input.session,
+                root,
+                &bundle,
+                &kind,
+                payload,
+                Some(Box::new(move || {
+                    notifier
+                        .turn_runner()
+                        .notify_mail_consumed(session, mark, incoming);
+                })),
+            )?;
             if let Some(notice) = prepared.notice {
                 append_steer_notice(&mut output, &notice);
             }

@@ -282,6 +282,16 @@ impl hya_engine::BoundSidecarFactory for HookedSidecar {
     }
 }
 #[async_trait]
+impl hya_engine::NativeHook for HookedSidecar {
+    fn id(&self) -> &str {
+        "test-sidecar"
+    }
+    fn hook_points(&self) -> &[hya_engine::HookPoint] {
+        &[]
+    }
+}
+
+#[async_trait]
 impl hya_engine::SidecarHandle for HookedSidecar {
     async fn ready(&mut self) -> Result<(), hya_engine::CoreError> {
         Ok(())
@@ -289,8 +299,8 @@ impl hya_engine::SidecarHandle for HookedSidecar {
     async fn shutdown(&mut self) -> Result<(), hya_engine::CoreError> {
         Ok(())
     }
-    fn hook_dispatcher(&self) -> Option<Arc<dyn hya_engine::HookDispatcher>> {
-        Some(Arc::new(hya_engine::hooks::NoopHookHost))
+    fn hook_dispatcher(&self) -> Option<hya_engine::HookEntry> {
+        Some(hya_engine::HookEntry::new(Arc::new(HookedSidecar)))
     }
 }
 

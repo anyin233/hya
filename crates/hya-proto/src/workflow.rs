@@ -178,17 +178,6 @@ impl WorkflowModelAssignment {
     }
 }
 
-/// Candidate selected during Workflow admission, with canonical effort.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct WorkflowModelResolvedCandidate {
-    /// Declaration-order index in the complete route.
-    pub index: u32,
-    /// Base model identity without a variant suffix.
-    pub id: String,
-    /// Required canonical effort label (`none` means Off).
-    pub reasoning: String,
-}
-
 /// One Stage in a compiled Workflow info response.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowStageInfo {
@@ -259,16 +248,4 @@ pub struct WorkflowIdentity {
     pub name: String,
     /// Canonical compiler revision.
     pub revision: WorkflowRevision,
-}
-
-/// Runtime catalog availability for a persisted Workflow identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowAvailability {
-    /// The exact source and revision are present in the current catalog.
-    Available,
-    /// The exact source remains present but changed or no longer compiles.
-    Stale,
-    /// The exact source is absent from the current catalog.
-    Unavailable,
 }

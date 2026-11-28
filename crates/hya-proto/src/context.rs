@@ -38,34 +38,37 @@ pub fn render_todos(items: &[TodoItem]) -> String {
     out
 }
 
-const NO_GOAL: &str = "No todo list is recorded. Use the todo tool now to record this task's completion criteria, each a checkable end state, with its current status; the list is kept verbatim through later rewrites.";
+const NO_CRITERIA: &str = "No todo list is recorded. Use the todo tool now to record this task's completion criteria, each a checkable end state, with its current status; the list is kept verbatim through later rewrites.";
 
 const KEPT_RESULTS: &str = "Results recorded in this list are still valid: do not redo that work. Record each further result in the list as you obtain it.";
 
 /// The goal section of a rewrite or compaction marker: the list verbatim, or,
 /// when none is recorded, a request to record it now.
 #[must_use]
-pub fn marker_goal(items: &[TodoItem]) -> String {
+pub fn marker_criteria(items: &[TodoItem]) -> String {
     if items.is_empty() {
-        return NO_GOAL.to_string();
+        return NO_CRITERIA.to_string();
     }
     format!("{KEPT_RESULTS}\n\n{}", render_todos(items))
 }
 
-/// A marker body without its trailing goal section (`\n\n` + [`marker_goal`]),
+/// A marker body without its trailing goal section (`\n\n` + [`marker_criteria`]),
 /// so a summary updated from it does not restate the list or the request.
 #[must_use]
-pub fn without_marker_goal(body: &str) -> &str {
-    [format!("\n\n{TODO_LIST_HEADER}"), format!("\n\n{NO_GOAL}")]
-        .iter()
-        .filter_map(|section| body.rfind(section.as_str()))
-        .max()
-        .map_or(body, |at| {
-            let kept = &body[..at];
-            kept.strip_suffix(KEPT_RESULTS)
-                .and_then(|rest| rest.strip_suffix("\n\n"))
-                .unwrap_or(kept)
-        })
+pub fn without_marker_criteria(body: &str) -> &str {
+    [
+        format!("\n\n{TODO_LIST_HEADER}"),
+        format!("\n\n{NO_CRITERIA}"),
+    ]
+    .iter()
+    .filter_map(|section| body.rfind(section.as_str()))
+    .max()
+    .map_or(body, |at| {
+        let kept = &body[..at];
+        kept.strip_suffix(KEPT_RESULTS)
+            .and_then(|rest| rest.strip_suffix("\n\n"))
+            .unwrap_or(kept)
+    })
 }
 
 /// System-message prefix of compacted context (`HYA_COMPACTED_CONTEXT`).

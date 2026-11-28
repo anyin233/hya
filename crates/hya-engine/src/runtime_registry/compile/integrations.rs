@@ -5,9 +5,9 @@ use super::*;
 #[derive(Clone)]
 pub(crate) struct BoundAgentHook {
     /// What to dispatch to (possibly a per-agent filter over `source`).
-    pub(crate) dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
-    /// The retained source dispatcher: its pointer identifies the process.
-    pub(crate) source: Arc<dyn crate::hooks::HookDispatcher>,
+    pub(crate) dispatcher: crate::hooks::HookEntry,
+    /// The source hook: its pointer identifies the process.
+    pub(crate) source: Arc<dyn crate::hooks::NativeHook>,
     /// Hook ids the filter admits; `None` for an unfiltered entry.
     pub(crate) hook_ids: Option<Arc<[String]>>,
 }
@@ -45,7 +45,7 @@ impl TurnBinding {
         &self,
         bundle_id: &str,
         mode: &str,
-    ) -> Option<Arc<dyn crate::hooks::HookDispatcher>> {
+    ) -> Option<Arc<crate::hooks::HookChain>> {
         let source = self
             .snapshot
             .sources
@@ -58,11 +58,12 @@ impl TurnBinding {
             return None;
         }
         self.bundle_hooks(bundle_id)
+            .map(|entry| Arc::new(crate::hooks::HookChain::new(vec![entry])))
     }
 
     /// Retain one explicitly selected bundle's process hooks from this generation.
     #[must_use]
-    pub fn bundle_hooks(&self, bundle_id: &str) -> Option<Arc<dyn crate::hooks::HookDispatcher>> {
+    pub fn bundle_hooks(&self, bundle_id: &str) -> Option<crate::hooks::HookEntry> {
         if !self
             .snapshot
             .catalog
@@ -99,15 +100,11 @@ impl TurnBinding {
     pub fn sidecar_hook_view(
         &self,
         stable_agent_id: &str,
-        dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
-    ) -> Result<Option<Arc<dyn crate::hooks::HookDispatcher>>, BundleError> {
+        hook: Arc<dyn crate::hooks::NativeHook>,
+    ) -> Result<Option<crate::hooks::HookEntry>, BundleError> {
         let policy = self.agent_resource_policy(stable_agent_id)?;
-        Ok((!policy.canonical_hook_ids.is_empty()).then(|| {
-            Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
-                dispatcher,
-                &policy.canonical_hook_ids,
-            )) as Arc<dyn crate::hooks::HookDispatcher>
-        }))
+        Ok((!policy.canonical_hook_ids.is_empty())
+            .then(|| crate::hooks::HookEntry::scoped(hook, &policy.canonical_hook_ids)))
     }
 
     /// Hooks bound to one agent, in dispatch order.
@@ -122,10 +119,7 @@ impl TurnBinding {
     /// source dispatchers, so callers can deduplicate them by pointer. No live
     /// registry read occurs.
     #[must_use]
-    pub fn bundle_hooks_for_agent(
-        &self,
-        stable_agent_id: &str,
-    ) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+    pub fn bundle_hooks_for_agent(&self, stable_agent_id: &str) -> Vec<crate::hooks::HookEntry> {
         self.bound_hooks_for_agent(stable_agent_id)
             .into_iter()
             .map(|hook| hook.dispatcher)
@@ -145,16 +139,17 @@ impl TurnBinding {
         let mut hooks = self
             .plugin_bundle_hooks(owner)
             .into_iter()
-            .map(|dispatcher| BoundAgentHook {
-                source: Arc::clone(&dispatcher),
+            .map(|entry| BoundAgentHook {
+                source: Arc::clone(entry.hook()),
                 // Global events have one unconditional delivery path in
                 // publish_envelope; bindings retain ordered non-event hooks.
-                dispatcher: if global.iter().any(|hooks| Arc::ptr_eq(hooks, &dispatcher)) {
-                    Arc::new(crate::bundle_hooks::ScopedBundleHooks::without_events(
-                        dispatcher,
-                    ))
+                dispatcher: if global
+                    .iter()
+                    .any(|hooks| Arc::ptr_eq(hooks.hook(), entry.hook()))
+                {
+                    entry.without_events()
                 } else {
-                    dispatcher
+                    entry
                 },
                 hook_ids: None,
             })
@@ -165,11 +160,8 @@ impl TurnBinding {
             && !policy.canonical_hook_ids.is_empty()
         {
             hooks.push(BoundAgentHook {
-                dispatcher: Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
-                    Arc::clone(&owner_hooks),
-                    &policy.canonical_hook_ids,
-                )),
-                source: owner_hooks,
+                source: Arc::clone(owner_hooks.hook()),
+                dispatcher: owner_hooks.restrict(&policy.canonical_hook_ids),
                 hook_ids: Some(Arc::clone(&policy.canonical_hook_ids)),
             });
         }
@@ -178,7 +170,7 @@ impl TurnBinding {
 
     /// User-global hooks retained by this immutable turn binding.
     #[must_use]
-    pub fn global_plugin_hooks(&self) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+    pub fn global_plugin_hooks(&self) -> Vec<crate::hooks::HookEntry> {
         self.snapshot
             .sources
             .values()
@@ -197,7 +189,7 @@ impl TurnBinding {
             .filter(|hook| {
                 !global
                     .iter()
-                    .any(|source| Arc::ptr_eq(source, &hook.source))
+                    .any(|source| Arc::ptr_eq(source.hook(), &hook.source))
             })
             .collect()
     }
@@ -206,10 +198,7 @@ impl TurnBinding {
     /// plugins, each in stable ascending
     /// source-id order, excluding bundle `exclude` so an owner is never
     /// dispatched twice.
-    fn plugin_bundle_hooks(
-        &self,
-        exclude: Option<&str>,
-    ) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+    fn plugin_bundle_hooks(&self, exclude: Option<&str>) -> Vec<crate::hooks::HookEntry> {
         let mut sources = self.snapshot.sources.values().collect::<Vec<_>>();
         sources.sort_by_key(|source| match source.id.kind() {
             RuntimeSourceKind::Plugin if !source.project_plugin => 0,

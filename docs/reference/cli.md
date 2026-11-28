@@ -21,6 +21,8 @@
 
 ---
 
+Enabled bundles can add their own commands (`cli:` in `bundle.yaml`, see **[`hyabundle` CLI commands](../extend/hyabundle-spec.md#cli-commands-cli)**). They appear in `hya --help` and disappear when their bundle is disabled; `hya --bare` has none from built-in bundles.
+
 ## Global options
 
 ```text
@@ -41,7 +43,7 @@ hya [OPTIONS] [COMMAND]
 | `--allow-host <HOST>` | Loopback only | Extra `Host` header name accepted by the server (repeatable, e.g. `--allow-host hya.lan`). |
 | `--resume [<ID>]` | — | Reopen a specific session ID in bare `hya`, or open the session picker when `<ID>` is omitted. |
 | `--yolo` | `false` | Auto-approve every tool and command without asking. |
-| `--bare` | `false` | Run with `BuiltinBundleProfile::Bare` across `hya`, `hya serve` (including `start`/`restart` and daemon auto-start), `hya exec`, `-p`, `hya loop`, `hya acp`, `hya agent list`, and `hya workflow`: loads zero built-in bundles (`bundles/builtin/`), exposes the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) plus built-in `code-mode` (without `agent()`), uses the minimal `hya-bare` default agent, and retains `AGENTS.md`, disk skills, MCP, and user/project bundle/plugin adapters. Combine with `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and user/project plugins. |
+| `--bare` | `false` | Run with the empty built-in bundle set (`bundles.builtin` is ignored; "bare plus some bundles" is `profile: bare` with an `enable:` list in `config.yaml`) across `hya`, `hya serve` (including `start`/`restart` and daemon auto-start), `hya exec`, `-p`, `hya loop`, `hya acp`, and `hya agent list`: loads zero built-in bundles (so their contributed commands, such as `hya workflow` and `hya loop`, do not exist) (`bundles/builtin/`), exposes the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`) plus built-in `code-mode` (without `agent()`), uses the core's minimal `hya-bare` default agent (no enabled bundle declares `default_agent`), and retains `AGENTS.md`, disk skills, MCP, and user/project bundle/plugin adapters. Combine with `--pure` (`hya exec --bare --pure`) to also skip external `AGENTS.md`, disk skills, MCP, and user/project plugins. |
 | `--pure` | `false` | Ignore external context (`AGENTS.md`, MCP servers, user/project plugins, disk skills, and `code-mode` sidecar). Can be combined with `--bare`. |
 | `--db <PATH>` | Command-dependent | SQLite database file path (`""` or `":memory:"` for in-memory on `exec` and foreground `serve`). |
 
@@ -87,7 +89,9 @@ Global flags such as `--bare` and `--pure` can be placed either before or after 
 hya -p "<GOAL>" [--max-iterations <N>] [--evaluator-model <MODEL>]
 ```
 
-Runs iterative turns in memory through the `hya/goal` native bundle's `GoalDriver` until an independent evaluator (`goal.evaluate` hook or tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. Requires `hya/goal` to be enabled; fails with an actionable error in `--bare` mode or when `hya/goal` is disabled in `config.yaml` (`bundles.builtin.disable: [hya/goal]`). Per-bundle evaluator model defaults can be configured in `~/.config/hya/bundles/hya%2Fgoal/config.yml` under `goal.evaluator_model`.
+`hya/goal` claims `-p` (a `kind: prompt` CLI contribution) and adds `--max-iterations` and `--evaluator-model`. It runs iterative turns in memory through its `hya/goal:goal` driver until an independent evaluator (a `hya/goal:evaluate` hook or the tool-free verifier model) confirms `<GOAL>` is met or `--max-iterations` (default `6`) is reached. The default judge model is `goal.evaluator_model` in `~/.config/hya/bundles/hya%2Fgoal/config.yml`, else the worker's model.
+
+When no enabled bundle claims `-p` (`hya --bare -p "…"`, or `hya/goal` disabled in `config.yaml`), `hya -p "<PROMPT>"` runs **one** headless turn, prints its transcript like `hya exec`, and exits: no iterations, no evaluator. The goal-mode flags do not exist then.
 
 ### `hya loop`
 
@@ -97,7 +101,7 @@ hya loop --target "<OBJECTIVE>" [--until "<CMD>" | --while "<CMD>"] [--budget <N
 
 Iterates toward `--target` up to `--budget` rounds (default `10`, clamped to `1..=100`; `--max-iterations` is an alias). With `--until`, stops when `<CMD>` exits `0` (continues on exit `1`); `--while` inverts that check. Any exit code other than `0` or `1` (or timeout) aborts the loop with a non-zero exit status as a broken condition.
 
-`hya loop` is provided by the built-in native bundle `hya/loop` (`LoopDriver`, dispatched through `HostRuntime::loop_driver()`). Running with `--bare` or with `hya/loop` disabled in `config.yaml` (`bundles.builtin.disable: [hya/loop]`) exits with an actionable error instead of running silently without a driver.
+`hya loop` is a CLI command the built-in native bundle `hya/loop` contributes (routed to its `hya/loop:loop` driver). With `--bare`, or with `hya/loop` disabled in `config.yaml` (`bundles.builtin.disable: [hya/loop]`), the command does not exist (`unrecognized subcommand 'loop'`). The default judge model is `loop.evaluator_model` in `~/.config/hya/bundles/hya%2Floop/config.yml`, else the worker's model.
 
 ---
 
@@ -109,7 +113,7 @@ Iterates toward `--target` up to `--budget` rounds (default `10`, clamped to `1.
 hya serve [--bind 127.0.0.1:8080] [--db ./sessions.db] [--bare] [--allow-host <HOST>]... [--relay <URL>]
 ```
 
-Serves both `/v2` HTTP/JSON+SSE+WebSocket and `hya.v2` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on `BuiltinBundleProfile::Bare` with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
+Serves both `/v2` HTTP/JSON+SSE+WebSocket and `hya.v2` gRPC on `--bind` (default `127.0.0.1:8080`, in-memory DB unless `--db` is given). Prints `hya server listening on <url>` on `stdout` when ready. Adding `--bare` starts the server on the empty built-in bundle set with zero `bundles/builtin/` loaded (`hya-bare` default agent, standard bare tools, and an empty built-in bundle catalog).
 
 ### Background daemon lifecycle
 
@@ -170,7 +174,9 @@ Uses `~/.local/state/hya/sessions.db` unless `--db <PATH>` is given:
 
 ### `hya workflow`
 
-Backed by the built-in ABI v2 native bundle `hya/workflow` (`bundles/builtin/workflow/`). Returns an actionable error when run under `--bare` or when `hya/workflow` is disabled in `config.yaml`.
+Contributed by the built-in ABI v2 native bundle `hya/workflow` (`bundles/builtin/workflow/`, `cli:` in its `bundle.yaml`); each subcommand calls one of the bundle's `cli_*` endpoints and prints its reply. Under `--bare`, or with `hya/workflow` disabled in `config.yaml`, there is no `workflow` command: `hya` reports `unrecognized subcommand 'workflow'` and exits `2`.
+
+`list` and `info` (`database: read`) only read `--db`: they never take its lock or go through its server; an existing database is opened read-only to find the working directory's Project, and the catalog is built with the offline provider (no `config.yaml` providers, MCP servers, or plugins, and no `.hya/plugins` project plugins). Installed bundles that cannot be read and project bundles that fail to load are printed as `warning: …` lines on stderr. `use`, `run`, and `state` (`database: true`) hold the database lock or go through the server that owns `--db`; a routed `run` exits `75` with `--revision`, `--pure`, or `--yolo`.
 
 ```sh
 hya workflow list [--json]
@@ -187,6 +193,8 @@ hya [--db <DB>] workflow state --session <SESSION_ID> [--json]
 | `GET` (global) | `/v2/bundles/hya%2Fworkflow/api/workflows?directory=<abs>` | `{ "workflows": WorkflowSummary[] }` |
 | `GET` (session) | `/v2/sessions/{id}/bundles/hya%2Fworkflow/state` | `WorkflowProjection` (`extensions["hya/workflow"]`) |
 | `POST` (session) | `/v2/sessions/{id}/bundles/hya%2Fworkflow/command` | Body: `{ list }` \| `{ state }` \| `{ info: { name } }` \| `{ select: { name, expectedRevision? } }` \| `{ run: { name?, expectedRevision?, inputs?, run?, delivery?: "started"\|"finished" } }` |
+| `POST` (global) | `/v2/bundles/hya%2Fworkflow/api/cli/list`, `…/cli/info` | `hya workflow list\|info`: body `{ "args": {…}, "cwd": "<abs>" }`, reply `{ stdout, stderr, exit_code }` |
+| `POST` (session) | `/v2/sessions/{id}/bundles/hya%2Fworkflow/cli/use`, `…/cli/run`, `…/cli/state` | `hya workflow use\|run\|state`: same body and reply |
 
 ### `hya bundle`
 
@@ -227,7 +235,7 @@ hya-migration [--json] rollback --backup <DIR>
 Only **one writer** may hold a file-backed SQLite database (`<db>.runtime-owner.lock`) at a time:
 - When a daemon holds `<db>` (and published `<db>.server.json`), commands like `hya --db <db> exec`, `hya workflow run`, and `hya sessions archive` automatically route through that running server over `/v2`!
 - Commands with flags a running server cannot honor per-call (such as `exec --bare`, `exec --pure`, or a second `hya serve` on the same DB) refuse cleanly with exit code **`75`**.
-- Read-only commands (`hya sessions`, `hya tail-session`, `hya workflow list|info`) never take the write lock and work anytime.
+- Read-only commands (`hya sessions`, `hya tail-session`, and `database: read` bundle commands such as `hya workflow list|info`) never take the write lock and work anytime.
 
 | Exit code | Meaning |
 | --- | --- |

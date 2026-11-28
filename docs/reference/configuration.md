@@ -36,11 +36,11 @@ permission:
 | --- | --- | --- | --- |
 | `schema_version` | `u32` | **Required (`2`)** | Must be `2`. Legacy v1 configs are rejected at startup until migrated with `hya-migration run`. |
 | `default_model` | `string` | First live model, else `hya/offline` | Default `provider/model` (optional `#effort` suffix) when no agent pin or `--model` flag applies. |
-| `default_agent` | `string` | `"hya-main"` *(or `"hya-bare"` under `--bare`)* | Default root Agent ID (`hya-main`, `hya-plan`, or an installed bundle agent). |
+| `default_agent` | `string` | The `default_agent` of the enabled bundle that declares one (`hya-main` from `hya/core-agents`), else `"hya-bare"` (for example under `--bare`) | Default root Agent ID (`hya-main`, `hya-plan`, or an installed bundle agent). |
 | `reasoning` | `string` | — | Global fallback thinking effort: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `providers` | `map<id, Provider>` | `{}` | Model provider routes, base URLs, keys, retry budgets, and model definitions. |
 | `provider_retry` | `ProviderRetry` | Defaults | Default retry/replay budget for every provider route (overridden per provider or via `HYA_PROVIDER_RETRY_*`). |
-| `agents` | `map<id, AgentPref>` | `{}` | Per-agent pinned `model` and `reasoning` effort for built-in agents. |
+| `agents` | `map<id, AgentPref>` | `{}` | Per-agent pinned `model` and `reasoning` effort, by Agent id whatever bundle provides the Agent. |
 | `categories` | `map<name, string[]>` | `{}` | Named ordered failover lists of `provider/model` candidates. |
 | `bundles` | `BundlesConfig` | `{builtin: {profile: full, enable: [], disable: []}}` | Controls which of the 14 built-in bundles under `bundles/builtin/` load at startup. |
 | `permission` | `PermissionConfig` | `{model: default, rules: []}` | Default permission posture and ordered regex rules. |
@@ -48,6 +48,7 @@ permission:
 | `plugins` | `map<id, PluginSpec>` | `{}` | Process-wide JSON-RPC stdio plugins. |
 | `tools` | `{code?: {mode: normal \| with_tools \| only}}` | `{code: {mode: normal}}` | Core Code Mode (`packages/hya-code-mode`) mode setting. *(Web fetch/search settings now live in `bundles/hya%2Fnetwork/config.yml`.)* |
 | `catalog_scopes` | `{max: usize, idle_ttl_secs: u64}` | `{max: 32, idle_ttl_secs: 1800}` | Cache size and idle timeout for per-Project bundle/plugin overlays. |
+| `context` | `{token_accounting: auto \| provider \| estimate}` | `{token_accounting: auto}` | How the kernel measures context-window occupancy: `auto` trusts a route's reported usage while it stays plausible, `provider` always trusts it, `estimate` always counts locally. Applies whatever bundles are enabled; `HYA_TOKEN_ACCOUNTING` wins. An unknown value or key fails startup. |
 
 ---
 
@@ -103,7 +104,7 @@ providers:
 
 ### `agents.<id>`
 
-Pin a built-in agent's model and default reasoning effort in `config.yaml`:
+Pin an agent's model and default reasoning effort in `config.yaml`. An entry applies by Agent id whatever bundle provides the Agent (`hya-main` and `hya-title` come from `hya/core-agents`); without one, the `agents.<id>.model` of the owning bundle's `config.yml` applies. Setting a model from the TUI updates the file that already holds the Agent's entry, else the owning bundle's `config.yml`:
 
 ```yaml
 agents:
@@ -170,8 +171,9 @@ In Hya v2, every built-in and installed bundle reads its own domain configuratio
 | --- | --- | --- |
 | `hya/network` | `~/.config/hya/bundles/hya%2Fnetwork/config.yml` | `webfetch: { enabled: true, max_response_bytes: 5242880, default_timeout_secs: 30, max_timeout_secs: 120 }`, `websearch: { enabled: true, provider: exa \| parallel, endpoint?, key? }` |
 | `hya/coding-extras` | `~/.config/hya/bundles/hya%2Fcoding-extras/config.yml` | `formatter: false \| true \| map<name, { command, extensions, environment?, disabled? }>`, `lsp: true \| false \| map<name, { command, extensions, disabled?, env?, initialization? }>` |
-| `hya/compaction` | `~/.config/hya/bundles/hya%2Fcompaction/config.yml` | `compaction: { keep_recent: 6, summary_max_tokens: 4096, token_accounting: auto \| provider \| estimate }` |
+| `hya/compaction` | `~/.config/hya/bundles/hya%2Fcompaction/config.yml` | `compaction: { keep_recent: 6, summary_max_tokens: 4096 }` (`token_accounting` moved to `config.yaml` `context.token_accounting`; leaving it here fails startup) |
 | `hya/goal` | `~/.config/hya/bundles/hya%2Fgoal/config.yml` | `goal: { evaluator_model?: "provider/model" }` |
+| `hya/loop` | `~/.config/hya/bundles/hya%2Floop/config.yml` | `loop: { evaluator_model?: "provider/model" }` |
 | `hya/multi-agent` | `~/.config/hya/bundles/hya%2Fmulti-agent/config.yml` | `subagents: { max_concurrency: 100, per_run_budget: 1024, per_team_turn_budget: 1024, per_team_message_budget: 1024 }`, plus optional `agents:` pins |
 | `hya/workflow` | `~/.config/hya/bundles/hya%2Fworkflow/config.yml` | Optional `agents:` pins for workflow stage agents |
 

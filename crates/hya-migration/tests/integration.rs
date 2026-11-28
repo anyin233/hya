@@ -20,14 +20,11 @@ use hya_migration::tui_v1_to_v2::{
     PANEL_SUBAGENT_VIEWER, PANEL_SUBAGENTS, PANEL_WORKFLOWS, TuiCheckStatus,
 };
 use hya_migration::{MigrationTargets, RunOptions, check_all, rollback, run_migration};
-use hya_proto::{
-    AgentName, MemberId, MessageId, OwnerRunId, PartId, PartProjection, Role, SessionId,
-    ToolCallId, WorkflowRunId,
-};
+use hya_proto::{AgentName, MemberId, MessageId, OwnerRunId, PartId, Role, SessionId, ToolCallId};
 use hya_store::SessionStore;
 use hya_tool::extension::{
-    BUNDLE_MULTI_AGENT, context_status_projection, handoff_projection, members_projection,
-    projection_reducers, team_projection, workflow_projection,
+    BUNDLE_MULTI_AGENT, handoff_projection, members_projection, projection_reducers,
+    team_projection,
 };
 use serde_json::{Value as JsonValue, json};
 use sqlx::Connection as _;
@@ -206,7 +203,7 @@ CREATE TABLE agent_effort_preference (
     let tool_part = PartId::new();
     let tool_call = ToolCallId::new();
     let member_id = MemberId::new();
-    let wf_run = WorkflowRunId::new();
+    let wf_run = uuid::Uuid::now_v7();
     let project_id = hya_proto::ProjectId::new().to_string();
 
     // Seed project + project_root + permission + preferences + file_blob.
@@ -1066,26 +1063,43 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         assert_eq!(root_envelopes.len(), 28);
         let root_proj = hya_proto::Projection::from_events_with(&root_envelopes, &reducers);
 
-        // Compaction eviction + status
-        let ctx_status = context_status_projection(&root_proj).unwrap();
-        assert_eq!(ctx_status.tokens, 3000);
-        assert_eq!(ctx_status.threshold, 8000);
-        assert!(matches!(
-            &root_proj.session.messages[0].parts[0],
-            PartProjection::Tool {
-                id,
-                eviction_notice: Some(notice),
-                ..
-            } if *id == seeded.tool_part && notice == "[moved to artifact://abc]"
-        ));
-
-        // Workflow projection
-        let wf = workflow_projection(&root_proj).expect("workflow projection must be present");
+        // Compaction and Workflow events replay as their bundles' raw records;
+        // each bundle's reducer folds them when that bundle is enabled.
+        let extension = |owner: &str, kind: &str| {
+            root_envelopes
+                .iter()
+                .find_map(|envelope| match &envelope.event {
+                    hya_proto::Event::Extension {
+                        bundle,
+                        kind: k,
+                        payload,
+                        ..
+                    } if bundle == owner && k == kind => Some(payload.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let compaction = |kind: &str| extension("hya/compaction", kind);
+        let ctx_status = compaction("context_status");
+        assert_eq!(ctx_status["tokens"], 3000);
+        assert_eq!(ctx_status["threshold"], 8000);
         assert_eq!(
-            wf.selection.as_ref().map(|w| w.name.as_str()),
-            Some("plan-impl-review")
+            compaction("context_evicted")["parts"],
+            json!([{"part": seeded.tool_part, "notice": "[moved to artifact://abc]"}])
         );
-        assert!(wf.run.is_some());
+
+        assert_eq!(
+            extension("hya/workflow", "workflow_selected")["workflow"]["name"],
+            "plan-impl-review"
+        );
+        assert_eq!(
+            extension("hya/workflow", "workflow_run_started")["workflow"]["name"],
+            "plan-impl-review"
+        );
+        assert_eq!(
+            extension("hya/workflow", "workflow_run_finished")["status"],
+            "completed"
+        );
 
         // Multi-agent members + roster/archive
         let members = members_projection(&root_proj);
@@ -1223,6 +1237,13 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         )
         .unwrap();
         assert_eq!(comp_cfg["compaction"]["keep_recent"].as_u64(), Some(8));
+        assert!(comp_cfg["compaction"].get("token_accounting").is_none());
+        let migrated: serde_norway::Value =
+            serde_norway::from_str(&fs::read_to_string(&seeded.targets.config).unwrap()).unwrap();
+        assert_eq!(
+            migrated["context"]["token_accounting"].as_str(),
+            Some("estimate")
+        );
 
         let ma_cfg: serde_norway::Value = serde_norway::from_str(
             &fs::read_to_string(user_bundle_config_path(
@@ -1267,8 +1288,8 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
             .expect("v2 hya-app::config::load must accept migrated config.yaml")
             .expect("migrated config.yaml must be discovered under XDG_CONFIG_HOME");
         assert_eq!(
-            resolved.settings.goal().evaluator_model.as_deref(),
-            Some("openai/gpt-5")
+            resolved.settings.bundle_config_json("hya/goal")["goal"]["evaluator_model"],
+            "openai/gpt-5"
         );
     }
 

@@ -21,13 +21,13 @@ use hya_runtime_abi::{
     HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, MemberMailRevivalRequest,
     ModelCallRequest, ModelCallResponse, ModelStreamChunk, ModelWindowInfo, NativeBundleApiHandler,
     NativeBundleApiRequest, NativeHook, NativeToolAfterInput, NativeToolAfterOutcome,
-    NativeToolResult, ProjectionReducer, SessionListFilter, SessionSummaryMeta, StagedMailAck,
-    TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus, UriResolveCtx, UriSchemaHandler,
+    NativeToolResult, ProjectionReducer, SessionListFilter, SessionSummaryMeta, TurnOutcome,
+    TurnSpawnRequest, TurnStartRequest, TurnStatus, UriResolveCtx, UriSchemaHandler,
 };
 use hya_tool::extension::{BUNDLE_CHANNELS, BUNDLE_MULTI_AGENT, ExtensionEvent, team_projection};
 use hya_tool::{
-    AgentDef, InteractionPlane, MailboxPlane, PermissionPlane, PermissionRules, SkillCatalogEntry,
-    Tool, ToolCtx, ToolError,
+    AgentDef, InteractionPlane, PermissionPlane, PermissionRules, SkillCatalogEntry, Tool, ToolCtx,
+    ToolError,
 };
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
@@ -39,6 +39,16 @@ use crate::{
     UnreadMailSteerHook, append_steer_notice, decode_channels_projection, parse_channel_uri,
 };
 
+/// One `stage_extension_event` call; the test plays the host's commit.
+struct StagedMock {
+    during: SessionId,
+    target: SessionId,
+    bundle: String,
+    kind: String,
+    payload: Value,
+    on_commit: Option<Box<dyn FnOnce() + Send>>,
+}
+
 struct MockHost {
     events: Mutex<HashMap<SessionId, Vec<Envelope>>>,
     parents: Mutex<HashMap<SessionId, Option<SessionId>>>,
@@ -47,8 +57,8 @@ struct MockHost {
     marks: Mutex<HashMap<SessionId, u64>>,
     notified: Mutex<Vec<(SessionId, u64, bool)>>,
     stopped_by_user: Mutex<Vec<(SessionId, String)>>,
-    steer_suppressed: Mutex<HashMap<SessionId, bool>>,
-    staged_acks: Mutex<HashMap<SessionId, StagedMailAck>>,
+    transient: Mutex<HashMap<(SessionId, String, String), Value>>,
+    staged: Mutex<Vec<StagedMock>>,
     revivals: Mutex<Vec<MemberMailRevivalRequest>>,
     bus_tx: broadcast::Sender<Envelope>,
     next_seq: Mutex<u64>,
@@ -65,8 +75,8 @@ impl MockHost {
             marks: Mutex::new(HashMap::new()),
             notified: Mutex::new(Vec::new()),
             stopped_by_user: Mutex::new(Vec::new()),
-            steer_suppressed: Mutex::new(HashMap::new()),
-            staged_acks: Mutex::new(HashMap::new()),
+            transient: Mutex::new(HashMap::new()),
+            staged: Mutex::new(Vec::new()),
             revivals: Mutex::new(Vec::new()),
             bus_tx,
             next_seq: Mutex::new(1),
@@ -254,10 +264,44 @@ impl HostSessionStore for MockHost {
     ) -> Result<Vec<SessionSummaryMeta>, HostError> {
         Ok(Vec::new())
     }
+
+    fn stage_extension_event(
+        &self,
+        during: SessionId,
+        target: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
+        on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), HostError> {
+        self.staged.lock().unwrap().push(StagedMock {
+            during,
+            target,
+            bundle: bundle.to_string(),
+            kind: kind.to_string(),
+            payload,
+            on_commit,
+        });
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl HostBundleStorage for MockHost {
+    fn get_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(self
+            .transient
+            .lock()
+            .unwrap()
+            .get(&(session, bundle.to_string(), key.to_string()))
+            .cloned())
+    }
+
     async fn get_state(
         &self,
         _bundle: &str,
@@ -416,19 +460,6 @@ impl HostTurnRunner for MockHost {
             .any(|(r, h)| *r == root && h == handle)
     }
 
-    fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.steer_suppressed
-            .lock()
-            .unwrap()
-            .get(&session)
-            .copied()
-            .unwrap_or(false)
-    }
-
-    fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
-        self.staged_acks.lock().unwrap().insert(session, ack);
-    }
-
     async fn revive_archived_member_with_mail(
         &self,
         request: MemberMailRevivalRequest,
@@ -584,15 +615,14 @@ impl HostRuntime for MockHost {
     }
 }
 
-fn tool_ctx(session: SessionId, policy: ChannelPolicySnapshot) -> ToolCtx {
+fn tool_ctx(session: SessionId) -> ToolCtx {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
     let (interaction, _irx) = InteractionPlane::new();
     let mut ctx = ToolCtx::new(
         PathBuf::from("."),
         permission.for_session(session),
         CancellationToken::new(),
-    )
-    .with_extension(MailboxPlane::disconnected().with_channel_policy(policy));
+    );
     ctx.session = Some(session);
     ctx.interaction = interaction.for_session(session);
     ctx
@@ -755,10 +785,7 @@ async fn send_list_and_channel_uri_handler_round_trip() {
     // Child sends DM to parent via default channel (`channel` omitted).
     let send = SendTool::new(Arc::clone(&service));
     let out = send
-        .execute(
-            &tool_ctx(child, allow_all_policy()),
-            json!({ "body": "status ok" }),
-        )
+        .execute(&tool_ctx(child), json!({ "body": "status ok" }))
         .await
         .unwrap();
     assert_eq!(out["metadata"]["from"], "main/scout-1");
@@ -766,10 +793,7 @@ async fn send_list_and_channel_uri_handler_round_trip() {
 
     // Root lists channels and sees 1 unread in DM + 1 direct child in team section.
     let list = ListChannelTool::new(Arc::clone(&service));
-    let listed = list
-        .execute(&tool_ctx(root, allow_all_policy()), json!({}))
-        .await
-        .unwrap();
+    let listed = list.execute(&tool_ctx(root), json!({})).await.unwrap();
     let channels = listed["channels"].as_array().unwrap();
     assert_eq!(channels.len(), 2);
     let dm_row = channels.iter().find(|c| c["id"] == dm).unwrap();
@@ -799,10 +823,7 @@ async fn send_list_and_channel_uri_handler_round_trip() {
     assert_eq!(*host.notified.lock().unwrap(), vec![(root, 7, true)]);
 
     // Subsequent list_channel shows 0 unread.
-    let listed_after = list
-        .execute(&tool_ctx(root, allow_all_policy()), json!({}))
-        .await
-        .unwrap();
+    let listed_after = list.execute(&tool_ctx(root), json!({})).await.unwrap();
     let dm_after = listed_after["channels"]
         .as_array()
         .unwrap()
@@ -810,6 +831,80 @@ async fn send_list_and_channel_uri_handler_round_trip() {
         .find(|c| c["id"] == dm)
         .unwrap();
     assert_eq!(dm_after["unread"], 0);
+}
+
+#[tokio::test]
+async fn send_routes_each_address_form_and_list_channel_renders_team_heartbeats() {
+    let (host, root, child, group, dm) = setup_team();
+    let idle_child = SessionId::new();
+    host.register_session(idle_child, Some(root));
+    host.push_extension(
+        root,
+        ExtensionEvent::AgentRegistered {
+            session: root,
+            agent_session: idle_child,
+            handle: "scout-2".to_string(),
+            parent: Some("main".to_string()),
+            agent_type: AgentName::new("scout"),
+            mode: SubagentMode::Transient,
+        },
+    );
+    let now = u64::try_from(hya_proto::now_millis()).unwrap();
+    host.push_extension(
+        root,
+        ExtensionEvent::AgentHeartbeat {
+            session: root,
+            handle: "main/scout-1".to_string(),
+            heartbeat_ms: now - 42_000,
+        },
+    );
+    let service = Arc::new(AgentChannelsService::with_runtime(
+        Arc::clone(&host) as Arc<dyn HostRuntime>
+    ));
+    let send = SendTool::new(Arc::clone(&service));
+
+    for (session, channel, to) in [
+        (root, Some(format!("#{group}")), format!("#{group}")),
+        (root, Some(dm.clone()), format!("#{dm}")),
+        (root, None, format!("#{group}")),
+        (child, Some("^parent".to_string()), format!("#{dm}")),
+    ] {
+        let mut input = json!({ "body": "hello" });
+        if let Some(channel) = channel {
+            input["channel"] = json!(channel);
+        }
+        let out = send.execute(&tool_ctx(session), input).await.unwrap();
+        assert_eq!(out["metadata"]["to"], to);
+    }
+    assert!(matches!(
+        send.execute(&tool_ctx(root), json!({ "channel": dm, "body": "   " })).await,
+        Err(ToolError::Input(message)) if message.contains("empty")
+    ));
+
+    let list = ListChannelTool::new(Arc::clone(&service));
+    let listed = list.execute(&tool_ctx(root), json!({})).await.unwrap();
+    let output = listed["output"].as_str().unwrap();
+    assert!(
+        output.contains(&format!("#{dm} · dm · peer main/scout-1 · 1 unread")),
+        "{output}"
+    );
+    assert!(
+        output.contains("scout-1 · idle · last active 42s ago (heartbeat)"),
+        "{output}"
+    );
+    assert!(
+        output.contains("scout-2 · idle · no heartbeat yet"),
+        "{output}"
+    );
+
+    let childless = list.execute(&tool_ctx(child), json!({})).await.unwrap();
+    assert!(childless.get("team").is_none());
+
+    let unstarted = SendTool::new(Arc::new(AgentChannelsService::new()));
+    assert!(matches!(
+        unstarted.execute(&tool_ctx(root), json!({ "body": "hi" })).await,
+        Err(ToolError::Other(message)) if message.contains("only available inside a running team")
+    ));
 }
 
 #[tokio::test]
@@ -821,18 +916,16 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     let send = SendTool::new(Arc::clone(&service));
 
     // 1. Policy denies send -> rejected.
-    let denied = ChannelPolicySnapshot::default();
+    host.set_policy(root, ChannelPolicySnapshot::default());
     let err = send
-        .execute(
-            &tool_ctx(root, denied),
-            json!({ "channel": dm, "body": "blocked" }),
-        )
+        .execute(&tool_ctx(root), json!({ "channel": dm, "body": "blocked" }))
         .await
         .unwrap_err();
     assert!(
         err.to_string().contains("direction denied by policy"),
         "{err}"
     );
+    host.set_policy(root, allow_all_policy());
 
     // 2. User-stopped guard -> rejected.
     host.stopped_by_user
@@ -840,10 +933,7 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
         .unwrap()
         .push((root, "main/scout-1".to_string()));
     let err = send
-        .execute(
-            &tool_ctx(root, allow_all_policy()),
-            json!({ "channel": dm, "body": "wake up" }),
-        )
+        .execute(&tool_ctx(root), json!({ "channel": dm, "body": "wake up" }))
         .await
         .unwrap_err();
     assert!(err.to_string().contains("the user stopped"), "{err}");
@@ -853,7 +943,7 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     host.claims.lock().unwrap().clear();
     let err = send
         .execute(
-            &tool_ctx(root, allow_all_policy()),
+            &tool_ctx(root),
             json!({ "channel": dm, "body": "no claim" }),
         )
         .await
@@ -872,7 +962,7 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     );
     let out = send
         .execute(
-            &tool_ctx(root, allow_all_policy()),
+            &tool_ctx(root),
             json!({ "channel": dm, "body": "revive now" }),
         )
         .await
@@ -884,16 +974,13 @@ async fn send_enforces_policy_user_stop_claim_and_revival() {
     assert_eq!(revivals[0].body, "revive now");
 }
 
-#[tokio::test]
-async fn unread_mail_steer_hook_splices_notice_and_stages_atomic_ack() {
+/// Root with one unread DM from its child, mail mark 42, and a started hook.
+async fn steer_fixture() -> (Arc<MockHost>, SessionId, String, UnreadMailSteerHook) {
     let (host, root, child, _group, dm) = setup_team();
     host.marks.lock().unwrap().insert(root, 42);
     let service = Arc::new(AgentChannelsService::with_runtime(
         Arc::clone(&host) as Arc<dyn HostRuntime>
     ));
-    let hook = UnreadMailSteerHook::new(Arc::clone(&service));
-
-    // Deliver a DM from child to root.
     AgentChannelsService::send(
         host.as_ref(),
         child,
@@ -906,63 +993,16 @@ async fn unread_mail_steer_hook_splices_notice_and_stages_atomic_ack() {
     )
     .await
     .unwrap();
+    (host, root, dm, UnreadMailSteerHook::new(service))
+}
 
-    // 1. `wait` is skipped (leaves wait_ack untouched).
-    let wait_out = hook
+async fn after_hook_output(hook: &UnreadMailSteerHook, session: SessionId, tool: &str) -> Value {
+    let outcome = hook
         .tool_execute_after(NativeToolAfterInput {
-            session: root,
+            session,
             message: MessageId::new(),
             call: ToolCallId::new(),
-            tool: "wait".to_string(),
-            input: json!({}),
-            result: NativeToolResult::Ok {
-                output: json!({"output": "waited"}),
-                time_ms: 5,
-            },
-        })
-        .await
-        .unwrap();
-    let NativeToolAfterOutcome::Continue {
-        result: NativeToolResult::Ok { output, .. },
-    } = wait_out
-    else {
-        panic!("expected Ok");
-    };
-    assert_eq!(output["output"], "waited");
-    assert!(host.staged_acks.lock().unwrap().is_empty());
-
-    // 2. Suppressed session skips steering.
-    host.steer_suppressed.lock().unwrap().insert(root, true);
-    let suppressed_out = hook
-        .tool_execute_after(NativeToolAfterInput {
-            session: root,
-            message: MessageId::new(),
-            call: ToolCallId::new(),
-            tool: "bash".to_string(),
-            input: json!({}),
-            result: NativeToolResult::Ok {
-                output: json!({"output": "ok"}),
-                time_ms: 5,
-            },
-        })
-        .await
-        .unwrap();
-    let NativeToolAfterOutcome::Continue {
-        result: NativeToolResult::Ok { output, .. },
-    } = suppressed_out
-    else {
-        panic!("expected Ok");
-    };
-    assert_eq!(output["output"], "ok");
-    host.steer_suppressed.lock().unwrap().insert(root, false);
-
-    // 3. Normal tool call receives `[NEW MAIL]` notice AND stages `StagedMailAck`.
-    let steered = hook
-        .tool_execute_after(NativeToolAfterInput {
-            session: root,
-            message: MessageId::new(),
-            call: ToolCallId::new(),
-            tool: "bash".to_string(),
+            tool: tool.to_string(),
             input: json!({}),
             result: NativeToolResult::Ok {
                 output: json!({"output": "done"}),
@@ -973,18 +1013,59 @@ async fn unread_mail_steer_hook_splices_notice_and_stages_atomic_ack() {
         .unwrap();
     let NativeToolAfterOutcome::Continue {
         result: NativeToolResult::Ok { output, .. },
-    } = steered
+    } = outcome
     else {
         panic!("expected Ok");
     };
+    output
+}
+
+#[tokio::test]
+async fn steer_hook_stages_ack_and_notifies_after_commit() {
+    let (host, root, dm, hook) = steer_fixture().await;
+
+    // `wait` owns its own inbox ack.
+    let output = after_hook_output(&hook, root, "wait").await;
+    assert_eq!(output["output"], "done");
+    assert!(host.staged.lock().unwrap().is_empty());
+
+    let output = after_hook_output(&hook, root, "bash").await;
     let text = output["output"].as_str().unwrap();
     assert!(text.contains("[NEW MAIL"), "{text}");
     assert!(text.contains("found root cause"), "{text}");
     assert!(text.contains(&format!("@{dm}")), "{text}");
-    let ack = host.staged_acks.lock().unwrap().remove(&root).unwrap();
-    assert_eq!(ack.root, root);
-    assert_eq!(ack.mark, 42);
-    assert!(ack.consumed_incoming);
+
+    let mut staged = std::mem::take(&mut *host.staged.lock().unwrap());
+    assert_eq!(staged.len(), 1);
+    let ack = staged.remove(0);
+    assert_eq!((ack.during, ack.target), (root, root));
+    assert_eq!(
+        (ack.bundle.as_str(), ack.kind.as_str()),
+        (BUNDLE_CHANNELS, "mail_consumed")
+    );
+    assert_eq!(ack.payload["through"], 1);
+    // The watermark moves only when the host runs the commit callback.
+    assert!(host.notified.lock().unwrap().is_empty());
+    (ack.on_commit.unwrap())();
+    assert_eq!(*host.notified.lock().unwrap(), vec![(root, 42, true)]);
+}
+
+#[tokio::test]
+async fn steer_hook_is_silent_when_steer_is_suppressed() {
+    let (host, root, _dm, hook) = steer_fixture().await;
+    host.transient.lock().unwrap().insert(
+        (
+            root,
+            BUNDLE_CHANNELS.to_string(),
+            "steer_suppressed".to_string(),
+        ),
+        Value::Bool(true),
+    );
+
+    let output = after_hook_output(&hook, root, "bash").await;
+    assert_eq!(output, json!({"output": "done"}));
+    assert!(host.staged.lock().unwrap().is_empty());
+    assert!(host.notified.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1092,7 +1173,7 @@ fn channel_read_tool_uri_parser_and_policy_helpers() {
     }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let tool = ChannelReadTool::new(Arc::new(Echo));
-    let ctx = tool_ctx(SessionId::new(), allow_all_policy());
+    let ctx = tool_ctx(SessionId::new());
     let out = rt
         .block_on(tool.execute(&ctx, json!({"path": "#DM-12345678"})))
         .unwrap();

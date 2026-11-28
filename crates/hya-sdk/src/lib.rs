@@ -82,7 +82,8 @@ impl Sdk {
 
     /// Build the CLI's loopback daemon client: no environment proxy, a
     /// 5-second connect timeout, and a 30-second timeout for ordinary calls.
-    /// Turn waits and SSE streams have no request timeout.
+    /// Turn waits, SSE streams, and the `_unbounded` bundle API calls have no
+    /// request timeout.
     ///
     /// # Errors
     /// Returns a transport error if the HTTP client cannot be built.
@@ -516,6 +517,27 @@ impl Sdk {
             .map_err(SdkError::from_client)
     }
 
+    /// [`Self::invoke_session_bundle_api`] with no request timeout, for an
+    /// endpoint that runs as long as its work (as turn waits do).
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn invoke_session_bundle_api_unbounded(
+        &self,
+        session: &str,
+        bundle: &str,
+        method: reqwest::Method,
+        path: &str,
+        query: Option<&str>,
+        body: Option<&Value>,
+    ) -> Result<Value, SdkError> {
+        self.transport
+            .unbounded()
+            .invoke_session_bundle_api(session, bundle, method, path, query, body)
+            .await
+            .map_err(SdkError::from_client)
+    }
+
     /// `METHOD /v2/bundles/{bundle}/api/{path}` — invoke one global bundle API
     /// endpoint.
     ///
@@ -529,9 +551,45 @@ impl Sdk {
         query: Option<&str>,
         body: Option<&Value>,
     ) -> Result<Value, SdkError> {
+        self.global_bundle_api(&self.transport, bundle, method, path, query, body)
+            .await
+    }
+
+    /// [`Self::invoke_global_bundle_api`] with no request timeout.
+    ///
+    /// # Errors
+    /// Returns [`SdkError`] on transport or API failure.
+    pub async fn invoke_global_bundle_api_unbounded(
+        &self,
+        bundle: &str,
+        method: reqwest::Method,
+        path: &str,
+        query: Option<&str>,
+        body: Option<&Value>,
+    ) -> Result<Value, SdkError> {
+        self.global_bundle_api(
+            &self.transport.unbounded(),
+            bundle,
+            method,
+            path,
+            query,
+            body,
+        )
+        .await
+    }
+
+    async fn global_bundle_api(
+        &self,
+        transport: &HttpTransport,
+        bundle: &str,
+        method: reqwest::Method,
+        path: &str,
+        query: Option<&str>,
+        body: Option<&Value>,
+    ) -> Result<Value, SdkError> {
         let directory_query = (query.is_none() && !self.directory.is_empty())
             .then(|| format!("directory={}", encode_component(&self.directory)));
-        self.transport
+        transport
             .invoke_global_bundle_api(
                 bundle,
                 method,
@@ -679,6 +737,44 @@ mod tests {
         tokio::time::resume();
         release.send(()).unwrap();
         wait.await.unwrap().unwrap();
+
+        for global in [false, true] {
+            let call = {
+                let sdk = sdk.clone();
+                tokio::spawn(async move {
+                    if global {
+                        sdk.invoke_global_bundle_api_unbounded(
+                            "a/b",
+                            reqwest::Method::POST,
+                            "/run",
+                            None,
+                            None,
+                        )
+                        .await
+                    } else {
+                        sdk.invoke_session_bundle_api_unbounded(
+                            "test",
+                            "a/b",
+                            reqwest::Method::POST,
+                            "/run",
+                            None,
+                            None,
+                        )
+                        .await
+                    }
+                })
+            };
+            let release = received.recv().await.unwrap();
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(31)).await;
+            assert!(
+                !call.is_finished(),
+                "unbounded bundle API calls must outlive the ordinary deadline"
+            );
+            tokio::time::resume();
+            release.send(()).unwrap();
+            call.await.unwrap().unwrap();
+        }
 
         let stream = tokio::spawn(async move { sdk.stream_session("test", 0).await });
         let release = received.recv().await.unwrap();

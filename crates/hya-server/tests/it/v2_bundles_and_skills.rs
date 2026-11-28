@@ -117,13 +117,18 @@ async fn bundle_api_state() -> AppState {
         })
         .unwrap();
     let (perm, _) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(Vec::new())))),
-        runtime,
-        perm,
-        EventBus::default(),
-    ));
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(
+                ProviderRouter::new().with(Arc::new(FakeProvider::scripted_turns(Vec::new()))),
+            ),
+            runtime,
+            perm,
+            EventBus::default(),
+        )
+        .with_legacy_coordination(),
+    );
     state_of(engine, std::env::temp_dir())
 }
 

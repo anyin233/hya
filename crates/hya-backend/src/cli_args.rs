@@ -19,18 +19,10 @@ use crate::relay_doctor::RelayCommand;
         control it. Needs Bun. Subcommands select headless, server, and admin areas."
 )]
 pub(crate) struct Cli {
-    /// Headless goal mode: iterate the agent until an independent evaluator
-    /// reports the goal met, or the iteration cap trips.
+    /// Headless prompt. An enabled bundle may claim `-p` with its own driver
+    /// and flags (`hya/goal`: goal mode); otherwise it runs one headless turn.
     #[arg(short = 'p', long = "prompt", value_name = "GOAL")]
     pub(crate) prompt: Option<String>,
-    /// Iteration cap for `-p` goal mode.
-    #[arg(long, default_value_t = 6)]
-    pub(crate) max_iterations: u32,
-    /// Evaluator model for `-p` goal mode as `provider/model`. Overrides the
-    /// config `goal.evaluator_model`; without either, the worker's current
-    /// model judges (unless a plugin registers `goal.evaluate`).
-    #[arg(long, value_name = "PROVIDER/MODEL")]
-    pub(crate) evaluator_model: Option<String>,
     /// Port of the WebUI that bare `hya` serves on 127.0.0.1 next to the
     /// terminal TUI (default 3250; 0 picks a free port). Only for bare `hya`.
     #[arg(long, value_name = "PORT")]
@@ -92,8 +84,7 @@ pub(crate) struct Cli {
     /// Auto-approve every tool action (edit/write/shell anywhere). Use with care.
     #[arg(long, global = true)]
     pub(crate) yolo: bool,
-    /// Run in bare mode (`BuiltinBundleProfile::Bare`): load zero built-in
-    /// bundles, using only the 8 standard bare tools (`read`, `write`, `edit`,
+    /// Enable no built-in bundles: use only the 8 standard bare tools (`read`, `write`, `edit`,
     /// `bash`, `grep`, `todo`, `rewrite`, `skill`), core `code-mode` (without
     /// `agent()`), `AGENTS.md`, skills, MCP, user/project bundles & plugins,
     /// and the minimal `hya-bare` default agent.
@@ -343,10 +334,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: BundleCommand,
     },
-    Workflow {
-        #[command(subcommand)]
-        command: crate::workflow_cmd::WorkflowCliCommand,
-    },
     /// List the effective model catalog (model cache ∪ config entries).
     Models {
         /// Provider id to filter models by.
@@ -405,75 +392,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: RelayCommand,
     },
-    /// Loop mode: iterate the agent toward `--target` until the deterministic
-    /// `--while`/`--until` condition, the `loop.should_stop` hook, or the
-    /// independent verifier stops the run.
-    Loop {
-        /// The loop target: what "done" means, judged independently.
-        #[arg(long)]
-        target: String,
-        /// Iteration budget (clamped to 1..=100 by the engine's hard ceiling).
-        #[arg(long)]
-        budget: Option<u32>,
-        /// Alias for `--budget` (mirrors `-p` goal mode's flag); `--budget`
-        /// wins when both are given.
-        #[arg(long)]
-        max_iterations: Option<u32>,
-        /// Keep looping while this shell command exits 0; exit 1 stops the
-        /// loop; any other exit code or a timeout is a broken condition
-        /// (a failure, never a success).
-        #[arg(long = "while", value_name = "CMD")]
-        while_command: Option<String>,
-        /// Stop when this shell command exits 0; exit 1 keeps looping; any
-        /// other exit code or a timeout is a broken condition. Mutually
-        /// exclusive with `--while`.
-        #[arg(long = "until", value_name = "CMD")]
-        until_command: Option<String>,
-        /// Verifier/planner model as `provider/model`. Overrides the config
-        /// `goal.evaluator_model`; without either, the worker's current model
-        /// judges.
-        #[arg(long, value_name = "PROVIDER/MODEL")]
-        evaluator_model: Option<String>,
-    },
-}
-
-/// Resolve the effective loop budget from the parsed flags: `--budget`
-/// outranks the `--max-iterations` alias, the default mirrors
-/// [`hya_app::DEFAULT_LOOP_BUDGET`], and every request is clamped into the
-/// `1..=100` range enforced by `hya/loop`.
-#[must_use]
-pub(crate) fn loop_budget(budget: Option<u32>, max_iterations: Option<u32>) -> u32 {
-    hya_app::clamp_loop_budget(
-        budget
-            .or(max_iterations)
-            .unwrap_or(hya_app::DEFAULT_LOOP_BUDGET),
-    )
-}
-
-/// Build the deterministic loop predicate from `--while`/`--until`: exactly
-/// one may be set, evaluated in the session workdir.
-pub(crate) fn build_loop_predicate(
-    while_command: Option<String>,
-    until_command: Option<String>,
-    workdir: &std::path::Path,
-) -> Result<Option<hya_app::LoopPredicateSpec>, String> {
-    match (while_command, until_command) {
-        (Some(_), Some(_)) => Err(
-            "--while and --until are mutually exclusive; give exactly one loop condition"
-                .to_string(),
-        ),
-        (Some(command), None) => Ok(Some(hya_app::LoopPredicateSpec {
-            command,
-            mode: hya_app::LoopPredicateMode::While,
-            workdir: workdir.to_path_buf(),
-        })),
-        (None, Some(command)) => Ok(Some(hya_app::LoopPredicateSpec {
-            command,
-            mode: hya_app::LoopPredicateMode::Until,
-            workdir: workdir.to_path_buf(),
-        })),
-        (None, None) => Ok(None),
-    }
 }
 
 /// Default WebUI port of bare `hya` (`--port` overrides it).
@@ -887,66 +805,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_goal_loop_budget_and_predicate_flags() {
-        use hya_app::{DEFAULT_LOOP_BUDGET, HARD_MAX_LOOP_BUDGET, LoopPredicateMode};
-
-        assert_eq!(
-            p("hya -p ship --evaluator-model deep/o3-mini")
-                .evaluator_model
-                .as_deref(),
-            Some("deep/o3-mini")
-        );
-        assert!(p("hya -p ship").evaluator_model.is_none());
-        assert!(matches!(
-            p("hya loop --target green --budget 5 --while true --evaluator-model deep/o3-mini").command,
-            Some(Command::Loop { ref target, budget: Some(5), max_iterations: None, while_command: Some(ref w), until_command: None, evaluator_model: Some(ref e) })
-                if target == "green" && w == "true" && e == "deep/o3-mini"
-        ));
-        assert!(matches!(
-            p("hya loop --target docs --until false --max-iterations 3").command,
-            Some(Command::Loop {
-                budget: None,
-                max_iterations: Some(3),
-                until_command: Some(_),
-                ..
-            })
-        ));
-        assert_eq!(super::loop_budget(None, None), DEFAULT_LOOP_BUDGET);
-        assert_eq!(
-            (
-                super::loop_budget(Some(5), Some(9)),
-                super::loop_budget(None, Some(9)),
-                super::loop_budget(Some(0), None)
-            ),
-            (5, 9, 1)
-        );
-        assert_eq!(super::loop_budget(None, Some(500)), HARD_MAX_LOOP_BUDGET);
-
-        let dir = std::env::temp_dir();
-        assert_eq!(
-            super::build_loop_predicate(Some("x".into()), None, &dir)
-                .unwrap()
-                .unwrap()
-                .mode,
-            LoopPredicateMode::While
-        );
-        assert_eq!(
-            super::build_loop_predicate(None, Some("y".into()), &dir)
-                .unwrap()
-                .unwrap()
-                .mode,
-            LoopPredicateMode::Until
-        );
-        assert!(
-            super::build_loop_predicate(None, None, &dir)
-                .unwrap()
-                .is_none()
-        );
-        assert!(super::build_loop_predicate(Some("a".into()), Some("b".into()), &dir).is_err());
-    }
-
-    #[test]
-    fn parses_exec_workflow_sessions_models_provider_oauth_and_effort() {
+    fn parses_exec_sessions_models_provider_oauth_and_effort() {
         assert_eq!(
             super::merge_model_effort(Some("openai/gpt".into()), Some("high".into())).unwrap(),
             Some("openai/gpt#high".into())
@@ -961,7 +820,7 @@ mod tests {
             "hya exec --time-budget 0 hi",
             "hya exec --time-budget -1 hi",
             "hya exec --time-budget 1.5 hi",
-            "hya workflow use echo-input",
+            "hya workflow list",
         ]);
         assert!(matches!(
             p("hya exec --json --time-budget 30 go").command,

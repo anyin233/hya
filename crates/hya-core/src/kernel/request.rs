@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::View;
-use super::rewrite::{GOAL_CHECKPOINT, is_goal_checkpoint};
+use super::rewrite::{CRITERIA_CHECKPOINT, is_criteria_checkpoint};
 use crate::CoreError;
 
 /// Prompt image data by blob hash (`data:` URLs), loaded from the session's
@@ -80,7 +80,7 @@ pub fn projection_to_messages(
                     .any(|later| later.id > row.id && is_end_continuation_notice(later)))
         })
         .filter(|row| {
-            !(is_goal_checkpoint(row) || deadline_stage(row) || is_kernel_notice_row(row))
+            !(is_criteria_checkpoint(row) || deadline_stage(row) || is_kernel_notice_row(row))
                 || (marker.is_none_or(|marker| marker.id < row.id)
                     && latest_assistant.is_some_and(|assistant| {
                         // The marker can move in the projection. These IDs are
@@ -170,7 +170,7 @@ fn user_text(parts: &[Part]) -> String {
 /// once the model has answered it.
 pub(super) fn ends_with_transient_notice(messages: &[Message]) -> bool {
     match messages.last() {
-        Some(Message::System { content, .. }) => content.starts_with(GOAL_CHECKPOINT),
+        Some(Message::System { content, .. }) => content.starts_with(CRITERIA_CHECKPOINT),
         Some(Message::User { parts, .. }) => {
             let text = user_text(parts);
             is_bare_transient_text(&text) || is_kernel_notice(&text)

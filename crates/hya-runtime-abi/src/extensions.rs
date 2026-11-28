@@ -2,8 +2,8 @@
 //!
 //! Alongside [`hya_tool::Tool`] and [`hya_context::rewrite::Rewriter`], native
 //! bundles may register lifecycle services, runtime hooks, bundle HTTP/gRPC API
-//! handlers, event projection reducers, custom URI scheme handlers, and goal or
-//! loop drivers.
+//! handlers, event projection reducers, custom URI scheme handlers, and
+//! drivers.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,7 +12,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
 use hya_proto::{
-    ActorClaim, AgentName, Envelope, EventSeq, MessageId, ModelRef, PartId, SessionId, ToolCallId,
+    ActorClaim, AgentName, Envelope, EventSeq, FinishCause, FinishReason, MessageId, ModelRef,
+    PartId, SessionId, ToolCallId,
 };
 use hya_tool::{Action, Decision, Resource};
 use serde::{Deserialize, Serialize};
@@ -120,6 +121,8 @@ pub enum HookPoint {
     CommandExecuteBefore,
     /// Rewrite user prompt text before admission (`message.user.before`).
     MessageUserBefore,
+    /// Consulted before running a turn (`turn.admit`).
+    TurnAdmit,
     /// Rewrite completed assistant text (`text.complete`).
     TextComplete,
     /// Adjust completion parameters before provider call (`chat.params`).
@@ -130,16 +133,92 @@ pub enum HookPoint {
     PermissionAsk,
     /// Approve under a bundle-declared permission mode (`permission.approve`).
     PermissionApprove,
-    /// Evaluate a goal completion condition (`goal.evaluate`).
-    GoalEvaluate,
-    /// Verify loop target progress (`loop.verifier`).
-    LoopVerify,
-    /// Plan next loop directive (`loop.planner`).
-    LoopPlan,
-    /// Decide whether a loop should stop (`loop.should_stop`).
-    LoopShouldStop,
     /// Observe live envelopes published on the event bus (`event`).
     EventObserve,
+    /// Hold a guard for each model stream a turn opens (`model.stream.permit`).
+    ModelStreamPermit,
+    /// Observe a user stop before the host cancels the turn (`turn.stop`).
+    TurnStop,
+    /// Approve or refuse archiving or deleting a session tree (`session.close.before`).
+    SessionClose,
+    /// Report pending work around a headless run (`run.headless`).
+    HeadlessRun,
+    /// Add text to a session's restore prompt (`session.restore`).
+    SessionRestore,
+    /// Observe that every restore prompt was admitted (`runtime.restored`).
+    RuntimeRestored,
+}
+
+impl HookPoint {
+    /// Every core hook point, in dispatch-table order.
+    pub const ALL: [Self; 23] = [
+        Self::ToolExecuteBefore,
+        Self::ToolExecuteAfter,
+        Self::ToolVisibility,
+        Self::CompactionBefore,
+        Self::CompactionAfter,
+        Self::SessionStart,
+        Self::SessionEnd,
+        Self::AgentSpawn,
+        Self::CommandExecuteBefore,
+        Self::MessageUserBefore,
+        Self::TurnAdmit,
+        Self::TextComplete,
+        Self::ChatParams,
+        Self::ModelFallback,
+        Self::PermissionAsk,
+        Self::PermissionApprove,
+        Self::EventObserve,
+        Self::ModelStreamPermit,
+        Self::TurnStop,
+        Self::SessionClose,
+        Self::HeadlessRun,
+        Self::SessionRestore,
+        Self::RuntimeRestored,
+    ];
+
+    /// Hook name used by bundle manifests and, where supported, the plugin wire.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::ToolExecuteBefore => "tool.execute.before",
+            Self::ToolExecuteAfter => "tool.execute.after",
+            Self::ToolVisibility => "tool.visibility",
+            Self::CompactionBefore => "compaction.before",
+            Self::CompactionAfter => "compaction.after",
+            Self::SessionStart => "session.start",
+            Self::SessionEnd => "session.end",
+            Self::AgentSpawn => "agent.spawn",
+            Self::CommandExecuteBefore => "command.execute.before",
+            Self::MessageUserBefore => "message.user.before",
+            Self::TurnAdmit => "turn.admit",
+            Self::TextComplete => "experimental.text.complete",
+            Self::ChatParams => "chat.params",
+            Self::ModelFallback => "model.fallback",
+            Self::PermissionAsk => "permission.ask",
+            Self::PermissionApprove => "permission.approve",
+            Self::EventObserve => "event",
+            Self::ModelStreamPermit => "model.stream.permit",
+            Self::TurnStop => "turn.stop",
+            Self::SessionClose => "session.close.before",
+            Self::HeadlessRun => "run.headless",
+            Self::SessionRestore => "session.restore",
+            Self::RuntimeRestored => "runtime.restored",
+        }
+    }
+
+    /// Parse a hook name produced by [`Self::name`].
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|point| point.name() == name)
+    }
+}
+
+/// Whether `name` is a bundle-declared hook point (`<bundle-id>:<point>`).
+#[must_use]
+pub fn is_declared_hook_point(name: &str) -> bool {
+    name.split_once(':')
+        .is_some_and(|(bundle, point)| !bundle.is_empty() && !point.is_empty())
 }
 
 /// Input passed to `tool.execute.before` native hooks.
@@ -231,6 +310,9 @@ pub struct ToolVisibilityInput {
     /// Whether an interactive user-question channel is currently connected.
     #[serde(default)]
     pub interactive: bool,
+    /// Number of parent links between the session and its tree root.
+    #[serde(default)]
+    pub depth: u32,
 }
 
 /// Outcome returned by `tool.visibility` native hooks.
@@ -405,64 +487,112 @@ pub struct NativePermissionApproveInput {
     pub resource: Resource,
 }
 
-/// Verdict returned by a `goal.evaluate` native hook.
+/// The session, tree root, and agent binding of a turn being admitted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeTurnAdmitInput {
+    /// Session running the turn.
+    pub session: SessionId,
+    /// The top ancestor, or `session` for a root turn.
+    pub root: SessionId,
+    /// The session's bound agent, when it has a recorded binding.
+    pub agent: Option<AgentName>,
+    /// The fence of a bundle-driven turn; `None` for a client turn.
+    pub actor_claim: Option<ActorClaim>,
+}
+
+/// Input passed to `model.stream.permit` native hooks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum NativeGoalEvaluateVerdict {
-    /// Structured verdict.
-    Verdict {
-        /// Whether the goal condition is satisfied.
-        met: bool,
-        /// Explanation for logs and directives.
+pub struct NativeStreamPermitInput {
+    /// Session opening the stream.
+    pub session: SessionId,
+    /// Root of the session's tree.
+    pub root: SessionId,
+    /// Number of parent links between `session` and `root`.
+    pub depth: u32,
+}
+
+/// Guard a `model.stream.permit` hook returns. The host drops it when the
+/// round's stream is collected or before it waits to retry the round.
+pub struct NativeStreamPermit(pub Box<dyn Send + Sync>);
+
+/// Input passed to `turn.stop` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeTurnStopInput {
+    /// Session the user stopped.
+    pub session: SessionId,
+    /// Cause the host records on the cancelled turns.
+    pub cause: FinishCause,
+}
+
+/// What `session.close.before` is about to do to a session tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCloseKind {
+    /// Archive the session and its descendants.
+    Archive,
+    /// Delete the session log.
+    Delete,
+}
+
+/// Input passed to `session.close.before` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionCloseInput {
+    /// Session being closed (the root of the closed tree).
+    pub session: SessionId,
+    /// Archive or delete.
+    pub kind: SessionCloseKind,
+}
+
+/// Where a headless run is when `run.headless` is dispatched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum HeadlessRunPhase {
+    /// Before the first turn.
+    Start,
+    /// After a turn ended with `finish`.
+    TurnEnded {
+        /// The ended turn's finish reason.
+        finish: FinishReason,
+    },
+    /// Before the run exits.
+    End,
+}
+
+/// Input passed to `run.headless` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeHeadlessRunInput {
+    /// Session the headless run drives.
+    pub session: SessionId,
+    /// Point of the run.
+    pub phase: HeadlessRunPhase,
+}
+
+/// Input passed to `session.restore` native hooks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NativeSessionRestoreInput {
+    /// Session whose interrupted turn is being restored.
+    pub session: SessionId,
+}
+
+/// One hook's decision about a turn.
+pub enum NativeTurnAdmitOutcome {
+    /// Continue to the next admission hook.
+    Admit,
+    /// Wait for a readiness signal before continuing the chain.
+    Defer {
+        /// A closed sender refuses admission. Turn cancellation interrupts the wait.
+        until: tokio::sync::oneshot::Receiver<()>,
+    },
+    /// Refuse the turn and discard any accumulated steering.
+    Refuse {
+        /// Diagnostic presented to the caller.
         reason: String,
     },
-    /// Reply was unparseable; driver counts it against iteration budget.
-    Malformed,
-}
-
-/// Structured verdict returned by a `loop.verifier` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeVerifierVerdict {
-    /// Score in `0..=100`.
-    pub score: u8,
-    /// Whether the verifier considers the target satisfied.
-    pub satisfied: bool,
-    /// Evidence quality band (`missing`, `claim_only`, `supported`, `verified`).
-    pub evidence_quality: String,
-    /// Remaining critical gaps.
-    pub critical_gaps: Vec<String>,
-    /// Summary of this iteration's progress.
-    pub iteration_summary: String,
-    /// Free-form reason string.
-    pub reason: String,
-}
-
-/// Input passed to a `loop.planner` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativeLoopPlanInput {
-    /// Loop target description.
-    pub target: String,
-    /// Historical directive/summary strings.
-    pub history: Vec<String>,
-    /// Last verifier verdict.
-    pub last: NativeVerifierVerdict,
-    /// Persistent planner notes.
-    pub planner_notes: String,
-}
-
-/// Planned next directive returned by a `loop.planner` native hook.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NativePlannerOutput {
-    /// Next directive for the worker turn.
-    pub directive: String,
-    /// Continuity brief for the worker.
-    pub continuity_brief: String,
-    /// Updated planner notes.
-    pub planner_notes: String,
-    /// Whether strategy changed.
-    pub strategy_change: bool,
-    /// Explanation of strategy change.
-    pub change_note: String,
+    /// Add a system message if the chain admits the turn.
+    Steer {
+        /// Text of the system message.
+        message: String,
+    },
 }
 
 /// Hook implementation registered by a native bundle.
@@ -544,6 +674,14 @@ pub trait NativeHook: Send + Sync {
         Ok(input.text)
     }
 
+    /// Inspect turn admission before the provider starts.
+    async fn turn_admit(
+        &self,
+        _input: NativeTurnAdmitInput,
+    ) -> Result<NativeTurnAdmitOutcome, HostError> {
+        Ok(NativeTurnAdmitOutcome::Admit)
+    }
+
     /// Rewrite completed assistant text (`text.complete`).
     async fn text_complete(&self, input: NativeTextCompleteInput) -> Result<String, HostError> {
         Ok(input.text)
@@ -580,43 +718,77 @@ pub trait NativeHook: Send + Sync {
         Ok(None)
     }
 
-    /// Evaluate a goal condition (`goal.evaluate`).
-    async fn goal_evaluate(
-        &self,
-        _condition: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
+    /// Bundle-declared hook points (`<bundle-id>:<point>`) this hook implements.
+    fn declared_points(&self) -> &[String] {
+        &[]
+    }
+
+    /// Answer a bundle-declared hook point listed in [`Self::declared_points`].
+    ///
+    /// `Ok(None)` defers to the next implementer. The declaring bundle owns
+    /// the payload shapes.
+    async fn invoke_declared(&self, point: &str, input: Value) -> Result<Option<Value>, HostError> {
+        let _ = (point, input);
         Ok(None)
     }
 
-    /// Grade a loop target (`loop.verifier`).
-    async fn loop_verify(
+    /// Whether the hook's process can still serve calls; an unhealthy hook
+    /// cancels the turn that checks it.
+    fn is_healthy(&self) -> bool {
+        true
+    }
+
+    /// Stable identity of this hook's `permission.ask` decisions, used to pin
+    /// saved permission grants. `None` means the hook does not pin.
+    fn permission_identity(&self) -> Option<[u8; 32]> {
+        None
+    }
+
+    /// Observe a live envelope published on the event bus (`event`).
+    ///
+    /// Called synchronously in publish order; implementors must not block.
+    fn on_event(&self, envelope: &Envelope) {
+        let _ = envelope;
+    }
+
+    /// Wait for capacity to open a model stream (`model.stream.permit`).
+    /// `Ok(None)` grants it without a guard.
+    async fn model_stream_permit(
         &self,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
+        _input: NativeStreamPermitInput,
+    ) -> Result<Option<NativeStreamPermit>, HostError> {
         Ok(None)
     }
 
-    /// Plan the next loop directive (`loop.planner`).
-    async fn loop_plan(
-        &self,
-        _input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        Ok(None)
+    /// Notified before the host cancels a user-stopped turn (`turn.stop`).
+    async fn turn_stop(&self, _input: NativeTurnStopInput) -> Result<(), HostError> {
+        Ok(())
     }
 
-    /// Decide whether a loop should stop (`loop.should_stop`).
-    async fn loop_should_stop(
+    /// Consulted before a session tree is archived or deleted
+    /// (`session.close.before`); an error refuses the close.
+    async fn session_close(&self, _input: NativeSessionCloseInput) -> Result<(), HostError> {
+        Ok(())
+    }
+
+    /// Report a line of pending work for a headless run (`run.headless`).
+    async fn headless_run(
         &self,
-        _target: &str,
-        _transcript: &str,
+        _input: NativeHeadlessRunInput,
     ) -> Result<Option<String>, HostError> {
         Ok(None)
     }
 
-    /// Observe a live event envelope (`event`).
-    async fn on_event(&self, _envelope: &Envelope) -> Result<(), HostError> {
+    /// Text appended to a session's restore prompt (`session.restore`).
+    async fn session_restore(
+        &self,
+        _input: NativeSessionRestoreInput,
+    ) -> Result<Option<String>, HostError> {
+        Ok(None)
+    }
+
+    /// Notified once restore prompts have been admitted (`runtime.restored`).
+    async fn runtime_restored(&self) -> Result<(), HostError> {
         Ok(())
     }
 }
@@ -707,6 +879,16 @@ pub struct ExtensionEventContext {
     pub payload: Value,
 }
 
+/// A tool output an extension event replaces in later requests: the host
+/// records `output` as the tool part's `PartProjection::Tool::eviction_notice`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolOutputOverride {
+    /// Tool part whose output is replaced.
+    pub part: PartId,
+    /// Text sent in place of the output.
+    pub output: String,
+}
+
 /// Folds bundle-owned `Event::Extension` records into `Projection` extension JSON state.
 pub trait ProjectionReducer: Send + Sync {
     /// Owning bundle identity (key under `Projection::extensions`).
@@ -719,6 +901,20 @@ pub trait ProjectionReducer: Send + Sync {
 
     /// Fold one extension event into `state` deterministically and idempotently.
     fn apply(&self, state: &mut Value, event: &ExtensionEventContext) -> Result<(), HostError>;
+
+    /// Tool outputs `event` replaces in the transcript, applied by the host
+    /// after [`Self::apply`] succeeds. Deterministic, like `apply`.
+    fn tool_output_overrides(&self, event: &ExtensionEventContext) -> Vec<ToolOutputOverride> {
+        let _ = event;
+        Vec::new()
+    }
+
+    /// Other bundles whose events the host also passes to [`Self::apply`]
+    /// (with `event.bundle` naming the owner), folding into this reducer's
+    /// state only.
+    fn observed_bundles(&self) -> &[&str] {
+        &[]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -869,54 +1065,36 @@ impl hya_tool::handle::DynamicUriHandler for UriSchemaHandleAdapter {
 }
 
 // ---------------------------------------------------------------------------
-// GoalDriver & LoopDriver
+// NativeDriver
 // ---------------------------------------------------------------------------
 
-/// Request parameters passed to a [`GoalDriver`].
+/// Input of one [`NativeDriver`] run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GoalRunRequest {
-    /// Target session executing the goal run.
+pub struct DriverRequest {
+    /// Session the run drives.
     pub session: SessionId,
-    /// Goal completion condition text.
-    pub goal: String,
-    /// Maximum iterations allowed before capping.
-    pub max_iterations: u32,
-    /// Maximum wall-clock duration in seconds.
-    pub max_wall_clock_secs: u64,
-    /// Optional agent id for worker turns.
+    /// Agent bound to the session.
     pub agent: Option<AgentName>,
-    /// Optional model override.
+    /// The session's worker model.
     pub model: Option<ModelRef>,
-    /// Bundle-specific driver configuration JSON.
-    pub config: Value,
+    /// Working directory of the run.
+    pub workdir: std::path::PathBuf,
+    /// Driver arguments; for a CLI command, its parsed arguments by id.
+    pub args: Value,
 }
 
-/// Request parameters passed to a [`LoopDriver`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LoopRunRequest {
-    /// Target session executing the loop run.
-    pub session: SessionId,
-    /// Loop target objective.
-    pub target: String,
-    /// Maximum iteration budget.
-    pub budget: u32,
-    /// Maximum wall-clock duration in seconds.
-    pub max_wall_clock_secs: u64,
-    /// Minimum verifier score treated as satisfied (`0..=100`).
-    pub satisfaction_threshold: u8,
-    /// Consecutive no-progress iterations before stopping as stalled.
-    pub max_no_progress: u32,
-    /// Optional deterministic predicate configuration/command JSON.
-    pub predicate: Option<Value>,
-    /// Optional agent id for worker turns.
-    pub agent: Option<AgentName>,
-    /// Optional model override.
-    pub model: Option<ModelRef>,
-    /// Bundle-specific driver configuration JSON.
-    pub config: Value,
+/// What a driver run leaves for its caller to print, and its exit code.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriverReport {
+    /// Text for standard output.
+    pub stdout: String,
+    /// Text for standard error.
+    pub stderr: String,
+    /// Process exit code (`0` on success).
+    pub exit_code: i32,
 }
 
-/// Terminal outcome of a [`GoalDriver`] or [`LoopDriver`] execution.
+/// Terminal outcome of an iterating driver run (goal or loop mode).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum DriverRunOutcome {
@@ -957,32 +1135,19 @@ pub enum DriverRunOutcome {
     Cancelled,
 }
 
-/// Native driver executing goal-mode iterative runs (`hya/goal`).
+/// A run that owns a session until it returns: an iteration strategy such as
+/// goal mode or loop mode. The host knows only that a driver of this name
+/// exists (`<bundle-id>:<name>`).
 #[async_trait]
-pub trait GoalDriver: Send + Sync {
-    /// Stable driver identifier (e.g. `"goal"`).
-    fn id(&self) -> &str;
+pub trait NativeDriver: Send + Sync {
+    /// Driver name, local to its bundle.
+    fn name(&self) -> &str;
 
-    /// Run a goal loop until achieved, capped, stalled, or cancelled.
-    async fn run_goal(
+    /// Run to completion.
+    async fn run(
         &self,
         runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError>;
-}
-
-/// Native driver executing verifier+planner loop runs (`hya/loop`).
-#[async_trait]
-pub trait LoopDriver: Send + Sync {
-    /// Stable driver identifier (e.g. `"loop"`).
-    fn id(&self) -> &str;
-
-    /// Run a verified loop until satisfied, capped, stalled, or cancelled.
-    async fn run_loop(
-        &self,
-        runtime: Arc<dyn HostRuntime>,
-        request: LoopRunRequest,
-        cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError>;
+    ) -> Result<DriverReport, HostError>;
 }

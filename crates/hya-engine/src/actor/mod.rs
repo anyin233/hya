@@ -57,9 +57,7 @@ use crate::engine::{
     TurnBoundaryObserver, TurnDrainReport, TurnLease, TurnRequestContext,
 };
 use crate::error::CoreError;
-use crate::hooks::{
-    AgentSpawnInput, HookDispatcher, SessionLifecycleInput, scope_activation_hooks,
-};
+use crate::hooks::{HookChain, NativeAgentSpawnInput, scope_activation_hooks};
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
@@ -356,8 +354,8 @@ use ending::{Ending, commit_episode_ending};
 use episode::await_episode;
 use episode::episode_task;
 use episode::{
-    Action, ActivationCompletion, Episode, EpisodeDone, EpisodeInit, RunPlan, SlotStatus,
-    WorkflowActivation,
+    Action, ActivationCompletion, DirectedActivation, Episode, EpisodeDone, EpisodeInit, RunPlan,
+    SlotStatus,
 };
 pub use episode::{ActivationResult, ActivationWaiter};
 use report::PendingReport;

@@ -78,7 +78,7 @@ test("a pending permission or question prompt outranks any streaming activity", 
   expect(activityText(store.state)).toBe("Waiting for an answer")
 })
 
-test("a running task card whose child has not answered reads Waiting for subagent <agent>", () => {
+test("a running bundle tool uses the generic activity label", () => {
   const store = createAppStore()
   store.openSession(session("hysec_1"))
   store.beginTurn()
@@ -86,7 +86,7 @@ test("a running task card whose child has not answered reads Waiting for subagen
   store.applyEvent({ seq: "2", session: "hysec_1", partStarted: { message: "m_a", part: "p_c", kind: "tool_call", tool: "task", callId: "call_1" } })
   store.applyEvent({ seq: "3", session: "hysec_1", toolStateChanged: { message: "m_a", part: "p_c", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: "{\"subagent_type\":\"scout\",\"description\":\"survey\"}" } })
   store.flushOverlay()
-  expect(activityText(store.state)).toBe("Waiting for subagent scout")
+  expect(activityText(store.state)).toBe('Running task {"subagent_type":"scout","description":"survey"}')
 })
 
 test("workingLineText adds the elapsed time, Esc hint, and a Queued count", () => {

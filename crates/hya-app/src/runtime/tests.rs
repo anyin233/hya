@@ -29,18 +29,15 @@ use hya_plugin::protocol::Frame;
 use hya_plugin::{PluginHost, PreparedPlugin};
 use hya_proto::{
     Event, FinishReason, MailEndpoint, MailKind, MessageId, OwnerRunId, RosterStatus, SubagentMode,
-    ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision,
+    ToolName, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
 };
-use hya_tool::extension::{
-    ExtensionEvent, projection_reducers, team_projection, workflow_projection,
-};
+use hya_tool::extension::{ExtensionEvent, team_projection};
 use hya_tool::{
     AgentDef, ArchiveReason, InlineAgent, InteractionPlane, Mode, PermissionModel, PermissionPlane,
     PermissionRules, Rule, SpawnMember, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
-    WorkflowRunStatus, WorkflowStagePlan,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -339,6 +336,9 @@ fn catalog_with_agents(stable_ids: &[&str]) -> Arc<AgentCatalog> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
         })
         .collect::<Vec<_>>();
     Arc::new(to_agent_catalog(
@@ -390,6 +390,9 @@ fn catalog_with_worker_policy(model_policy: ModelPolicy) -> Arc<AgentCatalog> {
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
     };
     Arc::new(to_agent_catalog(
         BundleCatalog::from_prepared(&[bundle]).expect("valid precedence bundle catalog"),
@@ -531,6 +534,9 @@ fn materialized_bundle(marker: &str) -> Bundle {
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
     }
 }
 
@@ -595,6 +601,9 @@ fn disjoint_materialized_bundle(marker: &str) -> Bundle {
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
     }
 }
 
@@ -962,6 +971,7 @@ async fn shutdown_stops_sources_retained_by_a_plugin_tool_and_a_retired_mcp_bind
         EngineBuildOptions {
             defer_mcp: false,
             pure: true,
+            project_plugins: true,
         },
     )
     .await
@@ -1053,6 +1063,7 @@ async fn built_shutdown_cancels_and_joins_deferred_mcp_preparation() {
         EngineBuildOptions {
             defer_mcp: true,
             pure: true,
+            project_plugins: true,
         },
     )
     .await
@@ -1109,6 +1120,7 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
         EngineBuildOptions {
             defer_mcp: false,
             pure: true,
+            project_plugins: true,
         },
     )
     .await
@@ -1174,8 +1186,8 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
     assert!(!engine.has_active_service_work(lead));
     let state = engine.read_projection(lead).await.unwrap();
     assert_eq!(
-        workflow_projection(&state).unwrap().run.unwrap().status,
-        WorkflowRunStatus::Cancelled
+        state.extensions["hya/workflow"]["run"]["status"],
+        "cancelled"
     );
 }
 
@@ -1278,29 +1290,27 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
     store
         .append_event(
             wf_session,
-            &ExtensionEvent::WorkflowRunStarted {
+            &Event::Extension {
                 session: wf_session,
-                run: hya_proto::WorkflowRunId::new(),
-                workflow: WorkflowIdentity {
-                    source: hya_proto::WorkflowSourceId::new("test:rebuild"),
-                    name: "rebuild".into(),
-                    revision: WorkflowRevision::from_bytes([1; 32]),
-                },
-                request_hash: "inputs".into(),
-                owner: first_owner,
-                stages: vec![WorkflowStagePlan {
-                    id: "stage".into(),
-                    title: None,
-                    agent: AgentName::new("general"),
-                    mode: "once".into(),
-                    level: 0,
-                    worker_model: None,
-                    selected_worker_model: None,
-                    verifier_model: None,
-                    selected_verifier_model: None,
-                }],
-            }
-            .into_event(),
+                bundle: "hya/workflow".into(),
+                kind: "workflow_run_started".into(),
+                payload: json!({
+                    "run": uuid::Uuid::now_v7(),
+                    "workflow": {
+                        "source": "test:rebuild",
+                        "name": "rebuild",
+                        "revision": "01".repeat(32),
+                    },
+                    "request_hash": "inputs",
+                    "owner": first_owner,
+                    "stages": [{
+                        "id": "stage",
+                        "agent": "general",
+                        "mode": "once",
+                        "level": 0,
+                    }],
+                }),
+            },
         )
         .await
         .unwrap();
@@ -1313,13 +1323,20 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
         Err(hya_store::StoreError::RuntimeOwnerBusy)
     ));
     assert_ne!(next.engine().runtime_owner(), first_owner);
-    let wf_proj = hya_proto::Projection::from_events_with(
-        &store.replay(wf_session).await.unwrap(),
-        &projection_reducers(),
-    );
-    let wf = workflow_projection(&wf_proj).unwrap().run.unwrap();
-    assert_eq!(wf.status, WorkflowRunStatus::Interrupted);
-    assert_eq!(wf.error.as_deref(), Some("backend startup recovery"));
+    let finished = store
+        .replay(wf_session)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|envelope| match envelope.event {
+            Event::Extension { kind, payload, .. } if kind == "workflow_run_finished" => {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished["status"], "interrupted");
+    assert_eq!(finished["error"], "backend startup recovery");
     next.shutdown().await.unwrap();
     store.claim_runtime_owner(OwnerRunId::new()).unwrap();
 }
@@ -1413,14 +1430,25 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     )
     .await
     .unwrap();
-    let names: Vec<String> = ws_built
+    // Disabled network tools stay registered but hya/network's own
+    // `tool.visibility` hook hides them from every turn.
+    let outcome = ws_built
         .engine()
-        .tool_schemas()
-        .into_iter()
-        .map(|s| s.name.to_string())
-        .collect();
-    assert!(!names.iter().any(|n| n == "websearch"));
-    assert!(!names.iter().any(|n| n == "webfetch"));
+        .process_hooks()
+        .tool_visibility(hya_runtime_abi::ToolVisibilityInput {
+            session: hya_proto::SessionId::new(),
+            agent: None,
+            candidate_tools: vec!["webfetch".into(), "websearch".into(), "read".into()],
+            interactive: true,
+            depth: 0,
+        })
+        .await;
+    assert_eq!(
+        outcome,
+        hya_runtime_abi::ToolVisibilityOutcome::Hide {
+            tools: vec!["webfetch".into(), "websearch".into()]
+        }
+    );
     ws_built.shutdown().await.unwrap();
 
     // 3b. Air-gapped mode: disabling `hya/network` removes all internet tools and aliases.
@@ -1913,6 +1941,7 @@ async fn deferred_mcp_and_hot_reload_plugin_source_wiring() {
         EngineBuildOptions {
             defer_mcp: true,
             pure: false,
+            project_plugins: true,
         },
     )
     .await
@@ -1976,6 +2005,7 @@ async fn startup_mixed_mcp_plugin_and_compat_mcp_control() {
         EngineBuildOptions {
             defer_mcp: false,
             pure: false,
+            project_plugins: true,
         },
     )
     .await
@@ -2099,6 +2129,7 @@ async fn initial_context_backfills_and_survives_runtime_restart() {
                 EngineBuildOptions {
                     defer_mcp: false,
                     pure,
+                    project_plugins: true,
                 },
             )
             .await
@@ -2467,10 +2498,10 @@ fn sidecar_materialization_scoping_and_validation_invariants() {
         "build",
         &[
             HookRegistration {
-                name: HookName::Event,
+                name: HookName::Event.into(),
             },
             HookRegistration {
-                name: HookName::Event,
+                name: HookName::Event.into(),
             },
         ],
     );
@@ -2734,10 +2765,10 @@ async fn bundle_sidecar_declaration_validation_and_tool_binding() {
     let ord_binding = ord_rt.bind_turn(&turn_dir).unwrap();
     let regs = [
         HookRegistration {
-            name: HookName::ToolExecuteBefore,
+            name: HookName::ToolExecuteBefore.into(),
         },
         HookRegistration {
-            name: HookName::Event,
+            name: HookName::Event.into(),
         },
     ];
     assert!(validate_bundle_sidecar_hooks(&ord_binding, "alpha", &regs).is_ok());
@@ -2770,7 +2801,7 @@ async fn bundle_sidecar_declaration_validation_and_tool_binding() {
     let (h_ho, p_ho) = prepared_sidecar_plugin(
         &[],
         &[HookRegistration {
-            name: HookName::Event,
+            name: HookName::Event.into(),
         }],
     )
     .await;
@@ -3763,12 +3794,7 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
 #[tokio::test]
 async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hya_bare_agent() {
     let home = tempdir();
-    let empty_bundles = tempdir();
-    let mut env = EnvGuard::with_home(&home, &home);
-    env.set(
-        "HYA_FIRST_PARTY_SOURCE_ROOT",
-        empty_bundles.to_string_lossy().as_ref(),
-    );
+    let _env = EnvGuard::with_home(&home, &home);
 
     let workdir = tempdir();
     std::fs::write(workdir.join("AGENTS.md"), "# Bare Test\nBARE_APP_MARKER\n").unwrap();
@@ -3786,7 +3812,7 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
     };
 
     let rt = resolve_runtime(None).await.with_bare(true);
-    let resolved_agent = agent_base_for_runtime(&rt, None);
+    let resolved_agent = agent_base_for_runtime(&rt, None).unwrap();
     assert_eq!(resolved_agent.name.as_str(), hya_engine::BARE_AGENT_ID);
     assert!(!resolved_agent.system_prompt.is_empty());
     assert!(!resolved_agent.system_prompt.contains("hya-main"));
@@ -3925,4 +3951,226 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
     assert!(bare_sys.contains("unit-skill"), "{bare_sys}");
     assert!(!pure_sys.contains("BARE_APP_MARKER"), "{pure_sys}");
     assert!(!pure_sys.contains("unit-skill"), "{pure_sys}");
+}
+
+/// What a runtime built with `selection` exposes of `hya/agent-channels`:
+/// started native service ids, its tools, steer hooks, and the tool result a
+/// model `read channel://…` gets.
+struct ChannelsSurface {
+    services: Vec<String>,
+    tools: Vec<String>,
+    steer_hooks: usize,
+    channel_read: String,
+}
+
+async fn channels_surface(selection: hya_bundle::BuiltinBundleSelection) -> ChannelsSurface {
+    let workdir = tempdir();
+    let agent_id = builtin_agent_catalog_for(&selection)
+        .unwrap()
+        .default_agent_id()
+        .to_string();
+    let mut settings = config::EngineSettings::default();
+    settings.set_builtin_bundles(selection);
+    let agent = AgentSpec {
+        name: AgentName::new(agent_id),
+        model: ModelRef::new("fake/model"),
+        system_prompt: String::new(),
+        workdir: workdir.clone(),
+        reasoning: None,
+    };
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "read".into(),
+                input: json!({ "path": "channel://DM-12345678" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("done".into()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
+        ProviderRouter::new().with(Arc::new(provider)),
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (InvocationPolicy::default(), settings),
+    )
+    .await
+    .unwrap();
+    let engine = built.engine();
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: agent.model.clone(),
+            workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "read the channel".into())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    let channel_read = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|envelope| match envelope.event {
+            Event::ToolResult { output, .. } => Some(output.to_string()),
+            Event::ToolError { message_text, .. } => Some(message_text),
+            _ => None,
+        })
+        .expect("read tool result");
+    let surface = ChannelsSurface {
+        services: built
+            .native_services
+            .iter()
+            .map(|service| service.id().to_string())
+            .collect(),
+        tools: engine
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.to_string())
+            .filter(|name| name == "send" || name == "list_channel")
+            .collect(),
+        steer_hooks: engine
+            .process_hooks()
+            .entries()
+            .iter()
+            .filter(|entry| entry.hook().id() == "unread-mail-steer")
+            .count(),
+        channel_read,
+    };
+    built.shutdown().await.unwrap();
+    surface
+}
+
+#[tokio::test]
+async fn channels_disabled_runtime_has_no_channels_service_tool_scheme_or_hook() {
+    let home = tempdir();
+    let _env = EnvGuard::with_home(&home, &home);
+    let disabled = hya_bundle::BuiltinBundleSelection {
+        disable: vec!["hya/agent-channels".into()],
+        ..hya_bundle::BuiltinBundleSelection::full()
+    };
+    for selection in [hya_bundle::BuiltinBundleSelection::bare(), disabled] {
+        let surface = channels_surface(selection.clone()).await;
+        assert!(
+            !surface.services.iter().any(|id| id == "agent-channels"),
+            "{selection:?}: {:?}",
+            surface.services
+        );
+        assert!(
+            surface.tools.is_empty(),
+            "{selection:?}: {:?}",
+            surface.tools
+        );
+        assert_eq!(surface.steer_hooks, 0, "{selection:?}");
+        assert!(
+            surface
+                .channel_read
+                .contains("unknown handle scheme: channel://"),
+            "{selection:?}: {}",
+            surface.channel_read
+        );
+    }
+}
+
+#[tokio::test]
+async fn channels_enabled_registers_exactly_one_channels_service_hook_and_scheme() {
+    let home = tempdir();
+    let _env = EnvGuard::with_home(&home, &home);
+    let surface = channels_surface(hya_bundle::BuiltinBundleSelection::full()).await;
+    assert_eq!(
+        surface
+            .services
+            .iter()
+            .filter(|id| *id == "agent-channels")
+            .count(),
+        1,
+        "{:?}",
+        surface.services
+    );
+    assert_eq!(surface.tools.len(), 2, "{:?}", surface.tools);
+    assert_eq!(surface.steer_hooks, 1);
+    assert!(
+        !surface.channel_read.contains("unknown handle scheme"),
+        "{}",
+        surface.channel_read
+    );
+}
+
+#[tokio::test]
+async fn installed_bundle_missing_a_prerequisite_is_left_out_of_the_catalog() {
+    let home = tempdir();
+    let workdir = tempdir();
+    let _env = EnvGuard::with_home(&home, &workdir);
+    let registry_path = home.join("hya/bundles/registry.sqlite3");
+    std::fs::create_dir_all(registry_path.parent().unwrap()).unwrap();
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    for (index, (id, body)) in [
+        ("acme/needs", "requires: [acme/absent]\n"),
+        ("acme/plain", ""),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let name = id.trim_start_matches("acme/");
+        let installed = prepare_package(BundleSource::new(
+            name,
+            vec![SourceFile::new(
+                "bundle.yaml",
+                format!(
+                    "kind: Bundle\nschema_version: 2\nidentity: {{ id: {id}, version: 1.0.0, publisher: acme }}\n{body}agents:\n  - {{ id: {name}-agent, role: main }}\n"
+                ),
+            )],
+        ))
+        .unwrap();
+        registry
+            .install(
+                &[],
+                NamespaceInstallPolicy::DenyConflicts,
+                BundleInstallCandidate {
+                    source_digest: [0x60 + index as u8; 32],
+                    prepared_digest: installed.digest().to_string(),
+                    prepared_bytes: installed.bytes().to_vec(),
+                    installed_at: 1_725_000_030 + index as i64,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    let (router, model) = offline_router(None);
+    let agent = agent_with_model(&model, None);
+    let mut built = build_session_engine(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        &agent,
+        BTreeMap::new(),
+        Vec::new(),
+        (
+            InvocationPolicy::default(),
+            config::EngineSettings::default(),
+        ),
+    )
+    .await
+    .unwrap();
+    let binding = built.engine().bind_root_runtime(&workdir).await.unwrap();
+    assert!(binding.resolve_agent("plain-agent").is_some());
+    assert!(binding.resolve_agent("needs-agent").is_none());
+    built.shutdown().await.unwrap();
 }

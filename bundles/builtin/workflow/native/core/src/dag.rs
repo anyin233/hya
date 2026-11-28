@@ -5,24 +5,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use hya_proto::{
-    ActorClaim, AgentName, ModelRef, SessionId, WorkflowModelAssignment, WorkflowRunId,
-};
+use hya_proto::{ActorClaim, AgentName, ModelRef, SessionId};
 use hya_runtime_abi::{
     HostError, HostRuntime, ManagedMemberActivateRequest, ManagedMemberActivationStatus,
     ManagedMemberHandle, ManagedMemberSpawnRequest, ModelRouteEntry, ResolvedModelRoute,
     TurnRouteFailureClass, TurnRouteOutcome,
 };
-use hya_tool::extension::ExtensionEvent;
-use hya_tool::{WorkflowMemberRole, WorkflowRouteFailureClass, WorkflowStageStatus};
-use hya_workflow::{
-    CompiledWorkflow, FailurePolicy, MAX_PREDECESSOR_OUTPUT_BYTES, StageEvidence, StageMode,
-    VerifySpec, WorkflowStage,
-};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::compile::{
+    CompiledWorkflow, FailurePolicy, MAX_PREDECESSOR_OUTPUT_BYTES, StageEvidence, StageMode,
+    VerifySpec, WorkflowStage,
+};
 use crate::error::WorkflowError;
+use crate::events::WorkflowEvent;
+use crate::model::{
+    WorkflowMemberRole, WorkflowModelAssignment, WorkflowRouteFailureClass, WorkflowRunId,
+    WorkflowStageStatus,
+};
 use crate::reducer::extension_event_parts;
 
 /// Terminal status of one workflow stage.
@@ -215,7 +216,7 @@ impl PreparedWorkflowRun {
                                 append_workflow_event(
                                     runtime.as_ref(),
                                     actor_claim,
-                                    ExtensionEvent::WorkflowStageFinished {
+                                    WorkflowEvent::WorkflowStageFinished {
                                         session: lead,
                                         run,
                                         stage: stage.id().to_string(),
@@ -240,7 +241,7 @@ impl PreparedWorkflowRun {
                             append_workflow_event(
                                 runtime.as_ref(),
                                 actor_claim,
-                                ExtensionEvent::WorkflowStageStarted {
+                                WorkflowEvent::WorkflowStageStarted {
                                     session: lead,
                                     run,
                                     stage: stage.id().to_string(),
@@ -281,7 +282,7 @@ impl PreparedWorkflowRun {
                             append_workflow_event(
                                 runtime.as_ref(),
                                 actor_claim,
-                                ExtensionEvent::WorkflowStageMemberLinked {
+                                WorkflowEvent::WorkflowStageMemberLinked {
                                     session: lead,
                                     run,
                                     stage: stage.id().to_string(),
@@ -404,7 +405,7 @@ impl PreparedWorkflowRun {
                     append_workflow_event(
                         runtime.as_ref(),
                         actor_claim,
-                        ExtensionEvent::WorkflowStageFinished {
+                        WorkflowEvent::WorkflowStageFinished {
                             session: lead,
                             run,
                             stage: report.stage.clone(),
@@ -429,7 +430,7 @@ impl PreparedWorkflowRun {
                         append_workflow_event(
                             runtime.as_ref(),
                             actor_claim,
-                            ExtensionEvent::WorkflowStageFinished {
+                            WorkflowEvent::WorkflowStageFinished {
                                 session: lead,
                                 run,
                                 stage: report.stage.clone(),
@@ -557,7 +558,7 @@ async fn authorize_stage_agent(
 ) -> Result<(), WorkflowError> {
     runtime
         .catalog_reader()
-        .authorize_workflow_agent(lead, caller, &AgentName::new(agent_id))
+        .authorize_agent_run(lead, caller, &AgentName::new(agent_id))
         .await
         .map_err(|error| match error {
             HostError::PermissionDenied(detail) | HostError::NotFound(detail) => {
@@ -821,7 +822,7 @@ async fn drive_loop_stage(
                 append_workflow_event(
                     runtime,
                     actor_claim,
-                    ExtensionEvent::WorkflowStageMemberLinked {
+                    WorkflowEvent::WorkflowStageMemberLinked {
                         session: lead,
                         run,
                         stage: stage.id().to_string(),
@@ -903,7 +904,7 @@ async fn drive_loop_stage(
                 append_workflow_event(
                     runtime,
                     actor_claim,
-                    ExtensionEvent::WorkflowStageMemberLinked {
+                    WorkflowEvent::WorkflowStageMemberLinked {
                         session: lead,
                         run,
                         stage: stage.id().to_string(),
@@ -1010,7 +1011,7 @@ async fn persist_route_outcomes(
         append_workflow_event(
             runtime,
             actor_claim,
-            ExtensionEvent::WorkflowStageRouteOutcome {
+            WorkflowEvent::WorkflowStageRouteOutcome {
                 session,
                 run,
                 stage: stage.to_string(),
@@ -1032,7 +1033,7 @@ async fn persist_route_outcomes(
 async fn append_workflow_event(
     runtime: &dyn HostRuntime,
     actor_claim: Option<ActorClaim>,
-    event: ExtensionEvent,
+    event: WorkflowEvent,
 ) -> Result<(), WorkflowError> {
     let (session, bundle, kind, payload) = extension_event_parts(event)?;
     runtime

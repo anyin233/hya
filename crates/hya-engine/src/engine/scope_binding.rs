@@ -602,6 +602,15 @@ impl SessionEngine {
         .await
     }
 
+    /// The sources the catalog refresh skipped for `scope`
+    /// ([`RuntimeCatalogRefresh::diagnostics`]); empty without a refresher.
+    pub async fn catalog_diagnostics(&self, scope: &CatalogScope) -> Vec<String> {
+        match &self.catalog_refresh {
+            Some(refresh) => refresh.diagnostics(scope).await,
+            None => Vec::new(),
+        }
+    }
+
     /// Publish a new runtime candidate via the registry builder callback.
     ///
     /// # Errors
@@ -742,5 +751,13 @@ pub trait RuntimeCatalogRefresh: Send + Sync {
     ) -> Result<bool, CoreError> {
         let _ = (runtime, scope);
         Ok(false)
+    }
+
+    /// The sources the last refreshes skipped for `scope`, one line each in
+    /// load order (`installed bundle <id>: <error>`, then `project bundle
+    /// <dir>: <error>`).
+    async fn diagnostics(&self, scope: &crate::catalog_scope::CatalogScope) -> Vec<String> {
+        let _ = scope;
+        Vec::new()
     }
 }

@@ -599,6 +599,18 @@ fn validate_process(command: &[String], timeout_ms: Option<u64>) -> Result<(), S
 /// Kernel/core tools that cannot be overridden by any bundle (`todo` and `rewrite`).
 pub(super) const RESERVED_OVERRIDE_TOOLS: [&str; 2] = ["todo", "rewrite"];
 
+/// Whether `id` is a `<publisher>/<name>` bundle id of ASCII alphanumerics, `-`, `_`, or `.`.
+pub(super) fn is_bundle_identity(id: &str) -> bool {
+    let valid_segment = |seg: &str| {
+        !seg.is_empty()
+            && seg
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    };
+    id.split_once('/')
+        .is_some_and(|(publisher, name)| valid_segment(publisher) && valid_segment(name))
+}
+
 /// Validate a bundle override target identity (`<publisher>/<name>`, non-self).
 pub(super) fn validate_override_target(bundle_id: &str, target: &str) -> Result<(), BundleError> {
     let invalid = |detail: &str| BundleError::InvalidOverride {
@@ -606,18 +618,12 @@ pub(super) fn validate_override_target(bundle_id: &str, target: &str) -> Result<
         target: target.to_string(),
         detail: detail.to_string(),
     };
-    let Some((publisher, name)) = target.split_once('/') else {
+    if !target.contains('/') {
         return Err(invalid(
             "target must have `<publisher>/<name>` identity form",
         ));
-    };
-    let valid_segment = |seg: &str| {
-        !seg.is_empty()
-            && seg
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-    };
-    if !valid_segment(publisher) || !valid_segment(name) || name.contains('/') {
+    }
+    if !is_bundle_identity(target) {
         return Err(invalid(
             "target must be `<publisher>/<name>` using ASCII alphanumeric, `-`, `_`, or `.`",
         ));

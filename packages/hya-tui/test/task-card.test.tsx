@@ -1,60 +1,59 @@
-import { expect, mock, test } from "bun:test"
-import { type TextRenderable, type Renderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
-import { createSignal } from "solid-js"
-import { MessageItem } from "../src/components/MessageView"
-import { AppContext } from "../src/app/context"
-import { createController } from "../src/app/controller"
-import { HyaClient } from "../src/client"
-import { createAppStore } from "../src/state/store"
-import type { MessageView } from "../src/state/messages"
+import { afterEach, expect, test } from "bun:test"
+import { extensionManager } from "../src/extensions/manager"
+import { builtinTuiCatalogEntry, renderApp, type FakeBackendSeed, type RenderedApp } from "./support/appHarness"
 
-function link(root: Renderable, child: string): TextRenderable | undefined {
-  if ("plainText" in root && String(root.plainText).includes(`/open ${child}`)) return root as TextRenderable
-  for (const node of root.getChildren()) {
-    const found = link(node, child)
-    if (found) return found
+let app: RenderedApp | undefined
+afterEach(async () => { await app?.dispose(); app = undefined })
+
+function seed(bundle = false): FakeBackendSeed {
+  return {
+    sessions: [
+      { id: "hysec_root", agent: "hya-main", workdir: "/workspace", projectId: "prj_work", kind: "SESSION_KIND_PROJECT" },
+      { id: "hysec_routes", parent: "hysec_root", agent: "hya-task", workdir: "/workspace", busy: true },
+      { id: "hysec_tests", parent: "hysec_root", agent: "hya-task", workdir: "/workspace", busy: true },
+    ],
+    messages: {
+      hysec_root: [{
+        id: "m1", role: "ROLE_ASSISTANT", parts: [{
+          id: "p1", toolCall: {
+            tool: "task", state: "TOOL_EXECUTION_STATE_OK",
+            inputJson: JSON.stringify({ tasks: [{ description: "map routes" }, { description: "map tests" }] }),
+            outputJson: JSON.stringify({ output: "two launches", metadata: { members: [
+              { sessionId: "hysec_routes", handle: "main/routes" },
+              { sessionId: "hysec_tests", handle: "main/tests" },
+            ] } }),
+          },
+        }],
+      }],
+    },
+    tuiExtensions: bundle ? [builtinTuiCatalogEntry("multi-agent")] : [],
   }
 }
 
-test("live roster and transcript updates preserve clickable task rows", async () => {
-  const store = createAppStore()
-  const client = new HyaClient("http://127.0.0.1:1", "/workspace")
-  const controller = createController({ client, store, directory: "/workspace" })
-  const open = mock(async (_id: string) => {})
-  controller.openSession = open
-  const sessions = [
-    { id: "hysec_routes", parent: "hysec_root", agent: "hya-task", workdir: "/workspace", title: "main/routes", busy: true },
-    { id: "hysec_tests", parent: "hysec_root", agent: "hya-task", workdir: "/workspace", title: "main/tests", busy: true },
-  ]
-  store.setSessions(sessions)
-  const initial: MessageView = { id: "message", role: "assistant", agent: "hya-main", model: "fake/model", streaming: false, queued: false, blocks: [
-    { id: "part", kind: "tool", callId: "call_batch", card: { tool: "task", status: "done", summary: "two inspections", body: [], task: {
-      agent: "hya-task", description: "", members: [
-        { agent: "hya-task", description: "map routes", child: "hysec_routes" },
-        { agent: "hya-task", description: "map tests", child: "hysec_tests" },
-      ],
-    } } },
-  ] }
-  const [view, setView] = createSignal(initial)
-  const setup = await testRender(() => <AppContext.Provider value={{ store, controller, server: client.baseUrl, ui: controller.ui }}>
-    <MessageItem view={view()} first />
-  </AppContext.Provider>, { width: 80, height: 24 })
-  try {
-    for (const [index, child] of ["hysec_routes", "hysec_tests"].entries()) {
-      await setup.renderOnce()
-      const drawn = link(setup.renderer.root, child)!
-      expect(drawn).toBeDefined()
-      // Session list updates and projection reads replace link data while the UI is live.
-      store.setSessions(sessions.map((row, at) => ({ ...row, busy: at === index ? false : row.busy })))
-      setView(structuredClone(initial))
-      await setup.renderOnce()
-      expect(drawn.isDestroyed).toBe(false)
-      expect(link(setup.renderer.root, child)?.num).toBe(drawn.num)
-      await setup.mockMouse.click(drawn.x + 7, drawn.y)
-      expect(open).toHaveBeenLastCalledWith(child)
-      await setup.renderOnce()
-      expect(setup.captureCharFrame()).toContain("idle")
-    }
-  } finally { setup.renderer.destroy() }
+test("a bare transcript shows the unknown tool name, generic arguments, and expandable result", async () => {
+  app = await renderApp({ width: 100, height: 30, loadExtensions: true, seed: seed() })
+  await app.waitForText("task")
+  await app.waitForText('"description":"map routes"')
+  expect(app.find("two launches")).toBeNull()
+  await app.controller.submit("/tools on", "command")
+  await app.waitForText('"description": "map routes"')
+  await app.waitForText("two launches")
+  expect(app.find("click to view")).toBeNull()
+})
+
+test("a bundle renderer overrides fallback and each task row opens its own child", async () => {
+  app = await renderApp({ width: 100, height: 36, loadExtensions: true, seed: seed(true) })
+  for (const [child, label] of [["hysec_routes", "main/routes · map routes"], ["hysec_tests", "main/tests · map tests"]]) {
+    await app.waitForText("hya-task · map routes · 2 members")
+    await app.waitForText(label!)
+    await app.waitForText(`click to view · /open ${child}`)
+    await app.clickText(`click to view · /open ${child}`)
+    await app.waitForText("Viewing child session")
+    expect(app.store.state.selected?.id).toBe(child!)
+    await app.press("ESCAPE")
+    await app.waitForGone("Viewing child session")
+  }
+  await extensionManager.setEnabled("hya/multi-agent", false)
+  await app.waitForGone("click to view")
+  await app.waitForText('"description":"map routes"')
 })

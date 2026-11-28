@@ -8,12 +8,13 @@ mod workflow;
 
 use std::collections::BTreeSet;
 
+use hya_proto::AgentName;
 use hya_workflow::is_valid_identifier;
 
 use self::decode::{digest_bytes, is_strictly_sorted, set_bundle_digest};
 use self::extensions::{
-    ResolvedRuntime, resolve_runtime, validate_declared_apis, validate_declared_permission_modes,
-    validate_declared_schemas, validate_overrides,
+    ResolvedRuntime, is_bundle_identity, resolve_runtime, validate_declared_apis,
+    validate_declared_permission_modes, validate_declared_schemas, validate_overrides,
 };
 use self::parse::{parse_source, resolve_namespace, split_markdown, validate_identity};
 use self::resources::{
@@ -23,9 +24,9 @@ use self::resources::{
 use self::workflow::prepare_workflow;
 use crate::error::BundleError;
 use crate::model::{
-    Bundle, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedCatalog,
-    PreparedChannelParticipant, PreparedChannelTemplate, PreparedCheck, PreparedResource,
-    PreparedTuiExtension,
+    AgentRole, Bundle, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent,
+    PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate, PreparedCheck,
+    PreparedResource, PreparedTuiExtension, SPAWN_ANY_AGENT,
 };
 use crate::source::{BundleSource, ParsedSource, SourceTuiExtension};
 pub(crate) use extensions::validate_hook_local_id;
@@ -197,6 +198,14 @@ fn prepare_bundle(
         process.as_ref(),
         &hooks,
     )?;
+    crate::cli::validate_cli(
+        &bundle_id,
+        &manifest.cli,
+        &apis.iter().map(|api| api.id.as_str()).collect(),
+        runtime
+            .as_ref()
+            .is_some_and(|rt| rt.kind == crate::PreparedRuntimeKind::Native),
+    )?;
     let mut source_agents = manifest
         .agents
         .into_iter()
@@ -253,6 +262,17 @@ fn prepare_bundle(
         validate_resource_views(&bundle_id, agent, &tools, &skills)?;
     }
     let channels = prepare_channel_templates(&bundle_id, manifest.channels, &local_agent_ids)?;
+    let mut requires = manifest.requires;
+    requires.sort();
+    requires.dedup();
+    let default_agent = manifest.default_agent.map(AgentName::new);
+    validate_relations(
+        &bundle_id,
+        &requires,
+        default_agent.as_ref(),
+        &agents,
+        manifest.workflow.is_some(),
+    )?;
     let workflow = manifest
         .workflow
         .map(|workflow| prepare_workflow(&bundle_id, &files, workflow, &agents))
@@ -263,6 +283,8 @@ fn prepare_bundle(
         identity: manifest.identity,
         namespace,
         overrides: manifest.overrides,
+        requires,
+        default_agent,
         digest: String::new(),
         tui,
         agents,
@@ -278,10 +300,65 @@ fn prepare_bundle(
         runtime,
         apis: apis.clone(),
         permission_modes: permission_modes.clone(),
+        cli: manifest.cli,
         workflow,
     };
     set_bundle_digest(&mut bundle)?;
     Ok(bundle)
+}
+
+/// Validate `requires`, `default_agent`, and `can_spawn: ["*"]`; shared by
+/// preparation and installed-package decoding.
+pub(super) fn validate_relations(
+    bundle_id: &str,
+    requires: &[String],
+    default_agent: Option<&AgentName>,
+    agents: &[PreparedAgent],
+    has_workflow: bool,
+) -> Result<(), BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    };
+    if let Some(required) = requires
+        .iter()
+        .find(|required| !is_bundle_identity(required) || *required == bundle_id)
+    {
+        return Err(invalid(format!(
+            "requires entry `{required}` must be the `<publisher>/<name>` id of another bundle"
+        )));
+    }
+    if let Some(name) = default_agent
+        && !agents
+            .iter()
+            .any(|agent| agent.id == *name && agent.role == AgentRole::Main && !agent.private)
+    {
+        return Err(invalid(format!(
+            "default_agent `{name}` must name a non-private `role: main` Agent of this bundle"
+        )));
+    }
+    for agent in agents {
+        if !agent
+            .can_spawn
+            .iter()
+            .any(|target| target.as_str() == SPAWN_ANY_AGENT)
+        {
+            continue;
+        }
+        if agent.can_spawn.len() > 1 {
+            return Err(invalid(format!(
+                "agent `{}`: can_spawn `*` cannot be combined with agent ids",
+                agent.id
+            )));
+        }
+        if has_workflow {
+            return Err(invalid(format!(
+                "agent `{}`: can_spawn `*` is not allowed in a Workflow bundle; list the agent ids",
+                agent.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn prepare_channel_templates(

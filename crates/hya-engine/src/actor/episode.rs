@@ -61,7 +61,7 @@ pub(super) struct ActivationCompletion {
     pub(super) done: oneshot::Sender<Result<ActivationResult, CoreError>>,
 }
 
-pub(super) struct WorkflowActivation {
+pub(super) struct DirectedActivation {
     pub(super) resolved: (AgentSpec, ResolvedResidentRuntime),
     pub(super) guidance: Arc<str>,
     pub(super) route: Option<ExplicitTurnRoute>,
@@ -230,12 +230,10 @@ async fn initialize_episode(
         if created {
             team.engine.notify_session_start(session).await;
         }
-        for hooks in team
-            .engine
+        team.engine
             .replace_session_hooks(session, &binding, agent.as_str())
-        {
-            hooks.session_start(SessionLifecycleInput { session }).await;
-        }
+            .session_start(session)
+            .await;
     };
     tokio::select! {
         biased;
@@ -250,7 +248,7 @@ async fn initialize_episode(
     let initialize = async {
         if created && let Some(hooks) = team.engine.session_hook_dispatcher(parent) {
             hooks
-                .agent_spawn(AgentSpawnInput {
+                .agent_spawn(NativeAgentSpawnInput {
                     parent: team.root,
                     child: session,
                 })
@@ -282,7 +280,7 @@ pub(super) async fn episode_task(
 ) {
     let mut sidecar_handle: Option<Box<dyn SidecarHandle>> = None;
     let mut sidecar_tools: Arc<[ResolvedTool]> = Arc::from([]);
-    let mut sidecar_hooks: Option<Arc<dyn HookDispatcher>> = None;
+    let mut sidecar_hooks: Option<Arc<HookChain>> = None;
     if let Some(init) = init {
         let Some(claim) = task_claim.as_ref() else {
             return;
@@ -425,7 +423,7 @@ pub(super) async fn episode_task(
                         let started = tokio::select! {
                             biased;
                             _ = cancel.cancelled() => Err(CoreError::Cancelled),
-                            result = factory.start(SidecarStart::resident()) => result,
+                            result = factory.start(SidecarStart::persistent()) => result,
                         };
                         let activation = match started {
                             Ok(mut handle) => {
@@ -1070,7 +1068,7 @@ impl TeamActor {
         let finish = match (claim.as_ref(), agents, resources) {
             (Some(claim), Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
+                    .run_resolved_turn_with_sidecar_tools_for_actor_and_route(
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
@@ -1082,7 +1080,7 @@ impl TeamActor {
             }
             (None, Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_with_sidecar_tools_and_workflow_route(
+                    .run_resolved_turn_with_sidecar_tools_and_route(
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
@@ -1094,7 +1092,7 @@ impl TeamActor {
             }
             (Some(claim), _, _) => {
                 self.engine
-                    .run_bound_turn_for_actor_with_workflow_route(
+                    .run_bound_turn_for_actor_with_route(
                         session,
                         &agent,
                         binding,
@@ -1106,7 +1104,7 @@ impl TeamActor {
             }
             (None, _, _) => {
                 self.engine
-                    .run_bound_turn_with_workflow_route(
+                    .run_bound_turn_with_route(
                         session,
                         &agent,
                         binding,

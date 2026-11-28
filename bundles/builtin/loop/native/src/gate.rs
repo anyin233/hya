@@ -102,7 +102,7 @@ impl IterationGate for LoopGate {
                 && let Some(reason) = hook.should_stop(&self.target, transcript).await
             {
                 return Ok(GateOutcome::Stop {
-                    reason: format!("loop.should_stop: {reason}"),
+                    reason: format!("hya/loop:should_stop: {reason}"),
                 });
             }
             let verdict = self.verifier.grade(&self.target, transcript).await?;

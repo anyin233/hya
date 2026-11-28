@@ -1,6 +1,6 @@
 ---
 name: goal-contract
-description: Use when authoring or reviewing a structured goal condition (the five `##` sections) for hya goal mode, or when writing the rubric a `goal.evaluate` plugin applies.
+description: Use when authoring or reviewing a structured goal condition (the five `##` sections) for hya goal mode, or when writing the rubric a `hya/goal:evaluate` plugin applies.
 ---
 
 # Goal condition contract
@@ -21,7 +21,7 @@ A structured goal condition uses exactly these five `##` sections, in order:
 Re-ask rules when interviewing an author: a vague done with no checkable
 signal; uncapped iteration; self-graded success with no verification command.
 
-# Evaluator rubric (for `goal.evaluate` providers)
+# Evaluator rubric (for `hya/goal:evaluate` providers)
 
 Audit the transcript against the objective's deliverables, in this order:
 

@@ -1,4 +1,4 @@
-import { extensionManager, type ToolCallInput } from "../extensions/manager"
+import { extensionManager, type HookCard, type ToolCallInput } from "../extensions/manager"
 import { hooked } from "../extensions/renderTree"
 /**
  * One transcript message, from its `MessageView` (state/messages.ts):
@@ -7,8 +7,7 @@ import { hooked } from "../extensions/renderTree"
  *   prompts use a muted bar and text and a `queued` tag.
  * - assistant (and other roles): an `● agent · provider/model` header, the
  *   blocks (Markdown text, collapsible reasoning, transparent borderless tool
- *   cards with complete arguments and expandable output — a `task` card links
- *   to its subagent), and at most one finish notice (error,
+ *   cards with complete arguments and expandable output), and at most one finish notice (error,
  *   cancelled, length limit).
  *
  * Blocks are keyed by part id, so a streaming delta updates the existing
@@ -19,9 +18,8 @@ import { createMemo, createSignal, For, Match, Show, Switch, type JSX } from "so
 import { useApp } from "../app/context"
 import { formatBytes } from "../composer/attachments"
 import { foldAttachments, foldedAttachments } from "../composer/chips"
-import { waitingKind } from "../state/prompts"
 import { messageBlockGap, reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
-import type { TaskInfo, TaskMemberInfo, Tone, ToolStatus } from "../state/tools"
+import type { Tone, ToolStatus } from "../state/tools"
 import { colors, diffColors, toolColors } from "../theme"
 import { parseSkillBlock, skillBlockLabel } from "../state/skillBlock"
 import { Markdown } from "./Markdown"
@@ -242,41 +240,37 @@ function iconColor(status: ToolStatus | "waiting"): string {
  * A tool call card is transparent and borderless: a plain heading names the
  * canonical tool, the header shows state, the next row holds arguments, and the
  * output/error is separated by a divider in the expanded state. A click on the
- * card toggles it; a `task` card opens its child session instead (see
- * `TaskCard`).
+ * card toggles it.
  */
-function BaseToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
+function BaseToolCard(props: { presentation?: HookCard | undefined; block: Extract<Block, { kind: "tool" }> }) {
   const { store } = useApp()
   const card = () => props.block.card
-  const expanded = () => toolExpanded(store.state, props.block)
+  const expanded = () => toolExpanded(store.state, props.block, props.presentation?.expandedByDefault)
   const waiting = () => card().status !== "done" && card().status !== "failed" && props.block.callId !== undefined
     && store.state.interactions.some((item) => item.payload?.callId === props.block.callId)
   return (
-    <Switch>
-      <Match when={card().task}>
-        {(task) => <TaskCard block={props.block} task={task()} />}
-      </Match>
-      <Match when={!card().task}>
-        <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
-          <text height={1} wrapMode="none" fg={colors.fg}>{card().tool}</text>
-          <CardHeader status={waiting() ? "waiting" : card().status} summary={waiting() ? "awaiting approval" : ""} duration={card().duration} />
-          <Show when={!expanded()} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{card().displayArgs || card().args || "{}"}</text>}>
-            <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{card().displayArgs || card().args || "{}"}</text>
+    <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
+      <text height={1} wrapMode="none" fg={colors.fg}>{card().tool}</text>
+      <CardHeader status={waiting() ? "waiting" : card().status} summary={waiting() ? "awaiting approval" : props.presentation?.statusChip ?? ""} duration={card().duration} />
+      <Show when={!expanded()} fallback={<text width="100%" wrapMode="word" fg={colors.muted}>{props.presentation?.summary ?? (card().displayArgs || card().args || "{}")}</text>}>
+        <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{props.presentation?.summary ?? (card().summary || card().displayArgs || card().args || "{}")}</text>
+      </Show>
+      <Show when={expanded() && Boolean(props.presentation?.body || (!props.presentation && (card().output ?? card().body).length) || card().error)}>
+        <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
+          <text width="100%" height={1} wrapMode="none" fg={colors.border}>────────────────</text>
+          <Show keyed when={props.presentation?.body} fallback={
+            <For each={props.presentation ? [] : card().output ?? card().body}>
+              {(line) => <text width="100%" wrapMode="none" fg={toneColor(line.tone)}>{line.text || " "}</text>}
+            </For>
+          }>
+            {(body) => hooked({ replace: body, decorators: [] }, () => null)}
           </Show>
-          <Show when={expanded() && ((card().output ?? card().body).length > 0 || Boolean(card().error))}>
-            <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
-              <text width="100%" height={1} wrapMode="none" fg={colors.border}>────────────────</text>
-              <For each={card().output ?? card().body}>
-                {(line) => <text width="100%" wrapMode="none" fg={toneColor(line.tone)}>{line.text || " "}</text>}
-              </For>
-              <Show when={card().error}>
-                <text width="100%" wrapMode="word" fg={colors.error}>{card().error}</text>
-              </Show>
-            </box>
+          <Show when={card().error}>
+            <text width="100%" wrapMode="word" fg={colors.error}>{card().error}</text>
           </Show>
         </box>
-      </Match>
-    </Switch>
+      </Show>
+    </box>
   )
 }
 
@@ -293,11 +287,12 @@ function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
       ...(args === undefined ? {} : { input: args }), ...(output ? { output } : {}), ...(card.error ? { error: card.error } : {}),
     }
   }
-  const trees = createMemo(() => extensionManager.toolCall(input()))
+  const trees = createMemo(() => extensionManager.toolCall(input(), props.block.card.resultJson))
+  const base = () => <BaseToolCard {...props} presentation={trees().card} />
   // Keep the built-in subtree mounted when a projection update only changes
   // card data. Recreating it invalidates the previous frame's mouse hit IDs.
-  return <Show when={Boolean(trees().replace || trees().decorators.length)} fallback={<BaseToolCard {...props} />}>
-    {hooked(trees(), () => <BaseToolCard {...props} />)}
+  return <Show when={Boolean(trees().replace || trees().decorators.length)} fallback={base()}>
+    {hooked(trees(), base)}
   </Show>
 }
 
@@ -310,101 +305,6 @@ function CardHeader(props: { status: ToolStatus | "waiting"; summary: string; du
       </text>
       <text flexGrow={1} flexShrink={1} height={1} wrapMode="none" fg={colors.muted}>{props.summary}</text>
       <text flexShrink={0} height={1} wrapMode="none" fg={colors.muted}>{props.duration ? ` ${props.duration}` : ""}</text>
-    </box>
-  )
-}
-
-type TaskRowStatus = "starting" | "running" | "idle" | "done" | "failed" | "cancelled"
-
-const taskRowLabels: Record<TaskRowStatus, string> = {
-  starting: "starting", running: "running", idle: "idle", done: "done", failed: "failed", cancelled: "cancelled",
-}
-
-function taskRowStatus(entry: TaskMemberInfo, sessionBusy: boolean | undefined, cardStatus: ToolStatus): TaskRowStatus {
-  switch (entry.status) {
-    case "running": return "running"
-    case "done": case "completed": return "done"
-    case "error": case "failed": return "failed"
-    case "cancelled": return "cancelled"
-  }
-  if (sessionBusy === true) return "running"
-  if (sessionBusy === false) return cardStatus === "failed" ? "failed" : "idle"
-  if (cardStatus === "done") return "done"
-  if (cardStatus === "failed") return "failed"
-  return cardStatus === "running" ? "running" : "starting"
-}
-
-/** A task card keeps every launched member visible and individually navigable. */
-function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskInfo }) {
-  const { store, controller } = useApp()
-  const entries = createMemo(() => props.task.members ?? [props.task])
-  const rows = createMemo(() => entries().map((entry, index) => ({
-    id: entry.child ? `child:${entry.child}` : `entry:${index}`,
-    entry,
-  })))
-  const openSingle = () => {
-    const id = entries().length === 1 ? entries()[0]?.child : undefined
-    if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
-  }
-  return (
-    <box width="100%" flexDirection="column">
-      <box width="100%" flexDirection="column" onMouseDown={openSingle}>
-        <text height={1} wrapMode="none" fg={colors.fg}>{props.block.card.tool}</text>
-        <CardHeader status={props.block.card.status} summary={props.block.card.summary} duration={props.block.card.duration} />
-      </box>
-      <Show when={props.block.card.error}>
-        <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>
-      </Show>
-      <Show when={props.block.card.status !== "failed"}>
-        <KeyedFor each={rows()}>{(row) => <TaskMemberRow entry={row().entry} cardStatus={props.block.card.status} />}</KeyedFor>
-      </Show>
-    </box>
-  )
-}
-
-function TaskMemberRow(props: { entry: TaskMemberInfo; cardStatus: ToolStatus }) {
-  const { store, controller } = useApp()
-  const entry = () => props.entry
-  const session = () => {
-    const id = entry().child
-    return id ? store.state.sessions.find((row) => row.id === id) : undefined
-  }
-  const status = () => taskRowStatus(entry(), session()?.busy, props.cardStatus)
-  /** The child waits for the user (a pending ask of its session): shown instead of `running`. */
-  const waiting = () => {
-    const id = entry().child
-    return id ? waitingKind(store.state.interactions, id) : undefined
-  }
-  const detail = () => entry().summary
-  const open = () => {
-    const id = entry().child
-    if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
-  }
-  const statusColor = () => {
-    switch (status()) {
-      case "running": return colors.activity
-      case "idle": return colors.muted
-      case "done": return colors.success
-      case "failed": return colors.error
-      case "cancelled": return colors.warning
-      default: return colors.muted
-    }
-  }
-  return (
-    <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1} onMouseDown={open}>
-      <text width="100%" wrapMode="word" fg={colors.fg}>{[entry().name || entry().agent, entry().description].filter(Boolean).join(" · ")}</text>
-      <text width="100%" height={1} wrapMode="none">
-        <Show when={!waiting()} fallback={<span style={{ fg: colors.warning }}>◌</span>}>
-          <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
-            <RunningIcon />
-          </Show>
-        </Show>
-        <span style={{ fg: waiting() ? colors.warning : statusColor() }}>{waiting() ? ` waiting for ${waiting() === "approval" ? "approval" : "an answer"}` : ` ${taskRowLabels[status()]}`}</span>
-        <span style={{ fg: colors.muted }}>{detail() ? `  ↳ ${detail()}` : ""}</span>
-      </text>
-      <Show when={entry().child}>
-        {(id) => <text width="100%" wrapMode="word" fg={colors.muted}>{`click to view · /open ${id()}`}</text>}
-      </Show>
     </box>
   )
 }

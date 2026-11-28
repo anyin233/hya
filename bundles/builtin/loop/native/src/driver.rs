@@ -1,4 +1,4 @@
-//! Iteration driver, child worker session executor, and [`hya_runtime_abi::LoopDriver`]
+//! Iteration driver, child worker session executor, and the `hya/loop:loop` [`NativeDriver`]
 //! implementation for `hya/loop`.
 
 use std::path::{Path, PathBuf};
@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use hya_proto::{AgentName, ModelRef, SessionId};
 use hya_runtime_abi::{
-    DriverRunOutcome, HostError, HostRuntime, LoopDriver, LoopRunRequest, TurnSpawnRequest,
+    DriverReport, DriverRequest, DriverRunOutcome, HostError, HostRuntime, NativeDriver,
+    TurnSpawnRequest,
 };
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::evaluators::{
@@ -22,9 +23,10 @@ use crate::gate::LoopGate;
 use crate::predicate::LoopPredicate;
 use crate::service::LoopService;
 use crate::types::{
-    DEFAULT_MAX_WALL_CLOCK_SECS, GateOutcome, IterationExecutor, IterationGate, LOOP_BUNDLE_ID,
-    LOOP_DRIVER_ID, LoopConfig, LoopPlanner, LoopShouldStopHook, LoopVerifier, SafetyCaps,
-    render_transcript, skill_prompt_body, validate_budget, wrap_up_directive,
+    DEFAULT_LOOP_BUDGET, DEFAULT_MAX_WALL_CLOCK_SECS, GateOutcome, HARD_MAX_ITERATIONS,
+    IterationExecutor, IterationGate, LOOP_BUNDLE_ID, LOOP_DRIVER_ID, LoopConfig, LoopPlanner,
+    LoopShouldStopHook, LoopVerifier, SafetyCaps, render_transcript, skill_prompt_body,
+    validate_budget, wrap_up_directive,
 };
 
 /// Drives executor/gate pairs under [`SafetyCaps`].
@@ -254,7 +256,7 @@ struct LoopDriverConfigPayload {
     workdir: Option<PathBuf>,
 }
 
-/// Native [`LoopDriver`] exported by `hya/loop`.
+/// Native driver `hya/loop:loop`, behind `hya loop`.
 pub struct NativeLoopDriver {
     service: Arc<LoopService>,
 }
@@ -294,13 +296,141 @@ fn outcome_label(outcome: &DriverRunOutcome) -> &'static str {
     }
 }
 
+/// One loop-mode run.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LoopRunRequest {
+    /// Lead session the loop drives.
+    pub session: SessionId,
+    /// Loop target.
+    pub target: String,
+    /// Iteration budget.
+    pub budget: u32,
+    /// Wall-clock cap in seconds (`0` uses the default).
+    pub max_wall_clock_secs: u64,
+    /// Verifier score that counts as satisfied.
+    pub satisfaction_threshold: u8,
+    /// Iterations without progress before the loop stalls.
+    pub max_no_progress: u32,
+    /// Deterministic `--while`/`--until` predicate (`{command, mode, workdir}`).
+    pub predicate: Option<Value>,
+    /// Worker agent.
+    pub agent: Option<AgentName>,
+    /// Worker model.
+    pub model: Option<ModelRef>,
+    /// `{evaluator_model?, stop_when_satisfied?, workdir?}`.
+    pub config: Value,
+}
+
+/// Arguments of the `hya loop` CLI contribution.
+#[derive(Deserialize)]
+struct LoopArgs {
+    target: String,
+    #[serde(default)]
+    budget: Option<u32>,
+    #[serde(default)]
+    max_iterations: Option<u32>,
+    #[serde(default, rename = "while")]
+    while_command: Option<String>,
+    #[serde(default, rename = "until")]
+    until_command: Option<String>,
+    #[serde(default)]
+    evaluator_model: Option<String>,
+}
+
+/// `loop.evaluator_model` (or a top-level `evaluator_model`) of the bundle's
+/// own `config.yml`.
+async fn configured_evaluator_model(runtime: &dyn HostRuntime) -> Option<String> {
+    let config = runtime
+        .catalog_reader()
+        .bundle_config(LOOP_BUNDLE_ID)
+        .await
+        .ok()?;
+    config
+        .get("loop")
+        .and_then(|section| section.get("evaluator_model"))
+        .or_else(|| config.get("evaluator_model"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
+}
+
 #[async_trait]
-impl LoopDriver for NativeLoopDriver {
-    fn id(&self) -> &str {
+impl NativeDriver for NativeLoopDriver {
+    fn name(&self) -> &str {
         LOOP_DRIVER_ID
     }
 
-    async fn run_loop(
+    async fn run(
+        &self,
+        runtime: Arc<dyn HostRuntime>,
+        request: DriverRequest,
+        cancel: CancellationToken,
+    ) -> Result<DriverReport, HostError> {
+        let args: LoopArgs = serde_json::from_value(request.args)
+            .map_err(|error| HostError::InvalidInput(format!("loop arguments: {error}")))?;
+        let predicate = match (args.while_command, args.until_command) {
+            (Some(_), Some(_)) => {
+                return Err(HostError::InvalidInput(
+                    "--while and --until are mutually exclusive; give exactly one loop condition"
+                        .to_string(),
+                ));
+            }
+            (Some(command), None) => Some(json!({
+                "command": command, "mode": "while", "workdir": request.workdir,
+            })),
+            (None, Some(command)) => Some(json!({
+                "command": command, "mode": "until", "workdir": request.workdir,
+            })),
+            (None, None) => None,
+        };
+        let budget = args
+            .budget
+            .or(args.max_iterations)
+            .unwrap_or(DEFAULT_LOOP_BUDGET)
+            .clamp(1, HARD_MAX_ITERATIONS);
+        let evaluator_model = match args.evaluator_model {
+            Some(model) => Some(model),
+            None => configured_evaluator_model(runtime.as_ref()).await,
+        };
+        let run = LoopRunRequest {
+            session: request.session,
+            target: args.target,
+            budget,
+            max_wall_clock_secs: DEFAULT_MAX_WALL_CLOCK_SECS,
+            satisfaction_threshold: 90,
+            max_no_progress: 3,
+            predicate,
+            agent: request.agent,
+            model: request.model,
+            config: json!({
+                "evaluator_model": evaluator_model,
+                "stop_when_satisfied": true,
+                "workdir": request.workdir,
+            }),
+        };
+        let outcome = self.run_loop(runtime, run, cancel).await?;
+        let mut report = DriverReport {
+            stdout: format!("loop outcome: {outcome:?}\n"),
+            ..DriverReport::default()
+        };
+        if let DriverRunOutcome::InvalidCondition { reason, .. } = &outcome {
+            report.stderr = format!(
+                "warning: the loop condition itself is broken, so this is NOT a success: {reason}\n\
+                 Error: loop ended on a broken condition; not a success\n"
+            );
+            report.exit_code = 1;
+        }
+        Ok(report)
+    }
+}
+
+impl NativeLoopDriver {
+    /// Run one loop to its terminal outcome.
+    ///
+    /// # Errors
+    /// Invalid budgets or predicates, and host failures.
+    pub async fn run_loop(
         &self,
         runtime: Arc<dyn HostRuntime>,
         request: LoopRunRequest,

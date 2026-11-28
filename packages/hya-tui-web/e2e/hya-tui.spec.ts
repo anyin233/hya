@@ -39,9 +39,21 @@ test.describe("hya TUI in the browser", () => {
   test("Tab completes slash commands and /exit quits cleanly", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: wideViewport })
     await term.waitForText("Message, !shell, or @file · / commands")
-    await term.type("/workf")
-    await term.press("Tab")
-    await term.waitForText("/workflow")
+    // `/workflow` comes from the hya/workflow bundle's TUI extension, which
+    // registers its commands after the composer is ready: retry until it has.
+    const deadline = performance.now() + 20_000
+    for (;;) {
+      await term.type("/workf")
+      await term.press("Tab")
+      try {
+        await term.waitForText("/workflow", 1_000)
+        break
+      } catch (error) {
+        if (performance.now() >= deadline) throw error
+        await term.press("Control+a")
+        await term.press("Control+k")
+      }
+    }
     await term.press("Control+a")
     await term.press("Control+k")
     await term.type("/exit")

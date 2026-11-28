@@ -35,11 +35,6 @@ pub const FIRST_PARTY_BUNDLES: &[&str] = &[
     "hya/compaction",
 ];
 
-/// First-party internal bundles under `bundles/builtin/`: native libraries that
-/// carry full-mode features out of the kernel (ADR-0033). Every entry is also in
-/// [`FIRST_PARTY_BUNDLES`]; bare mode loads none of them.
-pub const INTERNAL_BUNDLES: &[&str] = &["hya/compaction"];
-
 /// In-tree source groups searched for a first-party bundle directory.
 const SOURCE_GROUPS: &[&str] = &["builtin"];
 

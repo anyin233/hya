@@ -108,7 +108,7 @@ pub(crate) struct PreparedSource {
     skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
     schemas: Vec<SourceSchema>,
-    pub(crate) hooks: Option<Arc<dyn hya_engine::hooks::HookDispatcher>>,
+    pub(crate) hooks: Option<Arc<dyn hya_engine::NativeHook>>,
 }
 
 pub(crate) struct PreparedFailure {
@@ -1371,6 +1371,9 @@ mod tests {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
         };
         let registry = Arc::new(RuntimeRegistry::new(
             hya_tool_loader::builtins(),

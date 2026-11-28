@@ -14,9 +14,7 @@ use std::time::Duration;
 
 use hya_proto::{Event, SessionId, now_millis};
 use hya_store::SessionStore;
-use hya_tool::extension::{
-    BUNDLE_CHANNELS, BUNDLE_COMPACTION, BUNDLE_MULTI_AGENT, BUNDLE_WORKFLOW,
-};
+use hya_tool::extension::{BUNDLE_CHANNELS, BUNDLE_MULTI_AGENT};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -99,14 +97,14 @@ pub struct DbMigrationReport {
 #[must_use]
 pub fn legacy_event_bundle(event_type: &str) -> Option<&'static str> {
     match event_type {
-        "context_evicted" | "context_status" => Some(BUNDLE_COMPACTION),
+        "context_evicted" | "context_status" => Some("hya/compaction"),
         "workflow_selected"
         | "workflow_run_started"
         | "workflow_stage_started"
         | "workflow_stage_member_linked"
         | "workflow_stage_route_outcome"
         | "workflow_stage_finished"
-        | "workflow_run_finished" => Some(BUNDLE_WORKFLOW),
+        | "workflow_run_finished" => Some("hya/workflow"),
         "mail_sent" | "channel_joined" | "channel_created" | "mail_consumed" => {
             Some(BUNDLE_CHANNELS)
         }

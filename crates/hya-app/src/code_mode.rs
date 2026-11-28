@@ -254,7 +254,6 @@ mod tests {
 
     use super::*;
     use async_trait::async_trait;
-    use hya_bundle::BuiltinBundleProfile;
     use hya_proto::{SessionId, ToolName, ToolSchema};
     use hya_tool::{
         NestedToolPlane, NestedTools, PermissionModel, PermissionPlane, PermissionRules, ToolCtx,
@@ -352,17 +351,15 @@ mod tests {
         ));
         assert!(!multi_agent_enabled(
             &BuiltinBundleSelection {
-                profile: BuiltinBundleProfile::Full,
-                enable: Vec::new(),
                 disable: vec![MULTI_AGENT_BUNDLE_ID.to_string()],
+                ..BuiltinBundleSelection::full()
             },
             &[],
         ));
         assert!(multi_agent_enabled(
             &BuiltinBundleSelection {
-                profile: BuiltinBundleProfile::Bare,
                 enable: vec![MULTI_AGENT_BUNDLE_ID.to_string()],
-                disable: Vec::new(),
+                ..BuiltinBundleSelection::bare()
             },
             &[],
         ));

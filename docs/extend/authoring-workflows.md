@@ -3,7 +3,7 @@
 Hya gives you three ways to build multi-step, verified agent automation:
 
 1. **Compiled Workflows (`*.hya.md`)** — Declarative Stage DAGs compiled by `hya-workflow` and executed on resident subagent sessions.
-2. **Goal & Loop Evaluators** — Custom judge models or plugin hooks (`goal.evaluate`, `loop.verifier`, `loop.planner`) for `hya -p` and `hya loop`.
+2. **Goal & Loop Evaluators** — Custom judge models or hooks on the points `hya/goal` and `hya/loop` declare (`hya/goal:evaluate`, `hya/loop:verifier`, `hya/loop:planner`, `hya/loop:should_stop`) for `hya -p` and `hya loop`.
 3. **Orchestrator Workflow Programs** — Dynamic JavaScript coordination scripts run by the optional `hya-extra/orchestrator` bundle.
 
 ---
@@ -114,8 +114,15 @@ To distribute a Workflow and its custom Agents together as a `.hyabundle`, decla
 When running `hya -p "<goal>"` or `hya loop`, the engine—never the worker—owns stop decisions (including iteration ceilings, stall guards, and `--until`/`--while` shell predicates).
 
 You can customize the intelligence behind evaluations in two ways:
-1. **Configure a judge model:** Pass `--evaluator-model provider/model` on the CLI or set `goal.evaluator_model` in `~/.config/hya/config.yaml`.
-2. **Write a plugin hook:** Register `goal.evaluate` (`{condition, transcript}` → `{outcome: "verdict", met, reason}`), `loop.verifier`, or `loop.planner` in a Bundle/Plugin process (see **[Plugins & Hooks](plugins-and-hooks.md)**).
+1. **Configure a judge model:** Pass `--evaluator-model provider/model` on the CLI, or set `goal.evaluator_model` in `~/.config/hya/bundles/hya%2Fgoal/config.yml` (goal mode) or `loop.evaluator_model` in `~/.config/hya/bundles/hya%2Floop/config.yml` (loop mode).
+2. **Write a hook:** Implement a declared hook point in a Bundle/Plugin process (see **[Plugins & Hooks](plugins-and-hooks.md)**):
+
+   | Point | Input | Reply (`null` defers to the next provider) |
+   | --- | --- | --- |
+   | `hya/goal:evaluate` | `{condition, transcript}` | `{met, reason}` |
+   | `hya/loop:verifier` | `{target, transcript}` | `{score, satisfied, evidence_quality, critical_gaps, iteration_summary, reason}` |
+   | `hya/loop:planner` | `{target, history, last, planner_notes}` | `{directive, continuity_brief, planner_notes, strategy_change, change_note}` |
+   | `hya/loop:should_stop` | `{target, transcript}` | `{stop, reason}`; `stop: true` ends the loop with `hya/loop:should_stop: <reason>` |
 
 ---
 

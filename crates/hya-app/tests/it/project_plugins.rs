@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_app::{InvocationPolicy, agent_with_model, build_session_engine, offline_router};
-use hya_engine::hooks::{HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome};
+use hya_engine::hooks::NativeMessageUserBeforeInput;
 use hya_engine::{
     CatalogScope, CatalogScopeCacheConfig, CreateSession, EventBus, HookChain, RuntimeRegistry,
     SessionEngine, TurnBinding,
@@ -181,14 +181,12 @@ fn project(roots: &[&Path]) -> CatalogScope {
 }
 
 async fn user_text(binding: &TurnBinding, session: SessionId, text: &str) -> String {
-    let MessageUserBeforeOutcome::Continue { text } =
-        HookChain::new(binding.bundle_hooks_for_agent("hya-main"))
-            .message_user_before(MessageUserBeforeInput {
-                session,
-                text: text.to_string(),
-            })
-            .await;
-    text
+    HookChain::new(binding.bundle_hooks_for_agent("hya-main"))
+        .message_user_before(NativeMessageUserBeforeInput {
+            session,
+            text: text.to_string(),
+        })
+        .await
 }
 
 async fn permission(binding: &TurnBinding, session: SessionId) -> Option<Decision> {

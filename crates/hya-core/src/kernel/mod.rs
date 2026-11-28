@@ -18,22 +18,19 @@ mod workspace;
 pub use workspace::WorkspaceWatches;
 
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use hya_context::rewrite::{ModelWindow, RewriteCtx, SessionLog, Transcript};
-use hya_context::tokens::TokenAccounting;
+use hya_context::rewrite::SessionLog;
 use hya_proto::context::{ReasoningReplayPolicy, ToolImageReplay, current_turn_start};
 use hya_proto::event::ViewRef;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
-    PartProjection, Projection, Role, SessionId, TokenUsage, ToolSchema,
+    Event, FinishReason, Message, MessageId, ModelRef, PartProjection, Projection, SessionId,
+    TokenUsage,
 };
-use hya_provider::{
-    CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter, invalid_tool_arguments,
-};
+use hya_provider::{CompletionRequest, EventStream, ProviderRouter, invalid_tool_arguments};
 use hya_store::SessionStore;
-use hya_tool::{Tool, ToolCtx, ToolError};
+use hya_tool::ToolError;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -229,75 +226,16 @@ pub trait Emit: Send + Sync {
     fn live(&self, event: Event);
 }
 
-/// Bare-mode [`Emit`]: appends to the store and hands each envelope to
-/// `publish` (for example an event bus).
-pub struct StoreEmit<'a> {
-    /// Session event log.
-    pub store: &'a SessionStore,
-    /// Receives every appended envelope, and live-only envelopes with `seq` 0.
-    pub publish: &'a (dyn Fn(Envelope) + Send + Sync),
-}
-
-#[async_trait]
-impl Emit for StoreEmit<'_> {
-    async fn emit(&self, session: SessionId, events: Vec<Event>) -> Result<(), CoreError> {
-        for envelope in self.store.append_events(session, events).await? {
-            (self.publish)(envelope);
-        }
-        Ok(())
-    }
-
-    fn live(&self, event: Event) {
-        let ts_millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-            });
-        (self.publish)(Envelope {
-            seq: EventSeq(0),
-            ts_millis,
-            event,
-        });
-    }
-}
-
-/// Inputs of one kernel run over an assistant message.
-pub struct Run<'a> {
-    /// Session event log; the projection is read from it every round.
-    pub store: &'a SessionStore,
-    /// Event sink.
-    pub emit: &'a dyn Emit,
-    /// Model routes.
-    pub provider: &'a ProviderRouter,
-    /// Model every round uses.
-    pub model: &'a ModelRef,
-    /// System prompt text.
-    pub system: &'a str,
-    /// Tools offered to the model, in schema order.
-    pub tools: &'a [Arc<dyn Tool>],
-    /// Tool execution context.
-    pub ctx: &'a ToolCtx,
-    /// Session to run in.
-    pub session: SessionId,
-    /// Assistant message the caller already started (`MessageStarted`).
-    pub message: MessageId,
-    /// Cancels the run between and during rounds and tool calls.
-    pub cancel: &'a CancellationToken,
-}
-
 /// Executes one tool call and appends its `ToolResult` or `ToolError`.
 #[async_trait]
 pub trait ToolGate: Send {
     /// Run `call` and record its outcome; an `Err` ends the run.
     async fn call(&mut self, call: ToolCall) -> Result<(), CoreError>;
-    /// Account for `calls`, which a cancel left unrun.
-    async fn cancelled(&mut self, calls: Vec<ToolCall>) -> Result<(), CoreError>;
 }
 
 /// What a harness supplies around the kernel's rounds: the rewrite before
 /// each round, each round's request and stream, whether a failed round is
-/// retried, and when the run stops. Bare mode's [`Bare`] is the kernel alone;
-/// full mode adds rebinding, hooks, and model fallback.
+/// retried, and when the run stops.
 #[async_trait]
 pub trait Harness: ToolGate {
     /// Rewrite the Context before the round `projection` would send, if
@@ -327,10 +265,9 @@ pub trait Harness: ToolGate {
     fn served_route(&self, _model: &ModelRef) -> Option<(ReasoningReplayPolicy, bool)> {
         None
     }
-    /// Whether the run's deadline notices take the text for an agent that
-    /// delivers by `report`.
-    fn deadline_subagent(&self) -> Result<bool, CoreError> {
-        Ok(false)
+    /// The offered tool through which the agent delivers its result.
+    fn deadline_delivery_tool(&self) -> Result<Option<&str>, CoreError> {
+        Ok(None)
     }
 }
 
@@ -346,347 +283,6 @@ pub const ROUND_RETRY_WAITS: [Duration; 8] = [
     Duration::from_secs(60),
     Duration::from_secs(60),
 ];
-
-/// Bare mode's [`Harness`]: the given prompt and tools on one model, the
-/// kernel's own context reduction, retry of a round after a transient
-/// provider error.
-struct Bare<'a> {
-    scope: &'a Scope<'a>,
-    model: &'a ModelRef,
-    system: &'a str,
-    schemas: Vec<ToolSchema>,
-    tools: &'a [Arc<dyn Tool>],
-    ctx: &'a ToolCtx,
-    cancel: &'a CancellationToken,
-    agent: AgentName,
-    attachments: request::AttachmentData,
-    /// Retries of the current round so far.
-    retries: usize,
-    /// Output tokens the last collected round reported.
-    output_tokens: Option<u64>,
-    /// Empty turns in a row so far.
-    empty_turns: usize,
-}
-
-#[async_trait]
-impl ToolGate for Bare<'_> {
-    async fn call(&mut self, mut call: ToolCall) -> Result<(), CoreError> {
-        let started = Instant::now();
-        let tool = self.tools.iter().find(|tool| tool.name() == call.name);
-        let capture = if tool.is_some() {
-            file_snapshot::FileCapture::bare(&call.name, &call.input, &self.ctx.workdir).await
-        } else {
-            file_snapshot::FileCapture::default()
-        };
-        let outcome = match tool {
-            None => Err(format!("unknown tool: {}", call.name)),
-            Some(tool) => tokio::select! {
-                biased;
-                () = self.cancel.cancelled() => Err("cancelled".to_string()),
-                result = tool.execute(self.ctx, std::mem::take(&mut call.input)) => {
-                    result
-                        .map(|output| {
-                            hya_tool::cap_tool_output_spilling(
-                                output,
-                                tool.result_policy(),
-                                &self.ctx.artifacts.store(&self.ctx.workdir),
-                                &call.name,
-                            )
-                        })
-                        .map_err(|error| error.to_string())
-                }
-            },
-        };
-        let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let Scope {
-            store,
-            emit,
-            session,
-            message,
-            ..
-        } = *self.scope;
-        let (changed, stamps) = capture
-            .finish(
-                store,
-                session,
-                message,
-                call.call,
-                outcome.as_ref().ok(),
-                (self.scope.watches, &self.ctx.workdir),
-            )
-            .await?;
-        let mut events = vec![tool_event(session, message, &call, outcome, time_ms)];
-        events.extend(changed);
-        events.extend(file_snapshot::observation(session, false, stamps));
-        emit.emit(session, events).await
-    }
-
-    /// Fail every unrun call as cancelled, so none is left without a result.
-    async fn cancelled(&mut self, calls: Vec<ToolCall>) -> Result<(), CoreError> {
-        if calls.is_empty() {
-            return Ok(());
-        }
-        let Scope {
-            emit,
-            session,
-            message,
-            ..
-        } = *self.scope;
-        let events = calls
-            .iter()
-            .map(|call| tool_event(session, message, call, Err("cancelled".to_string()), 0))
-            .collect();
-        emit.emit(session, events).await
-    }
-}
-
-/// Bare mode's transcript: the kernel agent's view of the projection.
-#[async_trait]
-impl Transcript for Bare<'_> {
-    async fn messages(&self, projection: &Projection) -> Result<Vec<Message>, ToolError> {
-        Ok(request::projection_to_messages(
-            &self.agent,
-            projection,
-            self.model,
-            &self.attachments,
-        ))
-    }
-}
-
-#[async_trait]
-impl Harness for Bare<'_> {
-    /// The kernel's reduction with no extensions on the round's model window;
-    /// no side model calls or hooks.
-    async fn before_round(&mut self, projection: &Projection) -> Result<bool, CoreError> {
-        let scope = self.scope;
-        let replay = scope.provider.reasoning_replay_policy(self.model);
-        let window = scope
-            .provider
-            .capabilities(self.model)
-            .map(|caps| ModelWindow {
-                max_context: caps.max_context,
-                usage_reporting: caps.usage_reporting,
-                reasoning_replay: replay,
-                sends_tool_images: scope.provider.sends_tool_images(self.model),
-            });
-        let overhead_tokens = TokenAccounting::default().estimate_request(
-            &[],
-            Some(self.system),
-            &self.schemas,
-            replay,
-        );
-        let cx = RewriteCtx {
-            session: scope.session,
-            message: scope.message,
-            model: self.model,
-            projection,
-            window,
-            overhead_tokens,
-            pressure: None,
-            workdir: &self.ctx.workdir,
-            config: &Value::Null,
-            log: scope,
-            transcript: &*self,
-            models: None,
-            hooks: None,
-        };
-        let rewritten = before_round(cx, &[]).await?;
-        if let Some(deadline) = hya_tool::deadline::current()
-            && let Some(notice) = deadline
-                .take_notice(scope.session)
-                .map(|stage| deadline.notice(stage, false))
-                .or_else(|| deadline.take_clock(scope.session))
-        {
-            scope
-                .emit
-                .emit(
-                    scope.session,
-                    round::system_message_events(scope.session, MessageId::new(), notice),
-                )
-                .await?;
-            return Ok(true);
-        }
-        Ok(rewritten)
-    }
-
-    async fn request(&mut self, view: &View<'_>) -> Result<CompletionRequest, CoreError> {
-        Ok(request::request(
-            view,
-            self.system,
-            self.schemas.clone(),
-            self.model,
-            &self.agent,
-            &self.attachments,
-            self.scope.provider.reasoning_default(self.model),
-        ))
-    }
-
-    async fn open(
-        &mut self,
-        request: &CompletionRequest,
-    ) -> Result<Option<(EventStream, ModelRef)>, CoreError> {
-        tokio::select! {
-            biased;
-            () = self.cancel.cancelled() => Ok(None),
-            stream = self.scope.provider.stream(
-                request.clone(),
-                self.scope.session,
-                self.scope.message,
-            ) => Ok(Some((stream?, self.model.clone()))),
-        }
-    }
-
-    /// Retry a transient provider failure or stream interruption. Before the
-    /// wait, the failed attempt's parts leave the conversation.
-    async fn failed(&mut self, failure: &Failure) -> Result<bool, CoreError> {
-        let CoreError::Provider(error) = &failure.error else {
-            return Ok(false);
-        };
-        let Some(&wait) = ROUND_RETRY_WAITS.get(self.retries) else {
-            return Ok(false);
-        };
-        let retryable = matches!(
-            error.retry_class(),
-            ProviderRetryClass::Transient | ProviderRetryClass::InterruptedBody
-        );
-        let deadline = hya_tool::deadline::current();
-        if !retryable
-            || self.cancel.is_cancelled()
-            || deadline.is_some_and(|d| d.remaining().saturating_sub(d.final_window()) <= wait)
-        {
-            return Ok(false);
-        }
-        let Scope {
-            store,
-            emit,
-            session,
-            message,
-            ..
-        } = *self.scope;
-        // None of these parts was acted on: `drive` runs a round's tool calls
-        // only after the round collected without error.
-        let discarded: Vec<_> = store
-            .with_projection(session, |projection| {
-                projection
-                    .session
-                    .messages
-                    .iter()
-                    .find(|row| row.id == message && failure.step_started)
-                    .and_then(|row| row.parts.get(row.last_step_start?..))
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|part| Event::PartDeleted {
-                        session,
-                        message,
-                        part: part.id(),
-                    })
-                    .collect()
-            })
-            .await?;
-        if !discarded.is_empty() {
-            emit.emit(session, discarded).await?;
-        }
-        tracing::warn!(
-            name: "bare_round_retry",
-            %session,
-            retry = self.retries + 1,
-            "bare round failed: {error}; waiting {wait:?} before retry"
-        );
-        tokio::select! {
-            biased;
-            () = self.cancel.cancelled() => return Ok(false),
-            () = tokio::time::sleep(wait) => {}
-        }
-        if self.cancel.is_cancelled()
-            || deadline.is_some_and(|d| d.stage() >= hya_tool::deadline::Stage::Final)
-        {
-            return Ok(false);
-        }
-        self.retries += 1;
-        Ok(true)
-    }
-
-    async fn collected(&mut self, round: &Round) -> Result<(), CoreError> {
-        self.retries = 0;
-        self.output_tokens = round.tokens.map(|tokens| tokens.output);
-        if !round.tool_calls.is_empty() {
-            self.empty_turns = 0;
-        }
-        Ok(())
-    }
-
-    /// A turn without answer text continues the run with [`EMPTY_TURN`], at
-    /// most [`EMPTY_TURN_NOTICES`] times in a row. Otherwise the completion
-    /// check, once per session after the kernel ran a known tool, while more
-    /// than two final windows remain on any run deadline.
-    async fn before_end(&mut self) -> Result<bool, CoreError> {
-        let Scope {
-            store,
-            emit,
-            session,
-            message,
-            ..
-        } = *self.scope;
-        let projection = store.read_projection_shared(session).await?;
-        let messages = &projection.session.messages;
-        let parts = messages
-            .iter()
-            .find(|row| row.id == message)
-            .and_then(|row| row.parts.get(row.last_step_start.unwrap_or(0)..))
-            .unwrap_or_default();
-        let answered = parts.iter().any(
-            |part| matches!(part, PartProjection::Text { text, .. } if !text.trim().is_empty()),
-        );
-        if !answered {
-            // Cancelled meanwhile: a logged notice would never be sent.
-            if self.empty_turns == EMPTY_TURN_NOTICES || self.cancel.is_cancelled() {
-                return Ok(false);
-            }
-            self.empty_turns += 1;
-            emit.emit(
-                session,
-                empty_turn_events(session, parts, self.output_tokens),
-            )
-            .await?;
-            return Ok(true);
-        }
-        self.empty_turns = 0;
-        if hya_tool::deadline::current()
-            .is_some_and(|deadline| deadline.remaining() <= 2 * deadline.final_window())
-        {
-            return Ok(false);
-        }
-        // A call of an unknown tool only recorded an error; `execute_calls`
-        // runs `rewrite` and `todo` itself.
-        let ran_tool = messages
-            .iter()
-            .flat_map(|message| &message.parts)
-            .any(|part| {
-                matches!(part, PartProjection::Tool { name, .. }
-                if [tools::REWRITE, tools::TODO].contains(&name.as_str())
-                    || self.tools.iter().any(|tool| tool.name() == name.as_str()))
-            });
-        // The logged check counts as sent even after requests leave it out.
-        let sent = messages.iter().any(|message| {
-            message.role == Role::System
-                && is_completion_check(&request::collect_text(&message.parts))
-        });
-        // Cancelled meanwhile: a logged check would never be sent.
-        if !ran_tool || sent || self.cancel.is_cancelled() {
-            return Ok(false);
-        }
-        emit.emit(
-            session,
-            round::system_message_events(session, MessageId::new(), COMPLETION_CHECK.to_string()),
-        )
-        .await?;
-        Ok(true)
-    }
-
-    fn done(&self) -> bool {
-        false
-    }
-}
 
 /// The run a round belongs to. As a [`SessionLog`] it reads the store and
 /// appends through the run's [`Emit`].
@@ -726,17 +322,15 @@ impl SessionLog for Scope<'_> {
 
 /// Execute calls in order, keeping `rewrite` and `todo` in the kernel.
 /// A call whose argument text was not valid JSON fails here, before any tool,
-/// hook or permission check sees it. When cancelled, return the calls that did
-/// not run.
+/// hook or permission check sees it. The engine closes unrun calls at turn end.
 async fn execute_calls(
     scope: &Scope<'_>,
     model: &ModelRef,
     gate: &mut dyn ToolGate,
     calls: Vec<ToolCall>,
     cancel: &CancellationToken,
-) -> Result<Vec<ToolCall>, CoreError> {
-    let mut calls = calls.into_iter();
-    while let Some(call) = calls.next() {
+) -> Result<(), CoreError> {
+    for call in calls {
         if let Some(error) = invalid_tool_arguments(&call.input) {
             let outcome = Err(format!(
                 "arguments are not valid JSON: {error}. Nothing was run; call the tool \
@@ -772,70 +366,10 @@ async fn execute_calls(
             gate.call(call).await?;
         }
         if cancel.is_cancelled() {
-            return Ok(calls.collect());
+            break;
         }
     }
-    Ok(Vec::new())
-}
-
-/// Run model rounds and tool calls until a round ends without tool calls.
-///
-/// Returns that round's finish, or `Cancelled`. The caller finishes the
-/// assistant message. A round that fails on a transient provider error can be
-/// retried.
-pub async fn run(run: Run<'_>) -> Result<FinishReason, CoreError> {
-    run_with_watches(run, &WorkspaceWatches::default()).await
-}
-
-/// Run a bare turn with workspace watches retained across calls.
-pub async fn run_with_watches(
-    run: Run<'_>,
-    watches: &WorkspaceWatches,
-) -> Result<FinishReason, CoreError> {
-    let Run {
-        store,
-        emit,
-        provider,
-        model,
-        system,
-        tools,
-        ctx,
-        session,
-        message,
-        cancel,
-    } = run;
-    let scope = Scope {
-        watches,
-        store,
-        emit,
-        complete: None,
-        provider,
-        session,
-        message,
-    };
-    let schemas = tools
-        .iter()
-        .map(|tool| match tool.name() {
-            tools::REWRITE => tools::rewrite_schema(),
-            tools::TODO => tools::todo_schema(),
-            _ => tool.schema(),
-        })
-        .collect();
-    let mut bare = Bare {
-        scope: &scope,
-        model,
-        system,
-        schemas,
-        tools,
-        ctx,
-        cancel,
-        agent: AgentName::new(AGENT),
-        attachments: request::AttachmentData::new(),
-        retries: 0,
-        output_tokens: None,
-        empty_turns: 0,
-    };
-    drive(&scope, &mut bare, cancel).await
+    Ok(())
 }
 
 /// The kernel loop. Each round: read the projection, let the harness rewrite
@@ -880,9 +414,9 @@ pub async fn drive(
         if let Some(cut) = pending_cut.take() {
             // Minted after any compaction marker of that rewrite, which
             // would otherwise leave the notice out of the request.
-            let subagent = harness.deadline_subagent()?;
+            let delivery_tool = harness.deadline_delivery_tool()?;
             let stage_notice = hya_tool::deadline::current().map(|deadline| match cut.stage {
-                Some(stage) => deadline.notice(stage, subagent),
+                Some(stage) => deadline.notice(stage, delivery_tool),
                 None => deadline.clock_line(),
             });
             emit.emit(
@@ -1029,7 +563,6 @@ pub async fn drive(
         )
         .await?;
         if round.finish == FinishReason::Cancelled {
-            harness.cancelled(round.tool_calls).await?;
             return Ok(FinishReason::Cancelled);
         }
         if let Some(cut) = round.deadline_cut {
@@ -1057,9 +590,8 @@ pub async fn drive(
         {
             return Ok(round.finish);
         }
-        let unrun = execute_calls(scope, &req.model, harness, round.tool_calls, cancel).await?;
+        execute_calls(scope, &req.model, harness, round.tool_calls, cancel).await?;
         if cancel.is_cancelled() {
-            harness.cancelled(unrun).await?;
             return Ok(FinishReason::Cancelled);
         }
         if harness.done() {

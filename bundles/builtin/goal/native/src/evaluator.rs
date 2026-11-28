@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{Message, MessageId, ModelRef, Part, PartId, SessionId};
-use hya_runtime_abi::{HostError, HostRuntime, ModelCallRequest, NativeGoalEvaluateVerdict};
+use hya_runtime_abi::{HostError, HostRuntime, ModelCallRequest};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
@@ -16,8 +16,33 @@ pub const DEFAULT_EVALUATOR_SYSTEM_PROMPT: &str = "You are an independent goal v
 /// Reason recorded when an evaluator returns non-verdict or unparseable output.
 pub const MALFORMED_VERDICT_REASON: &str = "evaluator returned malformed output";
 
-/// Reason recorded when the `goal.evaluate` hook provider chain fails outright.
-pub const PLUGIN_HOOK_ERROR_REASON: &str = "goal.evaluate hook error";
+/// Reason recorded when the `hya/goal:evaluate` hook provider chain fails outright.
+pub const PLUGIN_HOOK_ERROR_REASON: &str = "hya/goal:evaluate hook error";
+
+/// Local name of the hook point `hya/goal` declares for custom evaluators.
+pub const EVALUATE_HOOK_POINT: &str = "evaluate";
+
+/// Full name other bundles implement: `hya/goal:evaluate`.
+pub const EVALUATE_HOOK: &str = "hya/goal:evaluate";
+
+/// Input of the `hya/goal:evaluate` hook point.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct EvaluateHookInput<'a> {
+    /// Goal condition under evaluation.
+    pub condition: &'a str,
+    /// Rendered iteration transcript.
+    pub transcript: &'a str,
+}
+
+/// Reply of the `hya/goal:evaluate` hook point: `{met, reason}`.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct EvaluateHookReply {
+    /// Whether the goal is met.
+    pub met: bool,
+    /// Short reason.
+    #[serde(default)]
+    pub reason: String,
+}
 
 /// Result of an independent goal evaluation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -193,17 +218,18 @@ impl GoalEvaluator for PluginGoalEvaluator {
         let hook_result = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(HostError::Cancelled),
-            res = self.runtime.extension_registry().invoke_goal_evaluate_hook(
+            res = self.runtime.extension_registry().invoke_hook(
                 self.session,
-                condition,
-                transcript,
+                EVALUATE_HOOK,
+                serde_json::json!(EvaluateHookInput { condition, transcript }),
             ) => res,
         };
+        let hook_result = hook_result.map(|reply| {
+            reply.and_then(|value| serde_json::from_value::<EvaluateHookReply>(value).ok())
+        });
         match hook_result {
-            Ok(Some(NativeGoalEvaluateVerdict::Verdict { met, reason })) => {
-                Ok(Verdict { met, reason })
-            }
-            Ok(Some(NativeGoalEvaluateVerdict::Malformed)) | Ok(None) => match &self.fallback {
+            Ok(Some(EvaluateHookReply { met, reason })) => Ok(Verdict { met, reason }),
+            Ok(None) => match &self.fallback {
                 Some(fallback) => fallback.evaluate(condition, transcript, cancel).await,
                 None => Ok(Verdict {
                     met: false,
@@ -214,7 +240,7 @@ impl GoalEvaluator for PluginGoalEvaluator {
             Err(error) => {
                 tracing::warn!(
                     %error,
-                    "goal.evaluate hook failed; degrading to not-met so the run stays cappable"
+                    "hya/goal:evaluate hook failed; degrading to not-met so the run stays cappable"
                 );
                 match &self.fallback {
                     Some(fallback) => fallback.evaluate(condition, transcript, cancel).await,

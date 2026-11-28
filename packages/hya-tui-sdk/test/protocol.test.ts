@@ -10,7 +10,7 @@ describe("TUI extension protocol v2", () => {
   test("exposes independent v2 protocol versions and permissions", () => {
     expect(TUI_EXTENSION_API_VERSION).toBe(2);
     expect(TUI_EXTENSION_SDK_MAJOR).toBe(2);
-    expect(TUI_EXTENSION_SDK_VERSION).toBe("2.0.0");
+    expect(TUI_EXTENSION_SDK_VERSION).toBe("2.1.0");
     expect(TUI_EXTENSION_PERMISSIONS).toContain("tui.bundle_api");
     expect(TUI_EXTENSION_PERMISSIONS).toContain("tui.extension_state.read");
     expect(TUI_EXTENSION_PERMISSIONS).toContain("tui.transcript.embed");

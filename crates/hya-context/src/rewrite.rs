@@ -10,7 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hya_proto::context::ReasoningReplayPolicy;
 use hya_proto::{Event, Message, MessageId, ModelRef, Projection, SessionId};
-use serde_json::Value;
+
+use crate::tokens::TokenAccountingMode;
 
 pub use hya_tool_error::ToolError;
 
@@ -107,9 +108,9 @@ pub struct RewriteCtx<'a> {
     pub pressure: Option<Pressure>,
     /// The session's working directory (spill target).
     pub workdir: &'a Path,
-    /// The host's settings for this rewriter, as JSON; the bundle owns their
-    /// schema.
-    pub config: &'a Value,
+    /// How the host measures window occupancy (`config.yaml`
+    /// `context.token_accounting`).
+    pub token_accounting: TokenAccountingMode,
     /// The session log.
     pub log: &'a dyn SessionLog,
     /// The turn's transcript builder.

@@ -8,13 +8,13 @@ use std::sync::{Arc, OnceLock, Weak};
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use hya_bundle::{Bundle, PreparedAgent};
-use hya_engine::hooks::{EvidenceQuality, GoalEvaluateReply, HookDispatcher, VerifierVerdict};
 use hya_engine::resident::ActivationResult;
 use hya_engine::{
     AgentSpec, BundleApiCall, BundleApiError, CatalogScope, CategoryRegistry, CoreError,
-    CreateSession, ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute, HookChain,
-    ResidentSupervisor, SessionEngine, SessionStoreExt as _, SidecarEnvironment as _, TurnBinding,
-    apply_agent_model_preference, apply_spawn_model_policy,
+    CreateSession, DrivenTurn, DrivenTurnEnd, ExplicitModelRoute, ExplicitModelRouteCandidate,
+    ExplicitTurnRoute, FencedSidecars, HookChain, ResidentSupervisor, SessionEngine,
+    SessionStoreExt as _, SidecarEnvironment as _, TurnBinding, apply_agent_model_preference,
+    apply_spawn_model_policy,
 };
 use hya_proto::{
     ActorClaim, AgentName, ChannelPolicySnapshot, Envelope, Event, EventSeq, FinishReason, Message,
@@ -23,22 +23,22 @@ use hya_proto::{
 };
 use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
 use hya_runtime_abi::{
-    BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
-    BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind, GoalDriver,
+    AgentModelRequest, BundleApiInvocation, BundleApiResult, BundleCatalogSummary,
+    BundleClaimLease, BundleClaimRequest, BundleStateEntry, ExtensionEntry, ExtensionKind,
     HostBundleStorage, HostCatalogReader, HostError, HostEventBus, HostExtensionRegistry,
-    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, LoopDriver,
-    ManagedMemberActivateRequest, ManagedMemberActivationOutcome, ManagedMemberActivationStatus,
-    ManagedMemberHandle, ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest,
-    ModelCallResponse, ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo,
-    NativeGoalEvaluateVerdict, NativeLoopPlanInput, NativePlannerOutput, NativeVerifierVerdict,
-    ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionListFilter,
-    SessionSummaryMeta, StagedMailAck, TurnOutcome, TurnSpawnRequest, TurnStartRequest, TurnStatus,
+    HostModelCaller, HostRuntime, HostSessionStore, HostTurnRunner, ManagedMemberActivateRequest,
+    ManagedMemberActivationOutcome, ManagedMemberActivationStatus, ManagedMemberHandle,
+    ManagedMemberSpawnRequest, MemberMailRevivalRequest, ModelCallRequest, ModelCallResponse,
+    ModelRouteEntry, ModelStreamChunk, ModelToolCall, ModelWindowInfo, NativeDriver,
+    ResolvedModelRoute, ResolvedModelRouteCandidate, ScopeCatalogSnapshot, SessionCloseKind,
+    SessionListFilter, SessionSummaryMeta, SessionTreeArchive, TurnOutcome, TurnSpawnRequest,
+    TurnStart, TurnStartRequest, TurnStatus,
 };
 use hya_store::SessionStore;
 use hya_tool::{AgentDef, ReportOutcome, SkillCatalogEntry, SpawnMember};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::bundle_runtime::sidecar::environment::BundleSidecarEnvironment;
@@ -56,8 +56,12 @@ pub(crate) struct AppHostRuntime {
     engine: OnceLock<Weak<SessionEngine>>,
     resident_supervisor: OnceLock<Weak<ResidentSupervisor>>,
     sidecar_environment: OnceLock<Arc<BundleSidecarEnvironment>>,
-    goal_driver: OnceLock<Arc<dyn GoalDriver>>,
-    loop_drivers: OnceLock<Vec<Arc<dyn LoopDriver>>>,
+    /// Drivers of the loaded bundles, by `<bundle-id>:<name>`.
+    drivers: std::sync::RwLock<std::collections::BTreeMap<String, Arc<dyn NativeDriver>>>,
+    /// Bundle-declared hook points (`<bundle-id>:<point>`) of the loaded bundles.
+    declared_hooks: std::sync::RwLock<BTreeSet<String>>,
+    /// Sidecars kept across the fenced turns of each session.
+    fenced_sidecars: FencedSidecars,
 }
 
 impl AppHostRuntime {
@@ -81,9 +85,47 @@ impl AppHostRuntime {
             engine: OnceLock::new(),
             resident_supervisor: OnceLock::new(),
             sidecar_environment: OnceLock::new(),
-            goal_driver: OnceLock::new(),
-            loop_drivers: OnceLock::new(),
+            drivers: std::sync::RwLock::new(std::collections::BTreeMap::new()),
+            declared_hooks: std::sync::RwLock::new(BTreeSet::new()),
+            fenced_sidecars: FencedSidecars::default(),
         }
+    }
+
+    /// Record the hook points `bundle_id` declares (local names).
+    pub(crate) fn declare_hook_points(&self, bundle_id: &str, points: &[String]) {
+        let mut declared = self
+            .declared_hooks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        declared.extend(points.iter().map(|point| format!("{bundle_id}:{point}")));
+    }
+
+    fn is_declared_hook(&self, point: &str) -> bool {
+        self.declared_hooks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(point)
+    }
+
+    /// The chain that answers the declared point `point` for `session`.
+    async fn declared_hook_chain(
+        &self,
+        session: Option<SessionId>,
+        point: &str,
+    ) -> Result<HookChain, HostError> {
+        if !self.is_declared_hook(point) {
+            return Err(HostError::InvalidInput(format!(
+                "no loaded bundle declares hook point `{point}`"
+            )));
+        }
+        let engine = self.engine()?;
+        let (workdir, agent) = self.resolve_session_scope(session).await?;
+        let binding = match session {
+            Some(session) => engine.bind_session_runtime(session, &workdir).await,
+            None => engine.bind_root_runtime(&workdir).await,
+        }
+        .map_err(map_core_error)?;
+        Ok(declared_hook_chain(&engine, &binding, &agent, point))
     }
 
     /// Poll `future` (and drop it on cancellation) with the host's Tokio runtime
@@ -112,14 +154,24 @@ impl AppHostRuntime {
         let _ = self.sidecar_environment.set(sidecar);
     }
 
-    /// Register the active native [`GoalDriver`] loaded from `hya/goal`.
-    pub(crate) fn attach_goal_driver(&self, driver: Arc<dyn GoalDriver>) {
-        let _ = self.goal_driver.set(driver);
+    /// Register the drivers `bundle_id` exports as `<bundle-id>:<name>`.
+    pub(crate) fn register_drivers(&self, bundle_id: &str, drivers: Vec<Arc<dyn NativeDriver>>) {
+        let mut registered = self
+            .drivers
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for driver in drivers {
+            registered.insert(format!("{bundle_id}:{}", driver.name()), driver);
+        }
     }
 
-    /// Register loaded native [`LoopDriver`] instances (e.g. from `hya/loop`).
-    pub(crate) fn set_loop_drivers(&self, drivers: Vec<Arc<dyn LoopDriver>>) {
-        let _ = self.loop_drivers.set(drivers);
+    /// The driver registered as `name` (`<bundle-id>:<name>`).
+    pub(crate) fn driver(&self, name: &str) -> Option<Arc<dyn NativeDriver>> {
+        self.drivers
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     fn engine(&self) -> Result<Arc<SessionEngine>, HostError> {
@@ -157,7 +209,7 @@ impl AppHostRuntime {
     ) -> Result<(AgentSpec, hya_engine::resident::ResolvedResidentRuntime), HostError> {
         let definition = match caller {
             Some(caller) => binding
-                .resolve_workflow_agent(caller.as_str(), agent.as_str())
+                .resolve_agent_run(caller.as_str(), agent.as_str())
                 .map_err(|error| HostError::PermissionDenied(error.to_string()))?,
             None => binding.resolve_agent(agent.as_str()).ok_or_else(|| {
                 HostError::PermissionDenied(format!("unknown agent `{}`", agent.as_str()))
@@ -242,30 +294,6 @@ impl AppHostRuntime {
             .await
             .map_err(map_core_error)
     }
-
-    async fn loop_hooks_for_session(
-        &self,
-        session: SessionId,
-    ) -> Result<Arc<dyn HookDispatcher>, HostError> {
-        let engine = self.engine()?;
-        let projection = self.read_projection(session).await?;
-        let workdir = projection
-            .session
-            .workdir
-            .as_deref()
-            .filter(|w| !w.is_empty())
-            .map_or_else(|| self.default_agent.workdir.clone(), PathBuf::from);
-        let agent_name = projection
-            .session
-            .agent
-            .as_ref()
-            .map_or(self.default_agent.name.as_str(), AgentName::as_str);
-        let binding = engine
-            .bind_session_runtime(session, &workdir)
-            .await
-            .map_err(map_core_error)?;
-        Ok(build_loop_hook_chain(&binding, agent_name))
-    }
 }
 
 struct HostContextFuture<F> {
@@ -315,6 +343,17 @@ fn map_core_error(error: CoreError) -> HostError {
     }
 }
 
+/// [`map_core_error`] for `run_turn`, which reports a superseded fence as
+/// [`HostError::StaleClaim`].
+fn map_turn_error(error: CoreError) -> HostError {
+    match error {
+        CoreError::Store(hya_store::StoreError::StaleBundleClaim { .. }) => {
+            HostError::StaleClaim(error.to_string())
+        }
+        other => map_core_error(other),
+    }
+}
+
 fn explicit_route_from_resolved(route: &ResolvedModelRoute) -> ExplicitTurnRoute {
     let candidates = route
         .candidates
@@ -339,15 +378,21 @@ fn hex_digest(bytes: &[u8]) -> String {
     out
 }
 
-fn goal_evaluator_hook_chain(
+/// The entries that may answer the declared point `point`: the process-wide
+/// chain, user-global plugins, agent-less bundles, the bound agent's hooks,
+/// then the declaring bundle's own hooks. When the bound agent belongs to the
+/// declaring bundle, the main agent's hooks stand in for its own.
+fn declared_hook_chain(
+    engine: &SessionEngine,
     binding: &TurnBinding,
     stable_agent_id: &str,
-) -> Arc<dyn HookDispatcher> {
-    let is_goal_owner = |id: &str| id == "hya/goal" || id == "hya/goal-loop";
-    let active_is_goal_owner = binding
+    point: &str,
+) -> HookChain {
+    let owner = point.split_once(':').map(|(bundle, _)| bundle);
+    let active_is_owner = binding
         .resolve_agent(stable_agent_id)
-        .is_some_and(|agent| agent.origin.bundle_id().is_some_and(is_goal_owner));
-    let selected = binding.bundle_hooks_for_agent(if active_is_goal_owner {
+        .is_some_and(|agent| agent.origin.bundle_id() == owner);
+    let selected = binding.bundle_hooks_for_agent(if active_is_owner {
         hya_engine::MAIN_AGENT_ID
     } else {
         stable_agent_id
@@ -356,64 +401,25 @@ fn goal_evaluator_hook_chain(
         .bundle_catalog()
         .bundles()
         .iter()
-        .filter(|bundle| {
-            (bundle.agents().is_empty() && bundle.workflow().is_none())
-                && !is_goal_owner(&bundle.identity().id)
-        })
+        .filter(|bundle| bundle.agents().is_empty() && Some(bundle.identity().id.as_str()) != owner)
         .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
         .collect::<Vec<_>>();
-    let mut hooks = Vec::new();
-    for hook in binding
+    let mut entries = engine.process_hooks().entries().to_vec();
+    for entry in binding
         .global_plugin_hooks()
         .into_iter()
         .chain(agentless)
         .chain(selected)
-        .chain(binding.bundle_hooks("hya/goal"))
-        .chain(binding.bundle_hooks("hya/goal-loop"))
+        .chain(owner.and_then(|owner| binding.bundle_hooks(owner)))
     {
-        if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
-            hooks.push(hook);
+        if !entries
+            .iter()
+            .any(|existing| Arc::ptr_eq(existing.hook(), entry.hook()))
+        {
+            entries.push(entry);
         }
     }
-    Arc::new(HookChain::new(hooks))
-}
-
-pub(crate) fn build_loop_hook_chain(
-    binding: &TurnBinding,
-    stable_agent_id: &str,
-) -> Arc<dyn HookDispatcher> {
-    let active_is_loop_owner = binding.resolve_agent(stable_agent_id).is_some_and(|agent| {
-        matches!(agent.origin.bundle_id(), Some("hya/loop" | "hya/goal-loop"))
-    });
-    let selected = binding.bundle_hooks_for_agent(if active_is_loop_owner {
-        hya_engine::MAIN_AGENT_ID
-    } else {
-        stable_agent_id
-    });
-    let agentless = binding
-        .bundle_catalog()
-        .bundles()
-        .iter()
-        .filter(|bundle| {
-            (bundle.agents().is_empty() && bundle.workflow().is_none())
-                && !matches!(bundle.identity().id.as_str(), "hya/loop" | "hya/goal-loop")
-        })
-        .filter_map(|bundle| binding.bundle_hooks(&bundle.identity().id))
-        .collect::<Vec<_>>();
-    let mut hooks: Vec<Arc<dyn HookDispatcher>> = Vec::new();
-    for hook in binding
-        .global_plugin_hooks()
-        .into_iter()
-        .chain(agentless)
-        .chain(selected)
-        .chain(binding.bundle_hooks("hya/goal-loop"))
-        .chain(binding.bundle_hooks("hya/loop"))
-    {
-        if !hooks.iter().any(|existing| Arc::ptr_eq(existing, &hook)) {
-            hooks.push(hook);
-        }
-    }
-    Arc::new(HookChain::new(hooks))
+    HookChain::new(entries)
 }
 
 fn extract_turn_outcome(session: SessionId, projection: &Projection) -> TurnOutcome {
@@ -607,6 +613,19 @@ impl HostSessionStore for AppHostRuntime {
         })
     }
 
+    fn stage_extension_event(
+        &self,
+        during: SessionId,
+        target: SessionId,
+        bundle: &str,
+        kind: &str,
+        payload: Value,
+        on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), HostError> {
+        self.engine()?
+            .stage_extension_event(during, target, bundle, kind, payload, on_commit)
+    }
+
     async fn read_projection(&self, session: SessionId) -> Result<Arc<Projection>, HostError> {
         self.on_host(async move {
             self.store
@@ -659,6 +678,22 @@ impl HostSessionStore for AppHostRuntime {
 
     fn runtime_owner_id(&self) -> Option<OwnerRunId> {
         Some(self.owner_run_id)
+    }
+
+    async fn append_batch(
+        &self,
+        fence: Option<ActorClaim>,
+        expect: Vec<(SessionId, EventSeq)>,
+        events: Vec<(SessionId, Event)>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        self.on_host(async move {
+            self.engine()?
+                .host_runtime()
+                .session_store()
+                .append_batch(fence, expect, events)
+                .await
+        })
+        .await
     }
 
     async fn find_sessions_with_extension(
@@ -714,6 +749,20 @@ fn store_claim_to_lease(row: hya_store::BundleClaim) -> BundleClaimLease {
     }
 }
 
+/// The session fence `lease` holds, when it is a claim on a session id in
+/// the namespace fenced turns validate against (`hya/multi-agent` until the
+/// session fence namespace lands).
+fn lease_fence(lease: &BundleClaimLease) -> Option<ActorClaim> {
+    if lease.bundle != hya_tool::extension::BUNDLE_MULTI_AGENT {
+        return None;
+    }
+    Some(ActorClaim {
+        actor_id: lease.resource_key.parse().ok()?,
+        epoch: hya_proto::ActorEpoch::from_storage(lease.epoch),
+        owner_run_id: serde_json::from_value(Value::String(lease.owner_id.clone())).ok()?,
+    })
+}
+
 fn lease_to_store_claim(lease: &BundleClaimLease) -> hya_store::BundleClaim {
     hya_store::BundleClaim {
         bundle: lease.bundle.clone(),
@@ -729,6 +778,38 @@ fn lease_to_store_claim(lease: &BundleClaimLease) -> hya_store::BundleClaim {
 
 #[async_trait]
 impl HostBundleStorage for AppHostRuntime {
+    fn get_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(self.engine()?.get_transient_state(bundle, session, key))
+    }
+
+    fn set_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+        value: Option<Value>,
+    ) -> Result<(), HostError> {
+        self.engine()?
+            .set_transient_state(bundle, session, key, value);
+        Ok(())
+    }
+
+    fn subscribe_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<watch::Receiver<Option<Value>>, HostError> {
+        Ok(self
+            .engine()?
+            .subscribe_transient_state(bundle, session, key))
+    }
+
     async fn get_state(
         &self,
         bundle: &str,
@@ -891,7 +972,12 @@ impl HostBundleStorage for AppHostRuntime {
                 .await
                 .map_err(|error| HostError::Storage(error.to_string()))
         })
-        .await
+        .await?;
+        // A released session fence ends the sidecar its fenced turns kept.
+        if let Some(fence) = lease_fence(lease) {
+            self.fenced_sidecars.release(&fence).await;
+        }
+        Ok(())
     }
 
     async fn read_claim(
@@ -960,6 +1046,33 @@ impl HostTurnRunner for AppHostRuntime {
             .map_err(map_core_error)
     }
 
+    async fn list_child_sessions(&self, parent: SessionId) -> Result<Vec<SessionId>, HostError> {
+        self.on_host(async move {
+            self.engine()?
+                .host_runtime()
+                .turn_runner()
+                .list_child_sessions(parent)
+                .await
+        })
+        .await
+    }
+
+    async fn archive_session_tree(&self, root: SessionId) -> Result<SessionTreeArchive, HostError> {
+        self.on_host(async move {
+            let engine = self.engine()?;
+            engine
+                .before_session_close(root, SessionCloseKind::Archive)
+                .await
+                .map_err(map_core_error)?;
+            engine
+                .host_runtime()
+                .turn_runner()
+                .archive_session_tree(root)
+                .await
+        })
+        .await
+    }
+
     async fn run_turn(
         &self,
         request: TurnStartRequest,
@@ -969,7 +1082,8 @@ impl HostTurnRunner for AppHostRuntime {
             return Err(HostError::Cancelled);
         }
         let engine = self.engine()?;
-        let meta = self.session_metadata(request.session).await?;
+        let session = request.session;
+        let meta = self.session_metadata(session).await?;
         let workdir = meta
             .as_ref()
             .and_then(|m| m.workdir.as_deref())
@@ -979,41 +1093,105 @@ impl HostTurnRunner for AppHostRuntime {
             .agent
             .or_else(|| meta.as_ref().and_then(|m| m.agent.clone()))
             .unwrap_or_else(|| self.default_agent.name.clone());
-        let model = request
-            .model
-            .or_else(|| meta.as_ref().and_then(|m| m.model.clone()))
-            .unwrap_or_else(|| self.default_agent.model.clone());
-        let binding = engine
-            .bind_session_runtime(request.session, &workdir)
-            .await
-            .map_err(map_core_error)?;
-        engine
-            .admit_user_prompt_with_binding(
-                request.session,
-                request.prompt,
-                &binding,
-                agent_name.as_str(),
+        let (binding, spec, resolved) = match request.actor_claim {
+            // A fenced turn runs as a child of its parent's binding.
+            Some(_) => {
+                let parent = meta.as_ref().and_then(|m| m.parent).ok_or_else(|| {
+                    HostError::InvalidInput(format!(
+                        "fenced turn on `{session}`, which has no parent session"
+                    ))
+                })?;
+                let parent_binding = engine
+                    .bind_session_runtime(parent, &workdir)
+                    .await
+                    .map_err(map_core_error)?;
+                let (mut spec, (binding, roster, resources, _)) = self
+                    .resolve_managed_member_runtime(
+                        &engine,
+                        &parent_binding,
+                        &workdir,
+                        None,
+                        &agent_name,
+                        request.route.as_ref(),
+                    )?;
+                if let Some(system) = request.system_override {
+                    spec.system_prompt = system;
+                }
+                if let Some(model) = request.model {
+                    spec.model = model;
+                }
+                (binding, spec, Some((roster, resources)))
+            }
+            None => {
+                let binding = engine
+                    .bind_session_runtime(session, &workdir)
+                    .await
+                    .map_err(map_core_error)?;
+                let model = request
+                    .model
+                    .or_else(|| meta.as_ref().and_then(|m| m.model.clone()))
+                    .unwrap_or_else(|| self.default_agent.model.clone());
+                let spec = AgentSpec {
+                    name: agent_name.clone(),
+                    model,
+                    system_prompt: request
+                        .system_override
+                        .unwrap_or_else(|| self.default_agent.system_prompt.clone()),
+                    workdir,
+                    reasoning: self.default_agent.reasoning,
+                };
+                (binding, spec, None)
+            }
+        };
+        let lease = match request.start {
+            TurnStart::Always => None,
+            TurnStart::IfIdle => Some(engine.try_begin_turn(session).map_err(|_| {
+                HostError::Conflict(format!("session `{session}` has an active turn"))
+            })?),
+        };
+        let admitted_prompt = match request.prompt {
+            Some(prompt) => Some(
+                engine
+                    .admit_user_prompt_with_binding(
+                        request.actor_claim.as_ref(),
+                        session,
+                        prompt,
+                        &binding,
+                        agent_name.as_str(),
+                    )
+                    .await
+                    .map_err(map_turn_error)?,
+            ),
+            None => None,
+        };
+        let fenced = request.actor_claim.is_some();
+        let end = engine
+            .run_driven_turn(
+                session,
+                DrivenTurn {
+                    agent: spec,
+                    binding,
+                    resolved,
+                    claim: request.actor_claim,
+                    guidance: request.guidance.map(Arc::from),
+                    route: request.route.as_ref().map(explicit_route_from_resolved),
+                    lease,
+                    // A fenced turn answers its prompt however it ends.
+                    admitted_prompt: admitted_prompt.filter(|_| fenced),
+                },
+                &self.fenced_sidecars,
+                cancel,
             )
             .await
-            .map_err(map_core_error)?;
-        let spec = AgentSpec {
-            name: agent_name,
-            model,
-            system_prompt: request
-                .system_override
-                .unwrap_or_else(|| self.default_agent.system_prompt.clone()),
-            workdir,
-            reasoning: self.default_agent.reasoning,
-        };
-        engine
-            .run_bound_turn(request.session, &spec, binding, cancel, None)
-            .await
-            .map_err(map_core_error)?;
+            .map_err(map_turn_error)?;
+        if end == DrivenTurnEnd::SidecarLost {
+            return Err(HostError::Unavailable("sidecar lost".into()));
+        }
         let projection = engine
-            .read_projection_shared(request.session)
+            .read_projection_shared(session)
             .await
             .map_err(map_core_error)?;
-        Ok(extract_turn_outcome(request.session, &projection))
+        Ok(extract_turn_outcome(session, &projection))
     }
 
     async fn spawn_session_and_run(
@@ -1062,7 +1240,13 @@ impl HostTurnRunner for AppHostRuntime {
             .capture_session_bundle_hooks(child, &binding, request.agent.as_str())
             .await;
         engine
-            .admit_user_prompt_with_binding(child, request.prompt, &binding, request.agent.as_str())
+            .admit_user_prompt_with_binding(
+                None,
+                child,
+                request.prompt,
+                &binding,
+                request.agent.as_str(),
+            )
             .await
             .map_err(map_core_error)?;
         let spec = AgentSpec {
@@ -1091,16 +1275,25 @@ impl HostTurnRunner for AppHostRuntime {
 
     async fn cancel_turn(
         &self,
-        _session: SessionId,
-        _reason: Option<String>,
+        session: SessionId,
+        reason: Option<String>,
     ) -> Result<bool, HostError> {
-        Ok(false)
+        self.engine()?
+            .host_runtime()
+            .turn_runner()
+            .cancel_turn(session, reason)
+            .await
     }
 
-    async fn turn_status(&self, _session: SessionId) -> Result<TurnStatus, HostError> {
-        Ok(TurnStatus::Idle)
+    async fn turn_status(&self, session: SessionId) -> Result<TurnStatus, HostError> {
+        self.engine()?
+            .host_runtime()
+            .turn_runner()
+            .turn_status(session)
+            .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn preflight_member_capacity(
         &self,
         parent: SessionId,
@@ -1138,6 +1331,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn begin_root_activity(
         &self,
         parent: SessionId,
@@ -1153,6 +1347,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn spawn_managed_member(
         &self,
         request: ManagedMemberSpawnRequest,
@@ -1194,6 +1389,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn activate_managed_member(
         &self,
         request: ManagedMemberActivateRequest,
@@ -1283,6 +1479,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn end_managed_member(&self, parent: SessionId, handle: &str) -> Result<(), HostError> {
         let handle = handle.to_owned();
         self.on_host(async move {
@@ -1300,6 +1497,7 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn session_channel_policy(
         &self,
         session: SessionId,
@@ -1310,36 +1508,28 @@ impl HostTurnRunner for AppHostRuntime {
             .and_then(|engine| engine.session_channel_policy(session)))
     }
 
+    // Adapter: removed in CHR-47.
     fn mail_mark(&self, session: SessionId) -> Option<u64> {
         self.engine()
             .ok()
             .and_then(|engine| engine.mail_mark(session))
     }
 
+    // Adapter: removed in CHR-47.
     fn notify_mail_consumed(&self, session: SessionId, mark: u64, consumed_incoming: bool) {
         if let Ok(engine) = self.engine() {
             engine.notify_mail_consumed(session, Some(mark), consumed_incoming);
         }
     }
 
+    // Adapter: removed in CHR-47.
     fn is_member_stopped_by_user(&self, root: SessionId, handle: &str) -> bool {
         self.engine()
             .ok()
             .is_some_and(|engine| engine.is_member_stopped_by_user(root, handle))
     }
 
-    fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.engine()
-            .ok()
-            .is_some_and(|engine| engine.is_mail_steer_suppressed(session))
-    }
-
-    fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
-        if let Ok(engine) = self.engine() {
-            engine.stage_mail_steer_ack(session, ack);
-        }
-    }
-
+    // Adapter: removed in CHR-47.
     async fn revive_archived_member_with_mail(
         &self,
         request: MemberMailRevivalRequest,
@@ -1354,17 +1544,23 @@ impl HostTurnRunner for AppHostRuntime {
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn archive_subagent(
         &self,
         child: SessionId,
     ) -> Result<hya_tool::ArchiveReceipt, HostError> {
         self.on_host(async move {
             let engine = self.engine()?;
-            engine.archive_subagent(child).await.map_err(map_core_error)
+            engine
+                .host_runtime()
+                .turn_runner()
+                .archive_subagent(child)
+                .await
         })
         .await
     }
 
+    // Adapter: removed in CHR-47.
     async fn steer_subagent(
         &self,
         child: SessionId,
@@ -1652,17 +1848,72 @@ impl HostCatalogReader for AppHostRuntime {
                 }
             }
             let runtime_fingerprint = hex_digest(&hasher.finalize());
+            let diagnostics = engine.catalog_diagnostics(binding.scope()).await;
             Ok(ScopeCatalogSnapshot {
                 workdir,
                 project_roots,
                 bundles,
                 runtime_fingerprint,
+                diagnostics,
             })
         })
         .await
     }
 
-    async fn authorize_workflow_agent(
+    async fn resolve_agent_model(&self, request: AgentModelRequest) -> Result<ModelRef, HostError> {
+        self.on_host(async move {
+            let engine = self.engine()?;
+            let workdir = self.session_workdir_strict(request.parent).await?;
+            let binding = engine
+                .bind_session_runtime(request.parent, &workdir)
+                .await
+                .map_err(map_core_error)?;
+            let caller = self
+                .read_projection(request.parent)
+                .await?
+                .session
+                .agent
+                .clone()
+                .unwrap_or_else(|| self.default_agent.name.clone());
+            let allowed = engine
+                .agent_roster_for_binding(&binding, caller.as_str())
+                .map_err(map_core_error)?;
+            let environment = engine.sidecar_environment().ok_or_else(|| {
+                HostError::Unavailable("sidecar environment is not attached".into())
+            })?;
+            let mut base = self.default_agent.clone();
+            base.workdir = workdir;
+            let providers = engine.provider_snapshot();
+            let is_servable = |model: &ModelRef| providers.router().resolve(model).is_some();
+            let resolved = hya_engine::resident::resolve_spawn_member(
+                &hya_engine::resident::ResolveSpawnMemberCtx {
+                    engine: &engine,
+                    binding: &binding,
+                    base: &base,
+                    caller: caller.as_str(),
+                    allowed_agents: &allowed,
+                    categories: &self.categories,
+                    is_servable: &is_servable,
+                    guidance: None,
+                    sidecar_environment: environment.as_ref(),
+                },
+                SpawnMember {
+                    description: String::new(),
+                    prompt: String::new(),
+                    subagent_type: request.agent.as_str().to_string(),
+                    model: request.model.map(|model| model.to_string()),
+                    category: request.category,
+                    inline_agent: None,
+                    effort: request.effort,
+                },
+            )
+            .map_err(|error| HostError::InvalidInput(error.to_string()))?;
+            Ok(resolved.agent.model)
+        })
+        .await
+    }
+
+    async fn authorize_agent_run(
         &self,
         session: SessionId,
         caller: &AgentName,
@@ -1698,24 +1949,17 @@ impl HostExtensionRegistry for AppHostRuntime {
         kind: Option<ExtensionKind>,
     ) -> Result<Vec<ExtensionEntry>, HostError> {
         let mut entries = Vec::new();
-        if (kind.is_none() || kind == Some(ExtensionKind::GoalDriver))
-            && let Some(driver) = self.goal_driver.get()
-        {
-            entries.push(ExtensionEntry {
-                bundle_id: "hya/goal".to_string(),
-                kind: ExtensionKind::GoalDriver,
-                name: driver.id().to_string(),
-                metadata: Value::Null,
-            });
-        }
-        if (kind.is_none() || kind == Some(ExtensionKind::LoopDriver))
-            && let Some(drivers) = self.loop_drivers.get()
-        {
-            for driver in drivers {
+        if kind.is_none() || kind == Some(ExtensionKind::Driver) {
+            let drivers = self
+                .drivers
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for name in drivers.keys() {
+                let (bundle_id, local) = name.split_once(':').unwrap_or((name.as_str(), ""));
                 entries.push(ExtensionEntry {
-                    bundle_id: "hya/loop".to_string(),
-                    kind: ExtensionKind::LoopDriver,
-                    name: driver.id().to_string(),
+                    bundle_id: bundle_id.to_string(),
+                    kind: ExtensionKind::Driver,
+                    name: local.to_string(),
                     metadata: Value::Null,
                 });
             }
@@ -1724,17 +1968,6 @@ impl HostExtensionRegistry for AppHostRuntime {
     }
 
     async fn has_bundle(&self, bundle_id: &str) -> Result<bool, HostError> {
-        if bundle_id == "hya/goal" && self.goal_driver.get().is_some() {
-            return Ok(true);
-        }
-        if bundle_id == "hya/loop"
-            && self
-                .loop_drivers
-                .get()
-                .is_some_and(|drivers| !drivers.is_empty())
-        {
-            return Ok(true);
-        }
         Ok(self.get_bundle(bundle_id).await?.is_some())
     }
 
@@ -1786,112 +2019,24 @@ impl HostExtensionRegistry for AppHostRuntime {
         ))
     }
 
-    async fn has_goal_evaluate_hook(&self, session: Option<SessionId>) -> Result<bool, HostError> {
-        let (workdir, agent) = self.resolve_session_scope(session).await?;
-        let binding = self.bind_for_workdir(&workdir).await?;
-        let dispatcher = goal_evaluator_hook_chain(&binding, &agent);
-        Ok(dispatcher.has_goal_evaluate())
+    async fn has_hook(&self, session: Option<SessionId>, point: &str) -> Result<bool, HostError> {
+        Ok(self
+            .declared_hook_chain(session, point)
+            .await?
+            .declares(point))
     }
 
-    async fn invoke_goal_evaluate_hook(
+    async fn invoke_hook(
         &self,
         session: Option<SessionId>,
-        condition: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
-        let (workdir, agent) = self.resolve_session_scope(session).await?;
-        let binding = self.bind_for_workdir(&workdir).await?;
-        let dispatcher = goal_evaluator_hook_chain(&binding, &agent);
-        if !dispatcher.has_goal_evaluate() {
-            return Ok(None);
-        }
-        match dispatcher.goal_evaluate(condition, transcript).await {
-            Ok(GoalEvaluateReply::Verdict { met, reason }) => {
-                Ok(Some(NativeGoalEvaluateVerdict::Verdict { met, reason }))
-            }
-            Ok(GoalEvaluateReply::Malformed) => Ok(Some(NativeGoalEvaluateVerdict::Malformed)),
-            Err(error) => Err(map_core_error(error)),
-        }
-    }
-
-    async fn invoke_loop_should_stop(
-        &self,
-        session: SessionId,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<String>, HostError> {
-        let hooks = self.loop_hooks_for_session(session).await?;
-        Ok(hooks.loop_should_stop(target, transcript).await)
-    }
-
-    async fn invoke_loop_verify(
-        &self,
-        session: SessionId,
-        target: &str,
-        transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        let hooks = self.loop_hooks_for_session(session).await?;
-        match hooks.loop_verify(target, transcript).await {
-            Ok(verdict) => Ok(Some(NativeVerifierVerdict {
-                score: verdict.score,
-                satisfied: verdict.satisfied,
-                evidence_quality: match verdict.evidence_quality {
-                    EvidenceQuality::Missing => "missing",
-                    EvidenceQuality::ClaimOnly => "claim_only",
-                    EvidenceQuality::Supported => "supported",
-                    EvidenceQuality::Verified => "verified",
-                }
-                .to_string(),
-                critical_gaps: verdict.critical_gaps,
-                iteration_summary: verdict.iteration_summary,
-                reason: verdict.reason,
-            })),
-            Err(CoreError::Invalid(msg))
-                if msg.contains("not registered") || msg.contains("not selected") =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(HostError::Internal(error.to_string())),
-        }
-    }
-
-    async fn invoke_loop_plan(
-        &self,
-        session: SessionId,
-        input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
-        let hooks = self.loop_hooks_for_session(session).await?;
-        let last = VerifierVerdict {
-            score: input.last.score,
-            satisfied: input.last.satisfied,
-            evidence_quality: match input.last.evidence_quality.as_str() {
-                "verified" => EvidenceQuality::Verified,
-                "supported" => EvidenceQuality::Supported,
-                "claim_only" => EvidenceQuality::ClaimOnly,
-                _ => EvidenceQuality::Missing,
-            },
-            critical_gaps: input.last.critical_gaps,
-            iteration_summary: input.last.iteration_summary,
-            reason: input.last.reason,
-        };
-        match hooks
-            .loop_plan(&input.target, &input.history, &last, &input.planner_notes)
-            .await
-        {
-            Ok(plan) => Ok(Some(NativePlannerOutput {
-                directive: plan.directive,
-                continuity_brief: plan.continuity_brief,
-                planner_notes: plan.planner_notes,
-                strategy_change: plan.strategy_change,
-                change_note: plan.change_note,
-            })),
-            Err(CoreError::Invalid(msg))
-                if msg.contains("not registered") || msg.contains("not selected") =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(HostError::Internal(error.to_string())),
-        }
+        point: &str,
+        input: Value,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(self
+            .declared_hook_chain(session, point)
+            .await?
+            .invoke_declared(point, input)
+            .await)
     }
 }
 
@@ -1922,15 +2067,5 @@ impl HostRuntime for AppHostRuntime {
 
     fn extension_registry(&self) -> &dyn HostExtensionRegistry {
         self
-    }
-
-    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
-        self.goal_driver.get().cloned()
-    }
-
-    fn loop_driver(&self) -> Option<Arc<dyn LoopDriver>> {
-        self.loop_drivers
-            .get()
-            .and_then(|drivers| drivers.first().cloned())
     }
 }

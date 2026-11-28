@@ -47,13 +47,13 @@ Inside any repository registered as a Project root, Hya discovers:
 | `SSL_CERT_FILE` | System + WebPKI roots | Custom PEM CA bundle for outbound HTTPS provider calls behind corporate proxies. |
 | `VISUAL` / `EDITOR` | `vi` | External text editor opened by `/editor` and `/config edit`. |
 
-### Compaction & subagent overrides (env wins over `config.yaml`)
+### Context, compaction & subagent overrides (env wins over the config files)
 
 | Variable | Default | Overrides |
 | --- | --- | --- |
-| `HYA_COMPACTION_KEEP_RECENT` | `6` | `compaction.keep_recent` |
-| `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | `4096` | `compaction.summary_max_tokens` |
-| `HYA_TOKEN_ACCOUNTING` | `auto` | `compaction.token_accounting` (`auto \| provider \| estimate`) |
+| `HYA_COMPACTION_KEEP_RECENT` | `6` | `compaction.keep_recent` in `hya/compaction`'s `config.yml` (read by the bundle) |
+| `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | `4096` | `compaction.summary_max_tokens` in `hya/compaction`'s `config.yml` |
+| `HYA_TOKEN_ACCOUNTING` | `auto` | `config.yaml` `context.token_accounting` (`auto \| provider \| estimate`); an unknown value is ignored |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | `100` | `subagents.max_concurrency` |
 | `HYA_SUBAGENT_BUDGET` | `1024` | `subagents.per_run_budget` |
 | `HYA_SUBAGENT_TURN_BUDGET` | `1024` | `subagents.per_team_turn_budget` |

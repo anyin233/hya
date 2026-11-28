@@ -127,7 +127,7 @@ fn initialize_result_roundtrip() {
         },
         contributions: PluginContributionSet {
             hooks: vec![HookRegistration {
-                name: HookName::Event,
+                name: HookName::Event.into(),
             }],
             tools: vec![ToolInfo {
                 name: "t".into(),
@@ -298,7 +298,7 @@ fn event_notification_roundtrip() {
 #[test]
 fn hook_registration_contains_only_a_name() {
     let hook = HookRegistration {
-        name: HookName::ToolExecuteBefore,
+        name: HookName::ToolExecuteBefore.into(),
     };
     assert_eq!(
         serde_json::to_value(&hook).unwrap(),

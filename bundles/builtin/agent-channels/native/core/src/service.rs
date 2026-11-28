@@ -9,19 +9,21 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use hya_bundle::ChannelTemplateKind;
 use hya_proto::{
-    ActorClaim, AgentName, ChannelKind, ChannelPolicySnapshot, MailEndpoint, MailKind, Projection,
-    RosterStatus, SessionId, SubagentMode, scope,
+    ActorClaim, AgentName, ChannelKind, ChannelPolicySnapshot, Event, MailEndpoint, MailKind,
+    Projection, RosterStatus, SessionId, SubagentMode, scope,
 };
 use hya_runtime_abi::{
-    HostError, HostRuntime, MemberMailRevivalRequest, NativeService, ServiceHealth, StagedMailAck,
+    HostError, HostRuntime, MemberMailRevivalRequest, NativeService, ServiceHealth,
 };
+use hya_tool::MailReceipt;
 use hya_tool::extension::{
     BUNDLE_CHANNELS, BUNDLE_MULTI_AGENT, ChannelProjection, ExtensionEvent, TeamProjection,
     team_projection,
 };
-use hya_tool::{ChannelRow, MailReceipt, MemberStatusRow};
 
-use crate::mail::{ChannelHistoryRead, MAIN_HANDLE, SteeredMail, mail_preview};
+use crate::mail::{
+    ChannelHistoryRead, ChannelRow, MAIN_HANDLE, MemberStatusRow, SteeredMail, mail_preview,
+};
 use crate::policy::{BIT_SEND, allows_steer_message, channel_topology};
 
 /// Canonical bundle id for `hya/agent-channels`.
@@ -44,16 +46,20 @@ pub struct InboxSummary {
     pub unread: Vec<SteeredMail>,
 }
 
-/// Prepared unread-mail steer notice plus its atomic [`StagedMailAck`].
+/// Prepared unread-mail steer notice plus the inbox acknowledgement to stage
+/// with the tool result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PreparedSteerNotice {
     /// Model-facing notice text to splice into the tool result, if any mail
     /// should be shown to the agent (`None` when only self-sent or
     /// policy-filtered messages need cursor advancement).
     pub notice: Option<String>,
-    /// Durable `mail_consumed` acknowledgement to commit atomically with the
-    /// tool result.
-    pub ack: StagedMailAck,
+    /// `mail_consumed` extension event for the team root's log.
+    pub ack: Event,
+    /// Host mail watermark read before the inbox snapshot.
+    pub mark: u64,
+    /// Whether incoming (non-self) unread mail was consumed.
+    pub consumed_incoming: bool,
 }
 
 /// Managed mailbox/channels service backed exclusively by [`HostRuntime`].
@@ -553,7 +559,7 @@ impl AgentChannelsService {
     }
 
     /// Inspect `session`'s durable inbox past its acknowledged cursor and prepare
-    /// an in-turn `[NEW MAIL]` steer notice plus its atomic [`StagedMailAck`].
+    /// an in-turn `[NEW MAIL]` steer notice plus its `mail_consumed` acknowledgement.
     ///
     /// Returns `Ok(None)` when `session` is not registered on a team roster or
     /// has no unread entries past its durable cursor.
@@ -601,23 +607,23 @@ impl AgentChannelsService {
                 channel: message.to.channel().map(str::to_string),
             })
             .collect();
-        let ack = StagedMailAck {
-            root,
-            event: ExtensionEvent::MailConsumed {
-                session: root,
-                handle,
-                through,
-            }
-            .into_event(),
-            mark,
-            consumed_incoming,
-        };
+        let ack = ExtensionEvent::MailConsumed {
+            session: root,
+            handle,
+            through,
+        }
+        .into_event();
         let notice = if shown.is_empty() {
             None
         } else {
             Some(format_steer_notice(&shown))
         };
-        Ok(Some(PreparedSteerNotice { notice, ack }))
+        Ok(Some(PreparedSteerNotice {
+            notice,
+            ack,
+            mark,
+            consumed_incoming,
+        }))
     }
 }
 

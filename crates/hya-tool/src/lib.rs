@@ -25,7 +25,6 @@ mod agents;
 pub mod deadline;
 /// Domain extension event codecs, projection structs, and reducers (v2 bridge).
 pub mod extension;
-mod formatter;
 /// Internal resource URLs (`artifact://`, `skill://`, `local://`) for
 /// agent-owned payloads. Ordinary filesystem paths are unaffected.
 pub mod handle;
@@ -34,9 +33,7 @@ pub mod interaction;
 /// Subagent lifecycle requests (`report`, `archive`, `wait`) to the supervisor.
 pub mod lifecycle;
 pub mod literal_span;
-mod lsp_plane;
-/// Team mailbox requests and the mailbox plane used by send/channel tools.
-pub mod mailbox;
+mod mail;
 pub mod media;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
@@ -59,21 +56,9 @@ mod skill;
 pub mod spawn;
 /// Tool trait, registry, and permission class metadata.
 pub mod tool;
-/// User-authored workflow plane and the `workflow` tool.
-pub mod workflow_plane;
-pub use workflow_plane::{
-    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowHostError,
-    WorkflowMemberProjection, WorkflowMemberRole, WorkflowPlane, WorkflowProjection,
-    WorkflowRequest, WorkflowRequestSink, WorkflowRouteFailureClass, WorkflowRunProjection,
-    WorkflowRunResult, WorkflowRunStatus, WorkflowSendError, WorkflowStagePlan,
-    WorkflowStageProjection, WorkflowStageRouteOutcome, WorkflowStageStatus,
-};
 
 pub use agents::AgentDef;
-pub use formatter::{
-    FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
-    FormatterStatus,
-};
+pub use hya_proto::mail::ChannelPolicySnapshot;
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,
@@ -84,11 +69,7 @@ pub use lifecycle::{
     WAIT_OUTPUT_BUDGET_CHARS, WaitAckSlot, WaitMail, WaitMailAck, WaitMember, WaitMemberState,
     WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
 };
-pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
-pub use mailbox::{
-    ArchivedAgentRow, ChannelInfo, ChannelPolicySnapshot, ChannelRow, MailReceipt, MailboxError,
-    MailboxPlane, MailboxRequest, MemberStatusRow,
-};
+pub use mail::MailReceipt;
 pub use namespace::{InvalidNamespacedName, NAMESPACE_SEPARATOR, namespace_of, namespaced_name};
 pub use nested::{NestedToolPlane, NestedTools};
 pub use output_cap::{

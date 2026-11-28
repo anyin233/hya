@@ -20,18 +20,9 @@ use super::super::summary::summary_messages;
 use super::super::{AgentSpec, SessionEngine};
 use super::messages::{AttachmentData, projection_to_messages};
 use crate::error::CoreError;
-use crate::hooks::{CompactionAfterInput, CompactionBeforeInput, CompactionTrigger};
-
-impl SessionEngine {
-    /// The settings `RewriteCtx::config` carries to the compaction bundle:
-    /// the kept tail and the token-accounting mode.
-    pub(in crate::engine) fn rewriter_config(&self) -> serde_json::Value {
-        serde_json::json!({
-            "keep_recent": self.rewriter_keep_recent,
-            "token_accounting": self.token_accounting.mode().as_str(),
-        })
-    }
-}
+use crate::hooks::{
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionTrigger,
+};
 
 /// The window of `model`'s route, when it advertises one.
 pub(in crate::engine) fn model_window(
@@ -101,9 +92,9 @@ impl CompactionHooks for SessionEngine {
     async fn before(&self, session: SessionId, tokens: usize) {
         if let Some(hooks) = self.active_hook_dispatcher(session) {
             hooks
-                .compaction_before(CompactionBeforeInput {
+                .compaction_before(NativeCompactionBeforeInput {
                     session,
-                    trigger: CompactionTrigger::Overflow,
+                    trigger: NativeCompactionTrigger::Overflow,
                     messages_token_estimate: tokens,
                 })
                 .await;
@@ -113,7 +104,7 @@ impl CompactionHooks for SessionEngine {
     async fn after(&self, session: SessionId, summary_tokens: usize) {
         if let Some(hooks) = self.active_hook_dispatcher(session) {
             hooks
-                .compaction_after(CompactionAfterInput {
+                .compaction_after(NativeCompactionAfterInput {
                     session,
                     summary_tokens,
                 })

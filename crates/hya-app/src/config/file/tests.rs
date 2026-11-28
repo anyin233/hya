@@ -74,17 +74,6 @@ fn permission_catalog_scopes_and_v1_rejection() {
             "missing hya-migration guidance in error for `{bad_cfg}`: {err}"
         );
     }
-
-    assert_eq!(GoalSettings::from_block(None), GoalSettings::default());
-    assert_eq!(
-        resolve_evaluator_model(Some("cli/m"), Some("cfg/m"), "w/m"),
-        "cli/m"
-    );
-    assert_eq!(
-        resolve_evaluator_model(Some("  "), Some("  cfg/m "), "w/m"),
-        "cfg/m"
-    );
-    assert_eq!(resolve_evaluator_model(None, Some(""), "w/m"), "w/m");
 }
 
 #[test]
@@ -96,7 +85,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     std::fs::create_dir_all(dir.join("hya")).unwrap();
     std::fs::write(
         &cfg_path,
-        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/coding-extras, hya/network, hya/compaction, hya/goal-loop, hya/multi-agent]\n    disable: [hya/agent-channels]\n",
+        "schema_version: 2\ncontext:\n  token_accounting: estimate\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/coding-extras, hya/network, hya/compaction, hya/goal-loop, hya/multi-agent]\n    disable: [hya/agent-channels]\n",
     )
     .unwrap();
 
@@ -110,7 +99,6 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         std::fs::create_dir_all(loc.dir()).unwrap();
         std::fs::write(loc.file(), body).unwrap();
     };
-    write_bundle_cfg("hya/goal-loop", "goal:\n  evaluator_model: deep/o3-mini\n");
     write_bundle_cfg("hya/coding-extras", "lsp: false\n");
     write_bundle_cfg(
         "hya/multi-agent",
@@ -118,7 +106,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     );
     write_bundle_cfg(
         "hya/compaction",
-        "compaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+        "compaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n",
     );
     write_bundle_cfg(
         "hya/network",
@@ -135,10 +123,6 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         file,
         config_file: Some(cfg_path.clone()),
     };
-    assert_eq!(
-        settings.goal().evaluator_model.as_deref(),
-        Some("deep/o3-mini")
-    );
     let net_json = settings.bundle_config_json("hya/network");
     assert_eq!(net_json["webfetch"]["enabled"], false);
     assert_eq!(net_json["websearch"]["provider"], "parallel");
@@ -172,36 +156,40 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         (64, 5, 700)
     );
 
-    let ctx = settings.context();
+    let ctx = settings.context().unwrap();
     assert_eq!(
-        (
-            ctx.compaction.keep_recent,
-            ctx.compaction.summary_max_tokens,
-            ctx.token_accounting
-        ),
-        (12, 8_192, TokenAccountingMode::Estimate)
+        (ctx.summary_max_tokens, ctx.token_accounting),
+        (8_192, TokenAccountingMode::Estimate)
     );
     assert_eq!(
-        resolve_context_settings(None).token_accounting,
+        resolve_context_settings(None, None).token_accounting,
         TokenAccountingMode::Auto
     );
 
     env.set("HYA_COMPACTION_SUMMARY_MAX_TOKENS", "2048");
     env.set("HYA_TOKEN_ACCOUNTING", "provider");
-    let ctx_over = settings.context();
+    let ctx_over = settings.context().unwrap();
     assert_eq!(
-        (
-            ctx_over.compaction.summary_max_tokens,
-            ctx_over.token_accounting,
-            ctx_over.compaction.keep_recent
-        ),
-        (2_048, TokenAccountingMode::Provider, 12)
+        (ctx_over.summary_max_tokens, ctx_over.token_accounting),
+        (2_048, TokenAccountingMode::Provider)
     );
     env.set("HYA_TOKEN_ACCOUNTING", "banana");
     assert_eq!(
-        settings.context().token_accounting,
+        settings.context().unwrap().token_accounting,
         TokenAccountingMode::Estimate
     );
+
+    // The key moved out of the compaction bundle's file; leaving it there fails startup.
+    write_bundle_cfg(
+        "hya/compaction",
+        "compaction:\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+    );
+    let moved = settings.context().unwrap_err().to_string();
+    assert!(
+        moved.contains("config.yaml `context.token_accounting`"),
+        "{moved}"
+    );
+    assert!(parse_config("schema_version: 2\ncontext:\n  token_accounting: banana\n").is_err());
 
     // Bare without hya/network disables the network bundle cleanly.
     let bare_settings = EngineSettings {

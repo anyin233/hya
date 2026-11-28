@@ -1,6 +1,6 @@
 //! Lifecycle service loop (ADR-0015): drains `LifecycleRequest`s from the
 //! tool plane into the resident supervisor. Typed core errors are flattened
-//! to strings on the reply channel, mirroring the mailbox service.
+//! to strings on the reply channel.
 
 use std::sync::Arc;
 
@@ -107,6 +107,19 @@ pub async fn run_lifecycle_service(
 
 pub(crate) fn report_allowed(policy: hya_tool::ChannelPolicySnapshot) -> bool {
     policy.dm_child & (1 << 1) != 0
+}
+
+/// Whether the legacy terminal report is available to this activation.
+pub(crate) fn report_available(
+    connected: bool,
+    binding: &crate::TurnBinding,
+    agent: &hya_proto::AgentName,
+    parent: Option<hya_proto::SessionId>,
+) -> Result<bool, crate::CoreError> {
+    let policy = crate::channel_policy::from_binding(binding)
+        .map_err(crate::CoreError::bundle)?
+        .snapshot_for(agent.as_str());
+    Ok(parent.is_some() && connected && report_allowed(policy))
 }
 
 /// Resolve the acting session to its team handle, then submit the report.

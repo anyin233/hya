@@ -1,4 +1,7 @@
 //! Track P v2 E2E matrix scenarios (ADR-0039):
+//! - `T1.26`: `hya/agent-channels` disabled: no `channel://` scheme, mail tools,
+//!   or BundleApi, while the rest of the full set stays active; a multi-agent
+//!   worker's answer still reaches the lead.
 //! - `T2.56`: Pure `hya --bare` (`exec` and `serve`) from an isolated prefix with
 //!   zero `bundles/builtin/` present on disk.
 //! - `T2.57`: Selective `bundles.builtin.disable` matrix (`hya/hashline` falling back
@@ -58,6 +61,9 @@ fn all_requests_json(reqs: &[Value], start: usize) -> String {
         .join("\n")
 }
 
+/// The tool error a `read channel://…` gets when no bundle registers the scheme.
+const UNKNOWN_CHANNEL_SCHEME: &str = "unknown handle scheme: channel://";
+
 /// T2.56 — Pure `hya --bare` (`exec` and `serve`) runs cleanly from an isolated
 /// `<prefix>/bin/hya` directory with zero `bundles/builtin/` present on disk.
 #[tokio::test]
@@ -95,6 +101,7 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
                 "todo",
                 json!({"ops": [{"op": "add", "content": "Bare kernel task"}]}),
             ),
+            tool_step("read", json!({"path": "channel://main?last=5"})),
             text_step("PURE_BARE_EXEC_OK"),
         ])
         .build_headless()
@@ -140,6 +147,7 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
         "task",
         "list_agents",
         "send",
+        "list_channel",
         "ls",
         "glob",
         "find",
@@ -156,6 +164,28 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
         exec_dump.contains("BARE_EDITED") && exec_dump.contains("Bare kernel task"),
         "expected bare grep and todo results in follow-up requests: {exec_dump}"
     );
+    assert!(
+        exec_dump.contains(UNKNOWN_CHANNEL_SCHEME),
+        "bare has no `channel://` scheme: {exec_dump}"
+    );
+
+    // `hya workflow` is contributed by `hya/workflow`, so bare has no such command.
+    let mut workflow_cmd = headless.command();
+    workflow_cmd
+        .env("HYA_FIRST_PARTY_SOURCE_ROOT", &empty_bundles)
+        .args(["--bare", "workflow", "list"]);
+    let workflow_out = tokio::time::timeout(Duration::from_secs(30), workflow_cmd.output())
+        .await
+        .expect("bare workflow list timed out")
+        .expect("spawn bare workflow list");
+    assert!(
+        workflow_out.status.code() == Some(2)
+            && String::from_utf8_lossy(&workflow_out.stderr)
+                .contains("unrecognized subcommand 'workflow'"),
+        "bare workflow list must be an unknown command: status={:?} stderr={}",
+        workflow_out.status,
+        String::from_utf8_lossy(&workflow_out.stderr)
+    );
 
     // 2. Pure `hya --bare serve` with zero `bundles/builtin/` present.
     let serve_env = E2eEnvBuilder::new()
@@ -170,6 +200,7 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
         .scripts(vec![
             tool_step("read", json!({"path": "serve_bare.txt"})),
             tool_step("grep", json!({"pattern": "SERVE_BARE_NEEDLE"})),
+            tool_step("read", json!({"path": "channel://main?last=5"})),
             text_step("PURE_BARE_SERVE_OK"),
         ])
         .build()
@@ -196,12 +227,24 @@ async fn pure_hya_bare_exec_and_serve_without_builtin_bundles() {
             "pure bare serve missing core tool `{core_tool}`: {serve_tools:?}"
         );
     }
-    for bundle_tool in ["webfetch", "task", "ls", "workflow", "send", "plan_exit"] {
+    for bundle_tool in [
+        "webfetch",
+        "task",
+        "ls",
+        "workflow",
+        "send",
+        "list_channel",
+        "plan_exit",
+    ] {
         assert!(
             !serve_tools.iter().any(|t| t == bundle_tool),
             "pure bare serve must not expose bundle tool `{bundle_tool}`: {serve_tools:?}"
         );
     }
+    assert!(
+        all_requests_json(&serve_reqs, 1).contains(UNKNOWN_CHANNEL_SCHEME),
+        "bare serve has no `channel://` scheme"
+    );
     let agents = serve_env.list_agents().await.unwrap();
     let agents_str = agents.to_string();
     assert!(
@@ -400,6 +443,113 @@ async fn selective_builtin_bundle_disable_matrix() {
             "expected blocked agent() script to mention hya/multi-agent: {followups}"
         );
     }
+}
+
+/// T1.26 — With `hya/agent-channels` disabled there is no mail surface: no
+/// `channel://` scheme, no `send`/`list_channel` tools, and no BundleApi. The
+/// rest of the full set, multi-agent included, stays active.
+#[tokio::test]
+async fn agent_channels_disabled_has_no_mail_surface() {
+    let env = E2eEnvBuilder::new()
+        .disable_builtin_bundle("hya/agent-channels")
+        .scripts(vec![
+            tool_step("read", json!({"path": "channel://main?last=5"})),
+            text_step("CHANNELS_DISABLED_OK"),
+        ])
+        .build()
+        .await
+        .expect("disable agent-channels env");
+
+    let session = env.create_session().await.unwrap();
+    let turn = env
+        .prompt(session, "read a channel without hya/agent-channels")
+        .await
+        .unwrap();
+    assert!(
+        turn.error_message.is_empty(),
+        "channels-disabled turn error: {}",
+        turn.error_message
+    );
+    assert_eq!(turn.state, pb::TurnState::Finished as i32);
+
+    let reqs = env.fake.requests().unwrap();
+    let tools = offered_tool_names(&reqs[0]);
+    for removed in ["send", "list_channel"] {
+        assert!(
+            !tools.iter().any(|t| t == removed),
+            "channel tool `{removed}` must be absent when hya/agent-channels is disabled: {tools:?}"
+        );
+    }
+    for kept in ["read", "task", "list_agents"] {
+        assert!(
+            tools.iter().any(|t| t == kept),
+            "`{kept}` must remain offered with only hya/agent-channels disabled: {tools:?}"
+        );
+    }
+    let followups = all_requests_json(&reqs, 1);
+    assert!(
+        followups.contains(UNKNOWN_CHANNEL_SCHEME),
+        "`read channel://` must fail as an unknown scheme: {followups}"
+    );
+
+    let inbox = env
+        .get_json(&format!(
+            "/v2/sessions/{session}/bundles/hya%2Fagent-channels/inbox"
+        ))
+        .await
+        .expect_err("agent-channels BundleApi must not be served when the bundle is disabled");
+    assert!(
+        inbox.to_string().contains("-> 404"),
+        "expected 404 from the disabled agent-channels BundleApi: {inbox}"
+    );
+}
+
+/// T1.26 — With `hya/agent-channels` disabled and `hya/multi-agent` enabled, a
+/// lead spawns a worker and the worker's answer reaches the lead.
+#[tokio::test]
+async fn multi_agent_without_agent_channels_delivers_to_the_lead() {
+    const LEAD: &str = "delegate without agent-channels";
+    let env = E2eEnvBuilder::new()
+        .disable_builtin_bundle("hya/agent-channels")
+        .route(
+            "MARKER_NO_CHANNELS_WORKER",
+            vec![text_step("NO_CHANNELS_WORKER_ANSWER")],
+        )
+        .build()
+        .await
+        .expect("channels-disabled multi-agent env");
+
+    let session = env.create_session().await.unwrap();
+    env.fake
+        .route_session(
+            LEAD,
+            [
+                tool_step(
+                    "task",
+                    json!({
+                        "description": "worker without channels",
+                        "prompt": "do the unit",
+                        "subagent_type": "hya-task",
+                        "inline_agent": {
+                            "prompt": "MARKER_NO_CHANNELS_WORKER You are a worker."
+                        }
+                    }),
+                ),
+                text_step("LEAD_SPAWNED"),
+                text_step("LEAD_GOT_ANSWER"),
+                text_step("LEAD_EXTRA"),
+            ],
+        )
+        .unwrap();
+    let turn = env.prompt(session, LEAD).await.unwrap();
+    assert!(
+        turn.error_message.is_empty(),
+        "channels-disabled lead turn error: {}",
+        turn.error_message
+    );
+    env.wait_route_contains(LEAD, "NO_CHANNELS_WORKER_ANSWER", Duration::from_secs(30))
+        .await
+        .expect("worker answer reaches the lead");
 }
 
 /// Seed a realistic pre-Phase-0 v1 SQLite database with a session, user+assistant

@@ -5,16 +5,20 @@ pub(crate) mod command;
 /// Formatter configuration parsing (`formatter:` section of `config.yml`).
 pub mod config;
 pub(crate) mod definition;
+mod plane;
 
 use std::path::Path;
 use std::process::Stdio;
 
 use async_trait::async_trait;
-use hya_tool::{FormatterConfig, FormatterError, FormatterProvider, FormatterStatus};
 use tokio::process::Command;
 
 use command::{FormatterCommand, builtin_enabled, command_for_definition};
 use definition::definitions_for_config;
+pub use plane::{
+    FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
+    FormatterStatus,
+};
 
 /// Default provider that runs builtin/custom command formatters from config.
 pub struct BuiltinFormatterProvider {

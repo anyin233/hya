@@ -229,6 +229,47 @@ unknown_field: 123
     });
   });
 
+  test("accepts requires and default_agent, and rejects invalid entries", () => {
+    const manifest = (requires, defaultAgent) => `kind: Bundle
+schema_version: 2
+identity:
+  id: acme/needs
+  version: 1.0.0
+  publisher: acme
+requires: ${requires}
+default_agent: ${defaultAgent}
+agents:
+  - id: lead
+    role: main
+  - id: helper
+    role: subagent
+  - id: hidden
+    role: main
+    private: true
+`;
+    withTempDir((dir) => {
+      writeFiles(dir, { "bundle.yaml": manifest("[hya/agent-channels, acme/base]", "lead") });
+      const res = validateBundleStatic(dir);
+      expect(res.errors).toEqual([]);
+      expect(res.ok).toBe(true);
+    });
+    for (const [requires, defaultAgent, message] of [
+      ["hya/agent-channels", "lead", "requires must be a list"],
+      ["[not-an-id]", "lead", "requires entries must be <publisher>/<name>"],
+      ["[acme/needs]", "lead", "cannot require itself"],
+      ["[]", "absent", "must name an Agent of this bundle"],
+      ["[]", "helper", "must be a non-private `role: main` Agent"],
+      ["[]", "hidden", "must be a non-private `role: main` Agent"],
+    ]) {
+      withTempDir((dir) => {
+        writeFiles(dir, { "bundle.yaml": manifest(requires, defaultAgent) });
+        const res = validateBundleStatic(dir);
+        expect(res.ok).toBe(false);
+        expect(res.errors.some((e) => e.includes(message))).toBe(true);
+      });
+    }
+  });
+
   test("rejects v1 schema_version, legacy extensions, exposure.yaml, and reserved kernel tools todo/rewrite", () => {
     withTempDir((dir) => {
       writeFiles(dir, {

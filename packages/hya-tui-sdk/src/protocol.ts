@@ -10,7 +10,7 @@ export {
   type InterceptDecision, type JsonValue, type KeyEvent, type PaneDescriptor, type PaneHostCommand,
   type PaneSize, type PaneSlot, type PanelPlacement, type ReplaceablePane, type ReplaceableSurface,
   type RpcEnvelope, type RpcError, type RpcId, type SlashCommandDescriptor, type SurfaceRef,
-  type ToolCallInput, type TuiExtensionPermission, type TuiFrame, type TuiMethod, type TuiMethodMap,
+  type ToolCallInput, type ToolCardPresentation, type TuiExtensionPermission, type TuiFrame, type TuiMethod, type TuiMethodMap,
   type TuiRequest, type TuiResponse,
 } from "./wire";
 

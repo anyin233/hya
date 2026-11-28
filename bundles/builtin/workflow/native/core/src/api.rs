@@ -4,6 +4,8 @@
 //! - `GET /workflows` (global scope, optional `?directory=<abs>`)
 //! - `GET /state` (session scope)
 //! - `POST /command` (session scope)
+//! - `POST /cli/{list,info}` (global scope) and `POST /cli/{use,run,state}`
+//!   (session scope): the `hya workflow` command endpoints ([`crate::cli`])
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,16 +14,17 @@ use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
-use hya_proto::{WorkflowRevision, WorkflowRunId};
 use hya_runtime_abi::{
     HostError, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
     NativeBundleApiRequest,
 };
-use hya_tool::{WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::WorkflowControlError;
+use crate::model::{
+    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowRevision, WorkflowRunId,
+};
 use crate::service::{WORKFLOW_BUNDLE_ID, WorkflowInvocation, WorkflowService};
 
 /// Native HTTP/gRPC bundle API handler for `hya/workflow`.
@@ -61,6 +64,11 @@ impl WorkflowBundleApiHandler {
                     path: "/command".to_owned(),
                     description: "Submit one typed workflow command against a session.".to_owned(),
                 },
+                cli_endpoint("cli_list", ApiScope::Global, "/cli/list", "list"),
+                cli_endpoint("cli_info", ApiScope::Global, "/cli/info", "info"),
+                cli_endpoint("cli_use", ApiScope::Session, "/cli/use", "use"),
+                cli_endpoint("cli_run", ApiScope::Session, "/cli/run", "run"),
+                cli_endpoint("cli_state", ApiScope::Session, "/cli/state", "state"),
             ]
         })
     }
@@ -157,10 +165,23 @@ impl NativeBundleApiHandler for WorkflowBundleApiHandler {
                     Err(error) => Ok(control_error_reply(&error)),
                 }
             }
+            endpoint @ ("cli_list" | "cli_info" | "cli_use" | "cli_run" | "cli_state") => {
+                Ok(crate::cli::handle(&self.service, endpoint, &request).await)
+            }
             other => Err(HostError::NotFound(format!(
                 "unknown workflow endpoint `{other}`"
             ))),
         }
+    }
+}
+
+fn cli_endpoint(id: &str, scope: ApiScope, path: &str, command: &str) -> NativeApiEndpoint {
+    NativeApiEndpoint {
+        id: id.to_owned(),
+        method: ApiMethod::Post,
+        scope,
+        path: path.to_owned(),
+        description: format!("Run `hya workflow {command}` and reply what it prints."),
     }
 }
 

@@ -19,13 +19,13 @@ use crate::{
 
 type Pause = Option<(Arc<Notify>, Arc<Notify>)>;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Hooks {
-    seen: Mutex<Vec<(SessionId, &'static str)>>,
-    user_texts: Mutex<Vec<String>>,
+    seen: Arc<Mutex<Vec<(SessionId, &'static str)>>>,
+    user_texts: Arc<Mutex<Vec<String>>>,
     prepend: bool,
-    pause_start: Mutex<Pause>,
-    pause_spawn: Mutex<Pause>,
+    pause_start: Arc<Mutex<Pause>>,
+    pause_spawn: Arc<Mutex<Pause>>,
     pause_request: Arc<Mutex<Pause>>,
     requests: Arc<Mutex<Vec<(SessionId, hya_provider::CompletionRequest)>>>,
 }
@@ -60,60 +60,64 @@ impl Provider for RecordingProvider {
 }
 
 #[async_trait]
-impl HookDispatcher for Hooks {
-    fn dispatch_event(&self, e: &Envelope) {
+impl NativeHook for Hooks {
+    fn id(&self) -> &str {
+        "Hooks"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::EventObserve,
+            hya_runtime_abi::HookPoint::SessionStart,
+            hya_runtime_abi::HookPoint::AgentSpawn,
+            hya_runtime_abi::HookPoint::MessageUserBefore,
+        ]
+    }
+
+    fn on_event(&self, e: &Envelope) {
         if let Some(s) = e.event.session() {
             self.seen.lock().unwrap().push((s, "event"));
         }
     }
-    async fn session_start(&self, i: SessionLifecycleInput) {
+    async fn session_start(
+        &self,
+        i: NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.seen.lock().unwrap().push((i.session, "start"));
         let pause = self.pause_start.lock().unwrap().clone();
         if let Some((e, r)) = pause {
             e.notify_one();
             r.notified().await;
         }
+        Ok(())
     }
-    async fn agent_spawn(&self, i: AgentSpawnInput) {
+    async fn agent_spawn(
+        &self,
+        i: NativeAgentSpawnInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.seen.lock().unwrap().push((i.child, "spawn"));
         let pause = self.pause_spawn.lock().unwrap().clone();
         if let Some((e, r)) = pause {
             e.notify_one();
             r.notified().await;
         }
+        Ok(())
     }
-    async fn message_user_before(&self, i: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+    async fn message_user_before(
+        &self,
+        i: NativeMessageUserBeforeInput,
+    ) -> Result<String, hya_runtime_abi::HostError> {
         self.seen.lock().unwrap().push((i.session, "user"));
         self.user_texts.lock().unwrap().push(i.text.clone());
-        MessageUserBeforeOutcome::Continue {
-            text: if self.prepend {
-                format!("HOOK_PREFIX {}", i.text)
-            } else {
-                format!("{} [rewritten]", i.text)
-            },
-        }
-    }
-    async fn command_execute_before(
-        &self,
-        i: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        NoopHookHost.command_execute_before(i).await
-    }
-    async fn text_complete(&self, i: TextCompleteInput) -> TextCompleteOutcome {
-        NoopHookHost.text_complete(i).await
-    }
-    async fn chat_params(&self, i: ChatParamsInput) -> ChatParamsOutcome {
-        NoopHookHost.chat_params(i).await
-    }
-    async fn tool_execute_before(&self, i: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        NoopHookHost.tool_execute_before(i).await
-    }
-    async fn tool_execute_after(&self, i: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        NoopHookHost.tool_execute_after(i).await
+        Ok(if self.prepend {
+            format!("HOOK_PREFIX {}", i.text)
+        } else {
+            format!("{} [rewritten]", i.text)
+        })
     }
 }
 
 fn upsert_hooks(runtime: &RuntimeRegistry, hooks: Arc<Hooks>, ids: [u8; 2]) {
+    // Each runtime source has its own hook identity and shares the probe state.
     runtime
         .refresh(|c| {
             c.upsert_sources(vec![
@@ -123,7 +127,7 @@ fn upsert_hooks(runtime: &RuntimeRegistry, hooks: Arc<Hooks>, ids: [u8; 2]) {
                     Arc::new(()),
                     vec![],
                 )
-                .with_hooks(hooks.clone()),
+                .with_hooks(Arc::new(hooks.as_ref().clone())),
                 RuntimeSource::new(
                     RuntimeSourceId::bundle("test/registration-hooks"),
                     [ids[1]; 32],
@@ -151,7 +155,12 @@ async fn fixture(
     )).unwrap();
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = AgentCatalog::new(Arc::new(
-        hya_bundle::BundleCatalog::from_verified_catalogs(&[&plugin, multi_agent]).unwrap(),
+        hya_bundle::BundleCatalog::from_verified_catalogs(&[
+            &plugin,
+            multi_agent,
+            hya_bundle::first_party_bundle("hya/core-agents").unwrap(),
+        ])
+        .unwrap(),
     ))
     .unwrap();
     let runtime = Arc::new(RuntimeRegistry::new(

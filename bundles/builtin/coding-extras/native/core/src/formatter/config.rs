@@ -1,9 +1,10 @@
-//! Load optional formatter configuration into a [`hya_tool::FormatterConfig`].
+//! Load optional formatter configuration into a [`super::FormatterConfig`].
 
 use std::collections::BTreeMap;
 
-use hya_tool::{FormatterConfig, FormatterEntry};
 use serde::Deserialize;
+
+use super::{FormatterConfig, FormatterEntry};
 
 #[cfg(test)]
 #[derive(Debug, Default, Deserialize)]
@@ -89,7 +90,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::parse_formatter_config;
-    use hya_tool::{FormatterConfig, FormatterEntry};
+    use crate::formatter::{FormatterConfig, FormatterEntry};
 
     #[test]
     fn parses_disabled_formatter_config() {

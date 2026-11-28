@@ -3,8 +3,8 @@
 //! terminal starts the Bun TUI and WebUI against the database's daemon
 //! (`frontend.rs`; a guidance banner without a terminal); subcommands select
 //! the controlled area: headless `exec`, `-p` goal mode, HTTP/SSE `serve`,
-//! `tail-session`, auth, bundles, Workflows, models, sessions, and `update`
-//! for the release installer.
+//! `tail-session`, auth, bundles, models, sessions, `update` for the release
+//! installer, and the commands enabled bundles contribute (`bundle_cli.rs`).
 //!
 //! Models come from Hya's provider declarations. Explicit model lists or bounded
 //! startup discovery build authenticated or anonymous routes. With no resolved
@@ -14,6 +14,7 @@ mod acp;
 mod agent_cmd;
 mod auth_cmd;
 mod bridge;
+mod bundle_cli;
 mod bundle_cmd;
 mod cli_args;
 mod daemon;
@@ -33,20 +34,15 @@ mod sessions_cmd;
 mod startup;
 mod stop_signals;
 mod update_cmd;
-mod workflow_cmd;
 
-pub use hya_app::{auth, config, formatter_config, permission, plugins};
+pub use hya_app::{auth, config, permission, plugins};
 
 use std::io::{Read as _, Write as _};
 
 use anyhow::Context as _;
-use clap::Parser;
-use hya_app::{
-    HeadlessEvaluatorRoute, LoopRunOptions, prepare_goal_driver, prepare_loop, run_headless_lead,
-};
+use hya_app::{prepare_driver, run_headless_lead};
 use hya_engine::render_transcript;
 use hya_proto::{ProjectId, SessionId};
-use hya_runtime_abi::DriverRunOutcome;
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
@@ -190,8 +186,8 @@ async fn exec_entry(
 }
 
 /// Ensure a Project for `workdir` (F1 design Q3: the process-start-dir tier
-/// is gone; an in-process root session — `exec`/`run`/`-p` goal/`loop`/
-/// `workflow` — ensures a Project for its cwd instead). Callers must do this
+/// is gone; an in-process root session — `exec`/`run`/`-p` goal/`loop`/a
+/// bundle command — ensures a Project for its cwd instead). Callers must do this
 /// before binding runtime for that directory (agent/model resolution) and
 /// before creating the session, so the directory's `.hya/bundles` project
 /// bundles, project plugins, and skills apply through the Project catalog
@@ -347,11 +343,10 @@ async fn cmd_exec(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn cmd_goal(
-    goal: String,
-    max_iterations: u32,
-    evaluator_model_flag: Option<String>,
+/// Run a bundle driver headlessly in an in-memory store and print its report.
+async fn cmd_driver(
+    driver: &str,
+    args: serde_json::Value,
     model_override: Option<String>,
     yolo: bool,
     bare: bool,
@@ -368,102 +363,257 @@ async fn cmd_goal(
         None,
     )
     .await?;
-    let (outcome, stop) = headless
+    let (report, stop) = headless
         .run(async move |headless| {
             let cancel = CancellationToken::new();
-            let host_runtime = headless.built.host_runtime();
-            let request = hya_runtime_abi::GoalRunRequest {
+            let request = hya_runtime_abi::DriverRequest {
                 session: headless.session,
-                goal,
-                max_iterations,
-                max_wall_clock_secs: 1800,
                 agent: Some(headless.agent.name.clone()),
                 model: Some(headless.agent.model.clone()),
-                config: serde_json::json!({
-                    "evaluator_model": evaluator_model_flag,
-                    "default_model": headless.evaluator_model,
-                }),
+                workdir: headless.agent.workdir.clone(),
+                args,
             };
-            let work = prepare_goal_driver(host_runtime, request, cancel.clone())?;
-            let (outcome, stop) =
+            let work = prepare_driver(&headless.built, driver, request, cancel.clone())?;
+            let (report, stop) =
                 run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
-            Ok((outcome, stop))
+            Ok((report, stop))
         })
         .await?;
     exit_if_stopped(stop);
-    let outcome = outcome.context("run goal")?;
-    println!("goal outcome: {outcome:?}");
+    let report = report.with_context(|| format!("run driver {driver}"))?;
+    print!("{}", report.stdout);
+    eprint!("{}", report.stderr);
+    let _ = std::io::stdout().flush();
+    if report.exit_code != 0 {
+        std::process::exit(report.exit_code);
+    }
     Ok(())
 }
 
-/// Loop-mode CLI entry (dev_plan 6.11): drive the lead session with an
-/// independent model verifier/planner until the deterministic condition, the
-/// `loop.should_stop` hook, or the verifier stops the run. In-memory store,
-/// mirroring `cmd_goal`'s setup.
+/// A `database: true` api route: on `--db` through the server that owns it
+/// (after its `routed_refuse` checks), else in process on the claimed store.
+/// A `database: read` one runs in process on [`read_scope_store`] with the
+/// offline runtime.
+async fn cmd_database_api(
+    cli: &Cli,
+    bundle: &str,
+    api: &str,
+    database: &bundle_cli::Database,
+    args: serde_json::Value,
+    model: Option<String>,
+) -> anyhow::Result<()> {
+    hya_store::validate_database_arg(&cli.db)?;
+    let command = database.command.as_str();
+    if database.read {
+        let store = read_scope_store(&cli.db).await?;
+        return cmd_bundle_api(
+            bundle, api, args, store, None, command, model, cli.yolo, cli.bare, cli.pure, true,
+        )
+        .await;
+    }
+    let session = database
+        .session(&args)
+        .map(|id| {
+            id.parse::<SessionId>()
+                .with_context(|| format!("parse {command} Session id"))
+        })
+        .transpose()?;
+    let claimed = if session.is_some() {
+        db_writer::claim(&cli.db, command).await?
+    } else {
+        db_writer::claim_or_memory(&cli.db, command).await?
+    };
+    match claimed {
+        db_writer::Writer::Server(server) => {
+            if let Some(reason) = database.refusal(&args, cli) {
+                db_writer::exit_unroutable(command, &cli.db, &server, reason);
+            }
+            let reply = routed::bundle_api(
+                &server.url,
+                routed::BundleApiRequest {
+                    bundle,
+                    api,
+                    session,
+                    model,
+                    args,
+                },
+            )
+            .await?;
+            print_api_report(bundle, api, reply)
+        }
+        db_writer::Writer::Direct(store) => {
+            cmd_bundle_api(
+                bundle, api, args, store, session, command, model, cli.yolo, cli.bare, cli.pure,
+                false,
+            )
+            .await
+        }
+    }
+}
+
+/// An in-memory store holding the Project the working directory resolves to
+/// in an existing `db` (opened read-only, never claimed), else a Project of
+/// the directory alone, so a `database: read` call sees that Project's roots.
+async fn read_scope_store(db: &str) -> anyhow::Result<SessionStore> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    let cwd = cwd.to_string_lossy();
+    let project = if !db.is_empty() && std::path::Path::new(db).try_exists()? {
+        SessionStore::connect_read_only(db)
+            .await
+            .with_context(|| format!("open existing database read-only at {db}"))?
+            .resolve_project_by_path(&cwd)
+            .await?
+    } else {
+        None
+    };
+    let store = open_store("").await?;
+    match project {
+        Some(project) => {
+            store.create_project(&project.name, &project.roots).await?;
+        }
+        None => {
+            store.ensure_project_for_path(&cwd).await?;
+        }
+    }
+    Ok(store)
+}
+
+/// Call a bundle's BundleApi endpoint `api` headlessly on `store` with
+/// `{"args": …, "cwd": …}` and print the reply's `{stdout, stderr,
+/// exit_code}`. A Session-scope endpoint gets `session` (`<command> Session …
+/// was not found` when missing) or a new session, deleted again when the call
+/// fails without writing to it; a Global one none.
+/// `offline` composes [`startup::HeadlessRuntime::start_offline`].
 #[allow(clippy::too_many_arguments)]
-async fn cmd_loop(
-    target: String,
-    budget: Option<u32>,
-    max_iterations: Option<u32>,
-    while_command: Option<String>,
-    until_command: Option<String>,
-    evaluator_model_flag: Option<String>,
+async fn cmd_bundle_api(
+    bundle: &str,
+    api: &str,
+    args: serde_json::Value,
+    store: SessionStore,
+    session: Option<SessionId>,
+    command: &str,
     model_override: Option<String>,
     yolo: bool,
     bare: bool,
     pure: bool,
+    offline: bool,
 ) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    let body = serde_json::json!({ "args": args, "cwd": cwd.to_string_lossy() });
+    let exit_store = store.clone();
     let mut signals = StopSignals::install()?;
-    let headless = start_headless_with_signals(
+    let started = async {
+        let mut runtime = if offline {
+            startup::HeadlessRuntime::start_offline(store, model_override, bare, pure).await?
+        } else {
+            startup::HeadlessRuntime::start(store, model_override, yolo, bare, pure).await?
+        };
+        let prepared = async {
+            let endpoint = runtime
+                .built
+                .engine()
+                .bundle_apis()
+                .await
+                .into_iter()
+                .find(|published| published.bundle == bundle)
+                .and_then(|published| {
+                    published
+                        .apis
+                        .into_iter()
+                        .find(|endpoint| endpoint.id == api)
+                })
+                .with_context(|| format!("bundle `{bundle}` serves no API endpoint `{api}`"))?;
+            let (session, created) = match endpoint.scope {
+                hya_engine::ApiScope::Session => {
+                    let opened = runtime.open_session(session, command).await?;
+                    let created = match session {
+                        Some(_) => None,
+                        None => {
+                            let engine = runtime.built.engine();
+                            let projection = engine.read_projection_shared(opened).await?;
+                            Some((opened, projection.last_seq))
+                        }
+                    };
+                    (Some(opened), created)
+                }
+                hya_engine::ApiScope::Global => (None, None),
+            };
+            let call = hya_engine::BundleApiCall {
+                bundle: bundle.to_string(),
+                method: endpoint.method,
+                session,
+                path: endpoint.path.as_str().to_string(),
+                query: Default::default(),
+                body,
+            };
+            Ok::<_, anyhow::Error>((call, created))
+        }
+        .await;
+        match prepared {
+            Ok((call, created)) => Ok((runtime, call, created)),
+            Err(error) => {
+                runtime.shutdown().await?;
+                Err(error)
+            }
+        }
+    };
+    let (mut runtime, call, created) = tokio::select! {
+        started = started => started?,
+        stop = signals.recv() => {
+            eprintln!("hya: stopping — draining store before exit");
+            signals.drain_store_on_exit(&exit_store, true).await;
+            hya_tool::deadline::shutdown_background_jobs().await;
+            stop_signals::exit_stopped(stop);
+        }
+    };
+    let engine = runtime.built.engine();
+    let cancel = CancellationToken::new();
+    let (reply, stop) = run_until_stopped(
+        &runtime.built,
         &mut signals,
-        open_store("").await?,
-        model_override,
-        yolo,
-        bare,
-        pure,
-        None,
+        &cancel,
+        engine.invoke_bundle_api(call),
     )
-    .await?;
-    let (outcome, stop) = headless
-        .run(async move |headless| {
-            let cancel = CancellationToken::new();
-            let work = prepare_loop(
-                headless.built.host_runtime(),
-                headless.session,
-                headless.agent.clone(),
-                HeadlessEvaluatorRoute {
-                    router: &headless.evaluator_router,
-                    model_override: evaluator_model_flag.as_deref(),
-                    default_model: &headless.evaluator_model,
-                },
-                target,
-                |workdir| {
-                    let predicate =
-                        cli_args::build_loop_predicate(while_command, until_command, workdir)
-                            .map_err(anyhow::Error::msg)
-                            .context("resolve loop condition")?;
-                    Ok(LoopRunOptions {
-                        budget: cli_args::loop_budget(budget, max_iterations),
-                        predicate,
-                        ..LoopRunOptions::default()
-                    })
-                },
-                cancel.clone(),
-            )
-            .await?;
-            let (outcome, stop) =
-                run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
-            Ok((outcome, stop))
-        })
+    .await;
+    // A failed call (a rejected run) leaves no empty Session behind: the
+    // session it was given goes again when the call wrote nothing to it. The
+    // delete waits for the runtime shutdown, which records its own activity.
+    let unused = match created {
+        Some((session, created_at))
+            if stop.is_none()
+                && reply
+                    .as_ref()
+                    .map_or(true, |reply| reply.body["exit_code"].as_i64() != Some(0)) =>
+        {
+            let projection = engine.read_projection_shared(session).await;
+            projection.map(|projection| (projection.last_seq == created_at).then_some(session))
+        }
+        _ => Ok(None),
+    };
+    signals
+        .finish_with_store_report(&exit_store, stop.is_some(), runtime.shutdown())
         .await?;
     exit_if_stopped(stop);
-    let outcome = outcome.context("run loop")?;
-    println!("loop outcome: {outcome:?}");
-    if let DriverRunOutcome::InvalidCondition { reason, .. } = &outcome {
-        eprintln!(
-            "warning: the loop condition itself is broken, so this is NOT a success: {reason}"
-        );
-        anyhow::bail!("loop ended on a broken condition; not a success");
+    if let Some(session) = unused? {
+        exit_store
+            .delete_session(session)
+            .await
+            .context("delete the session the failed call left unused")?;
+    }
+    let reply = reply.map_err(|error| anyhow::anyhow!("{bundle} {api}: {error}"))?;
+    print_api_report(bundle, api, reply.body)
+}
+
+/// Print a bundle CLI reply `{stdout, stderr, exit_code}` and exit with its
+/// code when nonzero.
+fn print_api_report(bundle: &str, api: &str, body: serde_json::Value) -> anyhow::Result<()> {
+    let report: hya_runtime_abi::DriverReport = serde_json::from_value(body)
+        .with_context(|| format!("{bundle} {api} replied without stdout/stderr/exit_code"))?;
+    print!("{}", report.stdout);
+    eprint!("{}", report.stderr);
+    let _ = std::io::stdout().flush();
+    if report.exit_code != 0 {
+        std::process::exit(report.exit_code);
     }
     Ok(())
 }
@@ -490,12 +640,101 @@ async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("build the Tokio runtime")?
-        .block_on(run(cli))
+        .block_on(async {
+            match bundle_cli::parse(std::env::args_os().collect()).await? {
+                bundle_cli::Parsed::Core(cli) => run(cli).await,
+                bundle_cli::Parsed::Prompt { cli, route, args } => {
+                    run_prompt(cli, route, args).await
+                }
+                bundle_cli::Parsed::Bundle { cli, route, args } => {
+                    run_bundle_command(cli, route, args).await
+                }
+            }
+        })
+}
+
+/// `hya -p <PROMPT>`: the prompt driver an enabled bundle declares, else one
+/// headless turn whose transcript is printed.
+async fn run_prompt(
+    cli: Cli,
+    route: Option<bundle_cli::Route>,
+    args: serde_json::Value,
+) -> anyhow::Result<()> {
+    let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
+    match route {
+        Some(route) => {
+            let label = route.label().to_string();
+            run_route(route, args, model, cli.yolo, cli.bare, cli.pure)
+                .await
+                .inspect_err(|error| eprintln!("{label} error: {error:#}"))
+        }
+        None => {
+            exec_entry(
+                cli.prompt.clone().unwrap_or_default(),
+                model,
+                &cli.db,
+                cli.yolo,
+                ExecOutput::Transcript,
+                cli.bare,
+                cli.pure,
+                None,
+            )
+            .await
+        }
+    }
+}
+
+/// A bundle-contributed `hya <command>`.
+async fn run_bundle_command(
+    cli: Cli,
+    route: bundle_cli::Route,
+    args: serde_json::Value,
+) -> anyhow::Result<()> {
+    let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
+    if let bundle_cli::Route::Api {
+        bundle,
+        api,
+        database: Some(database),
+    } = &route
+    {
+        return cmd_database_api(&cli, bundle, api, database, args, model).await;
+    }
+    run_route(route, args, model, cli.yolo, cli.bare, cli.pure).await
+}
+
+async fn run_route(
+    route: bundle_cli::Route,
+    args: serde_json::Value,
+    model: Option<String>,
+    yolo: bool,
+    bare: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    match route {
+        bundle_cli::Route::Driver(driver) => {
+            cmd_driver(&driver, args, model, yolo, bare, pure).await
+        }
+        bundle_cli::Route::Api { bundle, api, .. } => {
+            cmd_bundle_api(
+                &bundle,
+                &api,
+                args,
+                open_store("").await?,
+                None,
+                &api,
+                model,
+                yolo,
+                bare,
+                pure,
+                false,
+            )
+            .await
+        }
+    }
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
@@ -523,19 +762,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let bare = cli.bare;
     let pure = cli.pure;
     let db = cli.db.clone();
-    if let Some(goal) = cli.prompt {
-        return cmd_goal(
-            goal,
-            cli.max_iterations,
-            cli.evaluator_model.clone(),
-            model,
-            yolo,
-            bare,
-            pure,
-        )
-        .await
-        .inspect_err(|error| eprintln!("goal error: {error:#}"));
-    }
     match cli.command {
         // Bare `hya` on a terminal starts the TUI and the WebUI against the
         // database's backend daemon (frontend.rs, daemon.rs); without a
@@ -670,9 +896,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Bundle { command }) => {
             bundle_cmd::run(command, absolute_db(resolve_interactive_db(&db))).await
         }
-        Some(Command::Workflow { command }) => {
-            workflow_cmd::run(command, model, &db, yolo, bare, pure).await
-        }
         Some(Command::Models {
             provider,
             verbose,
@@ -768,28 +991,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Relay { command }) => {
             let code = relay_doctor::run(command).await?;
             std::process::exit(code);
-        }
-        Some(Command::Loop {
-            target,
-            budget,
-            max_iterations,
-            while_command,
-            until_command,
-            evaluator_model,
-        }) => {
-            cmd_loop(
-                target,
-                budget,
-                max_iterations,
-                while_command,
-                until_command,
-                evaluator_model,
-                model,
-                yolo,
-                bare,
-                pure,
-            )
-            .await
         }
     }
 }

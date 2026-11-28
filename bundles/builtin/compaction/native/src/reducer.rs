@@ -2,12 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use hya_runtime_abi::{ExtensionEventContext, HostError, ProjectionReducer};
-use hya_tool::extension::{
-    BUNDLE_COMPACTION, ContextStatusProjection, EvictedPart, ExtensionEvent,
-};
+use hya_runtime_abi::{ExtensionEventContext, HostError, ProjectionReducer, ToolOutputOverride};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+use crate::events::{
+    BUNDLE_COMPACTION, CompactionEvent, ContextEvicted, ContextStatusProjection, EvictedPart,
+};
 
 /// Compact, deterministic state folded under `Projection::extensions["hya/compaction"]`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,11 +51,7 @@ impl ProjectionReducer for CompactionProjectionReducer {
     }
 
     fn apply(&self, state: &mut Value, event: &ExtensionEventContext) -> Result<(), HostError> {
-        if event.bundle != BUNDLE_COMPACTION {
-            return Ok(());
-        }
-        let Some(ext) =
-            ExtensionEvent::from_parts(event.session, &event.bundle, &event.kind, &event.payload)
+        let Some(ext) = CompactionEvent::from_parts(&event.bundle, &event.kind, &event.payload)
         else {
             return Ok(());
         };
@@ -66,28 +63,16 @@ impl ProjectionReducer for CompactionProjectionReducer {
         };
 
         match ext {
-            ExtensionEvent::ContextStatus {
-                tokens,
-                source,
-                mode,
-                threshold,
-                ..
-            } => {
-                current.context_status = Some(ContextStatusProjection {
-                    tokens,
-                    source,
-                    mode,
-                    threshold,
-                });
+            CompactionEvent::ContextStatus(status) => {
+                current.context_status = Some(status);
             }
-            ExtensionEvent::ContextEvicted {
+            CompactionEvent::ContextEvicted(ContextEvicted {
                 evicted_parts,
                 parts,
                 tokens_before,
                 tokens_after,
                 threshold,
-                ..
-            } => {
+            }) => {
                 for EvictedPart { part, notice } in parts {
                     current.evicted_parts.insert(part.to_string(), notice);
                 }
@@ -98,11 +83,26 @@ impl ProjectionReducer for CompactionProjectionReducer {
                     threshold,
                 });
             }
-            _ => return Ok(()),
         }
 
         *state = serde_json::to_value(current)
             .map_err(|error| HostError::Internal(format!("serialize compaction state: {error}")))?;
         Ok(())
+    }
+
+    /// Every `context_evicted` notice replaces its tool part's output in later
+    /// requests.
+    fn tool_output_overrides(&self, event: &ExtensionEventContext) -> Vec<ToolOutputOverride> {
+        match CompactionEvent::from_parts(&event.bundle, &event.kind, &event.payload) {
+            Some(CompactionEvent::ContextEvicted(evicted)) => evicted
+                .parts
+                .into_iter()
+                .map(|EvictedPart { part, notice }| ToolOutputOverride {
+                    part,
+                    output: notice,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 }

@@ -78,7 +78,6 @@ pub(crate) fn error_code(error: &CoreError) -> &'static str {
         CoreError::Bundle(_) => "bundle_error",
         CoreError::RuntimeRefresh(_) => "runtime_refresh_error",
         CoreError::Cancelled => "cancelled",
-        CoreError::WorkflowActivationFailed(_) => "workflow_activation_failed",
         CoreError::AgentDefinitionMissing { .. } => "agent_definition_missing",
         CoreError::Invalid(_) | CoreError::BundleRefresh(_) => "invalid",
         CoreError::TurnAlreadyActive { .. } => "turn_already_active",
@@ -190,6 +189,36 @@ impl SessionEngine {
             cancelled |= self.cancel_turn(member, FinishCause::UserCancel);
         }
         cancelled
+    }
+
+    /// [`cancel_user_turn`](Self::cancel_user_turn) after the `turn.stop`
+    /// hooks for `session` have run, so a hook sees the turns still live.
+    pub async fn stop_user_turn(&self, session: SessionId) -> bool {
+        if let Some(hooks) = self.session_hook_dispatcher(session) {
+            hooks
+                .turn_stop(crate::hooks::NativeTurnStopInput {
+                    session,
+                    cause: FinishCause::UserCancel,
+                })
+                .await;
+        }
+        self.cancel_user_turn(session)
+    }
+
+    /// The `run.headless` pending-work lines for `session` at `phase`.
+    pub async fn headless_run_lines(
+        &self,
+        session: SessionId,
+        phase: crate::hooks::HeadlessRunPhase,
+    ) -> Vec<String> {
+        match self.session_hook_dispatcher(session) {
+            Some(hooks) => {
+                hooks
+                    .headless_run(crate::hooks::NativeHeadlessRunInput { session, phase })
+                    .await
+            }
+            None => Vec::new(),
+        }
     }
 
     /// Distinguish an external cancellation from one about to be caused by loss.

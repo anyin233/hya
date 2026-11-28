@@ -1,4 +1,5 @@
-//! A configured stdio LSP server must be reachable through the shipped HTTP surface.
+//! A configured stdio LSP server must be reachable through coding-extras'
+//! shipped BundleApi, and the route must be absent while the bundle is off.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -10,9 +11,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::common::{Scratch, TestResult, hya_bin};
 
-#[tokio::test]
-async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
-    let scratch = Scratch::new("hya-lsp-runtime")?;
+/// Write `main.ts` and the fixture LSP config under `scratch`, start
+/// `hya serve` with `config_yaml`, and request workspace symbols for `qaSymbol`.
+async fn symbols_response(
+    scratch: &Scratch,
+    config_yaml: &str,
+) -> Result<(tokio::process::Child, reqwest::Response), Box<dyn std::error::Error>> {
     let project = scratch.0.join("project");
     let config = scratch.0.join("config");
     std::fs::create_dir_all(&project)?;
@@ -22,7 +26,7 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
         "export function qaSymbol() { return 42; }\n",
     )?;
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lsp_server.py");
-    std::fs::write(config.join("hya/config.yaml"), "schema_version: 2\n")?;
+    std::fs::write(config.join("hya/config.yaml"), config_yaml)?;
     let coding_extras_dir = config.join("hya/bundles/hya%2Fcoding-extras");
     std::fs::create_dir_all(&coding_extras_dir)?;
     std::fs::write(
@@ -56,26 +60,55 @@ async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
         Err(std::io::Error::other("backend exited before readiness"))
     })
     .await??;
-    let symbols: Value = reqwest::Client::builder()
+    let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()?
-        .get(format!("{url}/v2/fs/symbols"))
+        .get(format!(
+            "{url}/v2/bundles/hya%2Fcoding-extras/api/lsp/symbols"
+        ))
         .query(&[
             ("query", "qaSymbol"),
             ("directory", project.to_string_lossy().as_ref()),
         ])
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
-    assert!(
-        symbols["symbols"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["name"] == "qaSymbol")),
-        "configured LSP result missing: {symbols}"
-    );
+    Ok((backend, response))
+}
+
+async fn stop(mut backend: tokio::process::Child) -> TestResult {
     backend.kill().await?;
     backend.wait().await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn configured_language_server_exposes_workspace_symbols() -> TestResult {
+    let scratch = Scratch::new("hya-lsp-runtime")?;
+    let (backend, response) = symbols_response(&scratch, "schema_version: 2\n").await?;
+    let symbols: Value = response.error_for_status()?.json().await?;
+    assert_eq!(
+        symbols,
+        json!({ "symbols": [{
+            "path": "main.ts",
+            "name": "qaSymbol",
+            "kind": "SYMBOL_KIND_FUNCTION",
+            "lineNumber": 1
+        }]}),
+        "configured LSP result missing"
+    );
+    stop(backend).await
+}
+
+#[tokio::test]
+async fn disabled_coding_extras_has_no_symbols_route() -> TestResult {
+    let scratch = Scratch::new("hya-lsp-runtime-disabled")?;
+    let (backend, response) = symbols_response(
+        &scratch,
+        "schema_version: 2\nbundles:\n  builtin:\n    disable: [hya/coding-extras]\n",
+    )
+    .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    let body: Value = response.json().await?;
+    assert_eq!(body["error"]["code"], "bundle_api_not_found", "{body}");
+    stop(backend).await
 }

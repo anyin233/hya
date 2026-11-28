@@ -1,6 +1,5 @@
-//! Engine-side mailbox delivery + roster/channel queries (ADR-0001).
+//! Engine-side mail delivery and team roster records (ADR-0001).
 //!
-//! These methods implement the host behind the [`hya_tool::MailboxPlane`] tools.
 //! Every team-comms event is appended to the **team-root** session log (top of
 //! the sender's parent lineage), so one replay reconstructs inboxes, channels,
 //! and roster. Live observers receive the same envelopes through
@@ -10,7 +9,6 @@
 //! reducer. Resident supervisors (and other bus subscribers) wake idle actors on
 //! mail; this module itself only persists and publishes.
 
-mod query;
 mod request;
 
 #[cfg(test)]

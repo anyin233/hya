@@ -13,14 +13,18 @@ use super::{
 };
 use crate::error::CoreError;
 use crate::hooks::{
-    HookChain, HookDispatcher, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
-    activation_hook_for, scope_activation_hooks, scope_optional_activation_hooks,
+    HookChain, ModelFailureClass, NativeModelFallbackInput, activation_hook_for,
+    scope_activation_hooks, scope_optional_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
 use crate::{AgentResourcePolicy, TurnBinding};
 
+mod driven;
+#[cfg(test)]
+mod driven_tests;
 mod harness;
+mod hooks;
 pub(super) mod messages;
 #[cfg(test)]
 mod provider_snapshot_test;
@@ -30,6 +34,7 @@ pub mod route;
 mod route_retry_test;
 mod tool_gate;
 
+pub use driven::{DrivenTurn, DrivenTurnEnd, FencedSidecars};
 pub use messages::advertise_tool;
 use messages::{AttachmentData, attachment_blobs, filtered_tool_schemas};
 pub use route::{ExplicitModelRoute, ExplicitModelRouteCandidate, ExplicitTurnRoute};
@@ -58,7 +63,7 @@ struct TurnExecution<'a> {
     /// Whether this activation resolves Session/file defaults freshly.
     apply_default_overlays: bool,
     /// Request-local explicit model route, absent for ordinary Agent turns.
-    workflow_route: Option<&'a ExplicitTurnRoute>,
+    explicit_route: Option<&'a ExplicitTurnRoute>,
     /// Round-boundary rebind inputs, present for Root activations only.
     rebind: Option<TurnRebindInputs<'a>>,
     /// Per-turn fallback holding last successful SQL preference reads.
@@ -74,7 +79,7 @@ struct TurnRebindInputs<'a> {
     /// Sidecar tools captured at activation; recompiled into every fresh
     /// resource view so a rebind never drops them.
     sidecar_tools: Arc<[ResolvedTool]>,
-    sidecar_hooks: Option<Arc<dyn HookDispatcher>>,
+    sidecar_hooks: Option<Arc<HookChain>>,
 }
 
 /// Request-local context shared by one governed turn activation.
@@ -85,7 +90,7 @@ pub(crate) struct TurnRequestContext<'a> {
     guidance: Option<Arc<str>>,
     actor_claim: Option<&'a ActorClaim>,
     explicit_model: Option<ModelRef>,
-    workflow_route: Option<ExplicitTurnRoute>,
+    explicit_route: Option<ExplicitTurnRoute>,
     /// Turn claim already taken by the caller (resident wakes claim under the
     /// team lock). `None` claims — queueing behind an active turn — on entry.
     lease: Option<TurnLease>,
@@ -101,7 +106,7 @@ impl<'a> TurnRequestContext<'a> {
         external_dirs: &'a [PathBuf],
         guidance: Option<Arc<str>>,
         actor_claim: Option<&'a ActorClaim>,
-        workflow_route: Option<ExplicitTurnRoute>,
+        explicit_route: Option<ExplicitTurnRoute>,
     ) -> Self {
         Self {
             cancel,
@@ -109,7 +114,7 @@ impl<'a> TurnRequestContext<'a> {
             guidance,
             actor_claim,
             explicit_model: None,
-            workflow_route,
+            explicit_route,
             ran_known_tool: None,
             lease: None,
             admitted_prompt: None,
@@ -293,19 +298,19 @@ impl SessionEngine {
                 .request_root_session(session, lineage.root_session_cache)
                 .await;
             let outcome = hooks
-                .model_fallback(ModelFallbackInput {
+                .model_fallback(NativeModelFallbackInput {
                     session,
                     root_session,
                     agent: Some(AgentName::new(lineage.agent)),
                     message,
                     model: failed.clone(),
-                    error_class: ModelFailureClass::of(&error),
+                    error_class: ModelFailureClass::of(&error).as_str().to_string(),
                     error_message: error.to_string(),
                     attempt: u32::try_from(tried.len()).unwrap_or(u32::MAX),
                     tried: tried.clone(),
                 })
                 .await;
-            let ModelFallbackOutcome::Retry { model } = outcome else {
+            let Some(model) = outcome else {
                 break;
             };
             if tried.contains(&model) {
@@ -382,12 +387,12 @@ impl SessionEngine {
         self.check_request_context(router, &attempt)?;
         router.stream(attempt, session, message).await
     }
-    /// Open one Workflow-assigned stream, starting at admission's candidate.
+    /// Open one explicitly routed stream, starting at admission's candidate.
     ///
     /// The route remains request-local. Only pre-stream retryable failures can
     /// advance it, and a returned stream is never replayed on another model.
     /// Returns the stream with the selected candidate's index.
-    async fn stream_with_workflow_route(
+    async fn stream_with_explicit_route(
         &self,
         router: &ProviderRouter,
         request: &CompletionRequest,
@@ -558,8 +563,8 @@ impl SessionEngine {
         .await
     }
 
-    /// Run a bound turn with one request-local Workflow route.
-    pub(crate) async fn run_bound_turn_with_workflow_route(
+    /// Run a bound turn with one request-local explicit model route.
+    pub(crate) async fn run_bound_turn_with_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -574,8 +579,8 @@ impl SessionEngine {
         )
         .await
     }
-    /// Run an actor-fenced bound turn with one request-local Workflow route.
-    pub(crate) async fn run_bound_turn_for_actor_with_workflow_route(
+    /// Run an actor-fenced bound turn with one request-local explicit model route.
+    pub(crate) async fn run_bound_turn_for_actor_with_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -590,8 +595,8 @@ impl SessionEngine {
         )
         .await
     }
-    /// Run a resolved turn with one request-local Workflow route.
-    pub(crate) async fn run_resolved_turn_with_sidecar_tools_and_workflow_route(
+    /// Run a resolved turn with one request-local explicit model route.
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_and_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -617,8 +622,8 @@ impl SessionEngine {
         )
         .await
     }
-    /// Run an actor-fenced resolved turn with one request-local Workflow route.
-    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
+    /// Run an actor-fenced resolved turn with one request-local explicit model route.
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor_and_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -645,6 +650,37 @@ impl SessionEngine {
         .await
     }
 
+    /// End a turn whose queued lease claim was cancelled (or hit a drain)
+    /// before it started, answering its admitted prompt, if any.
+    pub(super) async fn end_queued_turn(
+        &self,
+        session: SessionId,
+        actor_claim: Option<&ActorClaim>,
+        answers_prompt: bool,
+        cancel: &CancellationToken,
+    ) -> Result<FinishReason, CoreError> {
+        if answers_prompt {
+            let cause = if cancel.is_cancelled() {
+                Some(hya_proto::FinishCause::UserCancel)
+            } else {
+                self.draining()
+            };
+            self.emit_batch_for_actor(
+                actor_claim,
+                session,
+                unstarted_answer(
+                    session,
+                    MessageId::new(),
+                    FinishReason::Cancelled,
+                    cause,
+                    None,
+                ),
+            )
+            .await?;
+        }
+        Ok(FinishReason::Cancelled)
+    }
+
     /// The single turn choke point: claim the session's one active turn
     /// (single-active-turn invariant), then run it. A caller-held lease is
     /// used as-is; otherwise the claim queues behind an active turn and a
@@ -668,26 +704,14 @@ impl SessionEngine {
             None => match self.begin_turn(session, &request.cancel).await? {
                 Some(lease) => lease,
                 None => {
-                    if request.admitted_prompt.is_some() {
-                        let cause = if request.cancel.is_cancelled() {
-                            Some(hya_proto::FinishCause::UserCancel)
-                        } else {
-                            self.draining()
-                        };
-                        self.emit_batch_for_actor(
-                            request.actor_claim,
+                    return self
+                        .end_queued_turn(
                             session,
-                            unstarted_answer(
-                                session,
-                                message,
-                                FinishReason::Cancelled,
-                                cause,
-                                None,
-                            ),
+                            request.actor_claim,
+                            request.admitted_prompt.is_some(),
+                            &request.cancel,
                         )
-                        .await?;
-                    }
-                    return Ok(FinishReason::Cancelled);
+                        .await;
                 }
             },
         };
@@ -698,7 +722,7 @@ impl SessionEngine {
         request.cancel = lease.bind_cancel(&caller_cancel);
         let actor_claim = request.actor_claim;
         let cancel = request.cancel.clone();
-        let workflow_route = request.workflow_route.clone();
+        let explicit_route = request.explicit_route.clone();
         let observer = self.turn_gate.observer();
         if let Some(observer) = observer.as_ref() {
             observer.turn_started(session);
@@ -735,7 +759,7 @@ impl SessionEngine {
             }
             Ok(_) => {}
         }
-        if let Some(route) = workflow_route.as_ref() {
+        if let Some(route) = explicit_route.as_ref() {
             let failure = match &outcome {
                 Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
                     hya_runtime_abi::TurnRouteFailureClass::Cancelled
@@ -823,7 +847,7 @@ impl SessionEngine {
             external_dirs,
             guidance,
             actor_claim,
-            workflow_route,
+            explicit_route,
             explicit_model,
             ran_known_tool,
             lease: _,
@@ -901,8 +925,8 @@ impl SessionEngine {
         self.capture_session_bundle_hooks(session, &binding, stable_id)
             .await;
         let mut bound_hooks = binding.bundle_hooks_for_agent(stable_id);
-        if let Some(sidecar_hooks) = sidecar_hooks.clone() {
-            bound_hooks.push(sidecar_hooks);
+        if let Some(sidecar_hooks) = &sidecar_hooks {
+            bound_hooks.extend(sidecar_hooks.entries().iter().cloned());
         }
         // Bound/Resolved activations (subagents, resident members) run inside
         // a scope their caller opened for this session with the member's
@@ -913,14 +937,23 @@ impl SessionEngine {
             && !bound_hooks.is_empty()
             && let Some(inherited) = activation_hook_for(session)
         {
-            bound_hooks.push(inherited);
+            bound_hooks.extend(inherited.entries().iter().cloned());
         }
-        let activation_hooks = (!bound_hooks.is_empty())
-            .then(|| Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>);
+        let activation_hooks =
+            (!bound_hooks.is_empty()).then(|| Arc::new(HookChain::new(bound_hooks)));
         let sidecar_loss = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.loss_token());
         let post_ack = async {
+            let bound_agent = projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .clone();
+            self.apply_turn_admission_hooks(session, bound_agent, actor_claim, &cancel)
+                .await?;
+            // The next model round projects any steering committed by the admission hooks.
             let guidance_text = guidance.as_deref();
             let prepared: Result<_, CoreError> = match resolved {
                 Some((agents, policy, sidecar_tools)) => {
@@ -1013,7 +1046,7 @@ impl SessionEngine {
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
                 apply_default_overlays,
-                workflow_route: workflow_route.as_ref(),
+                explicit_route: explicit_route.as_ref(),
                 explicit_model: explicit_model.as_ref(),
                 rebind: apply_default_overlays.then_some(TurnRebindInputs {
                     base_agent,
@@ -1157,7 +1190,7 @@ impl SessionEngine {
     /// then use the captured Session override, user-file model, and authored
     /// direct/category policy before falling back to the persisted Session
     /// model. Bound/Resolved child work keeps its already-resolved AgentSpec
-    /// model and never reapplies root defaults over an inline or Workflow
+    /// model and never reapplies root defaults over an inline or routed
     /// choice. `MessageStarted` records the first round's answer so the
     /// transcript can attribute the message before any round is served.
     fn requested_turn_model(
@@ -1199,6 +1232,7 @@ impl SessionEngine {
         session: SessionId,
         agent: Option<&AgentName>,
         resources: &CompiledResourceView,
+        depth: u32,
     ) -> crate::hooks::ToolVisibilityOutcome {
         let Some(hooks) = self.active_hook_dispatcher(session) else {
             return crate::hooks::ToolVisibilityOutcome::Preserve;
@@ -1220,6 +1254,7 @@ impl SessionEngine {
                 agent: agent.cloned(),
                 candidate_tools: tools,
                 interactive: self.interaction.is_available(),
+                depth,
             })
             .await
     }
@@ -1235,7 +1270,7 @@ impl SessionEngine {
         model: &ModelRef,
     ) -> Vec<hya_proto::ToolSchema> {
         let visibility = self
-            .tool_visibility_outcome(session, agent, resources)
+            .tool_visibility_outcome(session, agent, resources, depth)
             .await;
         let mut tools = filtered_tool_schemas(
             resources,
@@ -1262,7 +1297,7 @@ impl SessionEngine {
         agent: &AgentName,
         external_dirs: &[PathBuf],
         grant_scope: &hya_tool::GrantScope,
-        activation_hooks: Option<&Arc<dyn HookDispatcher>>,
+        activation_hooks: Option<&Arc<HookChain>>,
     ) -> Result<PermissionPlane, CoreError> {
         let mode_plane = self
             .mode_permission_plane(binding, session, Some(agent))

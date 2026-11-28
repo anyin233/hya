@@ -4,6 +4,7 @@ use super::inbox::{recipient_channel_role, resident_delivery_allowed};
 use super::*;
 use crate::store_bridge::{RecoveredActorClaim, SessionStoreExt as _};
 use crate::{CreateSession, EventBus};
+use hya_agent_channels_core::AgentChannelsService;
 use hya_proto::{AgentName, ChannelKind, MailKind, ModelRef, SessionKind, SubagentMode};
 use hya_provider::{DevProvider, ProviderRouter};
 use hya_store::SessionStore;
@@ -154,53 +155,36 @@ impl PauseHook {
 }
 
 #[async_trait::async_trait]
-impl crate::hooks::HookDispatcher for PauseHook {
-    fn dispatch_event(&self, _: &hya_proto::Envelope) {}
-    async fn command_execute_before(
-        &self,
-        i: crate::hooks::CommandExecuteBeforeInput,
-    ) -> crate::hooks::CommandExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.command_execute_before(i).await
+impl crate::hooks::NativeHook for PauseHook {
+    fn id(&self) -> &str {
+        "PauseHook"
     }
-    async fn text_complete(
-        &self,
-        i: crate::hooks::TextCompleteInput,
-    ) -> crate::hooks::TextCompleteOutcome {
-        crate::hooks::NoopHookHost.text_complete(i).await
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::ChatParams,
+            hya_runtime_abi::HookPoint::SessionStart,
+        ]
     }
-    async fn message_user_before(
-        &self,
-        i: crate::hooks::MessageUserBeforeInput,
-    ) -> crate::hooks::MessageUserBeforeOutcome {
-        crate::hooks::NoopHookHost.message_user_before(i).await
-    }
-    async fn tool_execute_before(
-        &self,
-        i: crate::hooks::ToolExecuteBeforeInput,
-    ) -> crate::hooks::ToolExecuteBeforeOutcome {
-        crate::hooks::NoopHookHost.tool_execute_before(i).await
-    }
-    async fn tool_execute_after(
-        &self,
-        i: crate::hooks::ToolExecuteAfterInput,
-    ) -> crate::hooks::ToolExecuteAfterOutcome {
-        crate::hooks::NoopHookHost.tool_execute_after(i).await
-    }
+
     async fn chat_params(
         &self,
-        i: crate::hooks::ChatParamsInput,
-    ) -> crate::hooks::ChatParamsOutcome {
+        i: crate::hooks::NativeChatParamsInput,
+    ) -> Result<serde_json::Value, hya_runtime_abi::HostError> {
         if !self.on_start {
             self.entered.notify_one();
             self.release.notified().await;
         }
-        crate::hooks::NoopHookHost.chat_params(i).await
+        Ok(i.params)
     }
-    async fn session_start(&self, i: SessionLifecycleInput) {
+    async fn session_start(
+        &self,
+        i: crate::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         if self.on_start && *self.target.lock().unwrap() == Some(i.session) {
             self.entered.notify_one();
             self.release.notified().await;
         }
+        Ok(())
     }
 }
 
@@ -384,19 +368,18 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
     )
     .unwrap()
     .snapshot_for("hya-main");
+    eng.update_session_channel_policy(r, policy);
+    let host = eng.host_runtime();
     assert!(
-        eng.steer_mailbox_snapshot_with_policy(r, Some(policy))
-            .await
-            .drain(&eng)
+        AgentChannelsService::prepare_unread_steer(host.as_ref(), r)
             .await
             .unwrap()
-            .is_none()
+            .is_none_or(|prepared| prepared.notice.is_none())
     );
 
-    let (mailbox, rx) = hya_tool::MailboxPlane::new();
-    let stop = CancellationToken::new();
-    let svc = tokio::spawn(crate::run_mailbox_service(eng.clone(), rx, stop.clone()));
-    let root_rows = mailbox.for_session(r).list_channels().await.unwrap();
+    let root_rows = AgentChannelsService::list_channels(host.as_ref(), r)
+        .await
+        .unwrap();
     assert!(!root_rows.is_empty() && root_rows.iter().all(|row| row.unread == 0));
 
     let through =
@@ -428,15 +411,15 @@ async fn list_channels_and_steer_count_incoming_only_ignoring_outgoing_copy() {
             )
             .await
             .unwrap();
-        let rows = mailbox.for_session(child).list_channels().await.unwrap();
+        let rows = AgentChannelsService::list_channels(host.as_ref(), child)
+            .await
+            .unwrap();
         assert_eq!(rows.iter().find(|x| x.id == dm).unwrap().unread, 1);
         assert_eq!(
             rows.iter().find(|x| x.id == announce).unwrap().unread,
             group_unread
         );
     }
-    stop.cancel();
-    svc.await.unwrap();
     drop(lead);
     drain_sup(&sup).await;
 }
@@ -753,7 +736,7 @@ async fn activation_rest_waits_for_followup_mail_live_children_and_skips_consume
         .unwrap()
         .on_mail("main", &MailEndpoint::Channel(dm.clone()))
         .await;
-    eng.read_channel_history(None, child, &dm, None)
+    AgentChannelsService::read_channel_history(eng.host_runtime().as_ref(), None, child, &dm, None)
         .await
         .unwrap();
     release.notify_one();
@@ -805,7 +788,7 @@ async fn activation_is_armed_before_bus_delivery_for_live_and_revive() {
                 "PENDING".into(),
                 None,
                 None,
-                Some(WorkflowActivation {
+                Some(DirectedActivation {
                     resolved: runtime_for(&eng),
                     guidance: Arc::from("g"),
                     route: None,

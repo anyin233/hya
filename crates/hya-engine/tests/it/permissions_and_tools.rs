@@ -17,19 +17,20 @@ use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent,
     ResourceView, SourceFile, prepare_package,
 };
-use hya_engine::hooks::PermissionApproveInput;
+use hya_engine::hooks::NativePermissionApproveInput;
+use hya_engine::hooks::{
+    NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
+    NativeToolAfterInput, NativeToolAfterOutcome, NativeToolResult, ToolVisibilityInput,
+    ToolVisibilityOutcome,
+};
 use hya_engine::{
-    AgentCatalog, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionConfig,
-    CompactionDecision, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, RuntimePermissionMode, RuntimeRegistry, RuntimeSource,
-    RuntimeSourceId, SessionEngine, SummarizeOptions, Summarizer, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome,
+    AgentCatalog, CreateSession, EventBus, NativeHook, RuntimePermissionMode, RuntimeRegistry,
+    RuntimeSource, RuntimeSourceId, SessionEngine, SummarizeOptions, Summarizer,
+    TerminalHandoffOptions,
 };
 use hya_proto::{
-    AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, PartProjection, Role, SessionId,
-    ToolName, ToolPartState, ToolSchema,
+    AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, Role, SessionId, ToolName,
+    ToolPartState, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -129,52 +130,29 @@ async fn join_turn(task: tokio::task::JoinHandle<FinishReason>) -> FinishReason 
 }
 
 struct Approver {
-    seen: Arc<Mutex<Vec<PermissionApproveInput>>>,
+    seen: Arc<Mutex<Vec<NativePermissionApproveInput>>>,
 }
 
 #[async_trait]
-impl HookDispatcher for Approver {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for Approver {
+    fn id(&self) -> &str {
+        "Approver"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::PermissionApprove]
+    }
 
-    async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
+    async fn permission_approve(
+        &self,
+        input: NativePermissionApproveInput,
+    ) -> Result<Option<Decision>, hya_runtime_abi::HostError> {
         let allow = input.resource == hya_tool::Resource::Command("printf ok".into());
         self.seen.lock().unwrap().push(input);
-        allow.then_some(Decision::AllowOnce)
-    }
-
-    async fn command_execute_before(
-        &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        ToolExecuteAfterOutcome::Continue {
-            result: input.result,
-        }
+        Ok(allow.then_some(Decision::AllowOnce))
     }
 }
 
-fn approver_runtime(seen: Arc<Mutex<Vec<PermissionApproveInput>>>) -> Arc<RuntimeRegistry> {
+fn approver_runtime(seen: Arc<Mutex<Vec<NativePermissionApproveInput>>>) -> Arc<RuntimeRegistry> {
     let prepared = prepare_package(BundleSource::new(
         "approver",
         vec![SourceFile::new(
@@ -210,7 +188,7 @@ fn approver_runtime(seen: Arc<Mutex<Vec<PermissionApproveInput>>>) -> Arc<Runtim
 #[tokio::test]
 async fn permission_modes_toggle_danger_default_and_reject_unknown() {
     let dir = support::TestDir::new("perm-modes");
-    let rt = || support::test_runtime(Arc::new(hya_tool_loader::builtins()));
+    let rt = || support::builtin_test_runtime().runtime;
 
     // 1. Default model starts manual; yolo skips asks; switching back to manual asks again.
     let (engine, mut asks) = mode_engine(
@@ -295,7 +273,7 @@ async fn permission_modes_toggle_danger_default_and_reject_unknown() {
 #[tokio::test]
 async fn permission_modes_subagent_inheritance_and_mid_turn_switch() {
     let dir = support::TestDir::new("perm-inherit");
-    let rt = || support::test_runtime(Arc::new(hya_tool_loader::builtins()));
+    let rt = || support::builtin_test_runtime().runtime;
 
     // 1. Subagent mode change writes to root and child inherits it.
     let (engine, mut asks) = mode_engine(&["printf child"], PermissionModel::Default, rt()).await;
@@ -509,6 +487,34 @@ impl Provider for RequestCaptureProvider {
     }
 }
 
+/// Hides `ask_user` from a turn no human can answer, as a bundle's
+/// `tool.visibility` hook would.
+struct HideAskUserWhenAlone;
+
+#[async_trait]
+impl NativeHook for HideAskUserWhenAlone {
+    fn id(&self) -> &str {
+        "test.hide-ask-user"
+    }
+
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolVisibility]
+    }
+
+    async fn tool_visibility(
+        &self,
+        input: ToolVisibilityInput,
+    ) -> Result<ToolVisibilityOutcome, hya_runtime_abi::HostError> {
+        Ok(if input.interactive {
+            ToolVisibilityOutcome::Preserve
+        } else {
+            ToolVisibilityOutcome::Hide {
+                tools: vec!["ask_user".to_string()],
+            }
+        })
+    }
+}
+
 async fn capture_request(
     provider_id: &'static str,
     model: &str,
@@ -521,16 +527,12 @@ async fn capture_request(
     if !interactive {
         drop(questions);
     }
-    let mut hooks = hya_coding_extras_core::coding_extras_hooks(
-        Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
-        None,
-    );
+    let mut hooks: Vec<Arc<dyn NativeHook>> = vec![Arc::new(HideAskUserWhenAlone)];
     hooks.extend(
         hya_tool_loader::load_v2("hya/plan", hya_tool_loader::noop_host_runtime())
             .unwrap()
             .hooks,
     );
-    let native_hooks = Arc::new(hya_engine::NativeHookDispatcher::new(hooks));
     let engine = support::engine_with_provider(
         Arc::new(RequestCaptureProvider {
             id: provider_id,
@@ -539,7 +541,7 @@ async fn capture_request(
         PermissionRules::default(),
     )
     .await
-    .with_native_hooks(native_hooks)
+    .with_hook_list(hooks)
     .with_interaction(interaction);
     let session = support::create_root_session(&engine, "build", model, dir.path()).await;
     engine
@@ -768,6 +770,9 @@ fn nested_catalog() -> Arc<AgentCatalog> {
         commands: Vec::new(),
         runtime: None,
         permission_modes: vec![],
+        cli: Vec::new(),
+        requires: Vec::new(),
+        default_agent: None,
         overrides: None,
     };
     let bundles = BundleCatalog::from_prepared(&[bundle]).unwrap();
@@ -813,18 +818,15 @@ async fn nested_calls_run_in_callers_view_and_record_against_caller() {
         ]),
     )
     .await
-    .with_native_hooks(Arc::new(hya_engine::NativeHookDispatcher::new({
-        let mut hooks = hya_coding_extras_core::coding_extras_hooks(
-            Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
-            None,
-        );
+    .with_hook_list({
+        let mut hooks: Vec<Arc<dyn NativeHook>> = vec![Arc::new(HideAskUserWhenAlone)];
         hooks.extend(
             hya_tool_loader::load_v2("hya/plan", hya_tool_loader::noop_host_runtime())
                 .unwrap()
                 .hooks,
         );
         hooks
-    })));
+    });
     let session =
         support::create_root_session(&engine, "nesting-agent", "fake", workdir.path()).await;
     engine
@@ -962,6 +964,116 @@ async fn nested_workspace_state_is_sessions_file_revision() {
     }
 }
 
+/// Prefixes a header to every file a `write` call wrote, as a formatter hook
+/// would rewrite it.
+const FORMATTED_HEADER: &str = "// formatted\n";
+
+struct FormatAfterWrite {
+    workdir: std::path::PathBuf,
+}
+
+#[async_trait]
+impl NativeHook for FormatAfterWrite {
+    fn id(&self) -> &str {
+        "test.format-after-write"
+    }
+
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolExecuteAfter]
+    }
+
+    async fn tool_execute_after(
+        &self,
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
+        if input.tool == "write" && matches!(input.result, NativeToolResult::Ok { .. }) {
+            let path = self.workdir.join(input.input["path"].as_str().unwrap());
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(&path, format!("{FORMATTED_HEADER}{text}")).unwrap();
+        }
+        Ok(NativeToolAfterOutcome::Continue {
+            result: input.result,
+        })
+    }
+}
+
+#[tokio::test]
+async fn after_hook_rewrites_are_stamped_as_the_tools_own_change() {
+    let dir = support::TestDir::new("after-hook-stamps");
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "write".into(),
+                input: json!({ "path": "a.txt", "content": "alpha\n" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::ToolCall {
+                name: "read".into(),
+                input: json!({ "path": "a.txt" }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]);
+    let engine = support::engine_with_provider(
+        Arc::new(provider),
+        PermissionRules::new(vec![
+            Rule::new(Action::Tool, "*", Mode::Allow),
+            Rule::new(Action::Edit, "**", Mode::Allow),
+            Rule::new(Action::Read, "**", Mode::Allow),
+        ]),
+    )
+    .await
+    .with_hook_list(vec![Arc::new(FormatAfterWrite {
+        workdir: dir.path().to_path_buf(),
+    }) as Arc<dyn NativeHook>]);
+    let session = support::create_root_session(&engine, "build", "fake", dir.path()).await;
+    engine
+        .admit_user_prompt(session, "write then read".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .run_turn(
+                session,
+                &support::agent_spec("build", "fake", dir.path()),
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        FinishReason::Stop
+    );
+
+    let written = std::fs::read_to_string(dir.path().join("a.txt")).unwrap();
+    assert!(written.starts_with(FORMATTED_HEADER), "{written:?}");
+    let events: Vec<_> = engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.event)
+        .collect();
+    let external: Vec<_> = events
+        .iter()
+        .filter(|e| matches!(e, Event::FilesObserved { external: true, .. }))
+        .collect();
+    assert!(external.is_empty(), "{external:?}");
+    // The write's own stamp already holds the hook-rewritten file.
+    let write_stamp = events
+        .iter()
+        .find_map(|e| match e {
+            Event::FilesObserved { files, .. } => files.iter().find(|f| f.path.ends_with("/a.txt")),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        write_stamp.size,
+        Some(u64::try_from(written.len()).unwrap())
+    );
+}
+
 #[tokio::test]
 async fn tool_errors_record_structured_payload_for_provider_replay() {
     let dir = support::TestDir::new("tool-err-payload");
@@ -1031,12 +1143,12 @@ async fn tool_errors_record_structured_payload_for_provider_replay() {
 
 #[derive(Default)]
 struct CompactionTestHook {
-    decisions: Mutex<Vec<CompactionDecision>>,
+    decisions: Mutex<Vec<NativeCompactionDecision>>,
     calls: Mutex<Vec<String>>,
 }
 
 impl CompactionTestHook {
-    fn with_decisions(decisions: Vec<CompactionDecision>) -> Arc<Self> {
+    fn with_decisions(decisions: Vec<NativeCompactionDecision>) -> Arc<Self> {
         Arc::new(Self {
             decisions: Mutex::new(decisions),
             calls: Mutex::new(Vec::new()),
@@ -1049,78 +1161,78 @@ impl CompactionTestHook {
 }
 
 #[async_trait]
-impl HookDispatcher for CompactionTestHook {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for CompactionTestHook {
+    fn id(&self) -> &str {
+        "CompactionTestHook"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[
+            hya_runtime_abi::HookPoint::CompactionBefore,
+            hya_runtime_abi::HookPoint::CompactionAfter,
+            hya_runtime_abi::HookPoint::SessionStart,
+            hya_runtime_abi::HookPoint::SessionEnd,
+            hya_runtime_abi::HookPoint::AgentSpawn,
+        ]
+    }
 
-    async fn command_execute_before(
+    async fn compaction_before(
         &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        ToolExecuteAfterOutcome::Continue {
-            result: input.result,
-        }
-    }
-
-    async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
+        input: NativeCompactionBeforeInput,
+    ) -> Result<NativeCompactionDecision, hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("compaction.before:{:?}", input.trigger));
-        self.decisions
+        Ok(self
+            .decisions
             .lock()
             .unwrap()
             .pop()
-            .unwrap_or(CompactionDecision::Proceed)
+            .unwrap_or(NativeCompactionDecision::Proceed))
     }
 
-    async fn compaction_after(&self, input: CompactionAfterInput) {
+    async fn compaction_after(
+        &self,
+        input: NativeCompactionAfterInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("compaction.after:{}", input.summary_tokens));
+        Ok(())
     }
 
-    async fn session_start(&self, input: hya_engine::SessionLifecycleInput) {
+    async fn session_start(
+        &self,
+        input: hya_engine::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("session.start:{}", input.session));
+        Ok(())
     }
 
-    async fn session_end(&self, input: hya_engine::SessionLifecycleInput) {
+    async fn session_end(
+        &self,
+        input: hya_engine::hooks::NativeSessionLifecycleInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("session.end:{}", input.session));
+        Ok(())
     }
 
-    async fn agent_spawn(&self, input: hya_engine::AgentSpawnInput) {
+    async fn agent_spawn(
+        &self,
+        input: hya_engine::hooks::NativeAgentSpawnInput,
+    ) -> Result<(), hya_runtime_abi::HostError> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("agent.spawn:{}:{}", input.parent, input.child));
+        Ok(())
     }
 }
 
@@ -1137,7 +1249,7 @@ impl Summarizer for NoSummarizer {
     }
 }
 
-async fn compacting_engine(hooks: Arc<dyn HookDispatcher>) -> Arc<SessionEngine> {
+async fn compacting_engine(hooks: Arc<dyn NativeHook>) -> Arc<SessionEngine> {
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::Text("detail across the earlier turn ".repeat(7_000)),
@@ -1178,13 +1290,13 @@ async fn setup_overflow_session(engine: &SessionEngine, dir: &Path) -> SessionId
 async fn compaction_hooks_surround_rewrite_and_ignore_overflow_skip() {
     for (decision, check_calls) in [
         (
-            CompactionDecision::Replace {
+            NativeCompactionDecision::Replace {
                 instructions: "SUMMARIZE".into(),
             },
             true,
         ),
         (
-            CompactionDecision::Skip {
+            NativeCompactionDecision::Skip {
                 reason: "skip overflow".into(),
             },
             false,
@@ -1244,7 +1356,7 @@ async fn session_lifecycle_and_agent_spawn_hooks_fire_best_effort() {
             PermissionRules::default(),
         )
         .await
-        .with_compaction(Arc::new(NoSummarizer), CompactionConfig::default())
+        .with_terminal_handoff(Arc::new(NoSummarizer), TerminalHandoffOptions::default())
         .with_hooks(hooks.clone()),
     );
     let lead = support::create_root_session(&engine, "hya-task", "fake", dir.path()).await;
@@ -1325,7 +1437,7 @@ async fn compaction_commit_is_atomic_single_transaction() {
                 FakeStep::Finish(FinishReason::Stop),
             ]]))),
         ),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+        support::builtin_test_runtime().runtime,
         perm,
         EventBus::default(),
     );

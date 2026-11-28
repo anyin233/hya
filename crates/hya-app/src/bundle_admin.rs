@@ -329,10 +329,11 @@ async fn run_self_check_in(
     Ok(shown)
 }
 
-/// Built-in agent ids an installed bundle must not claim.
+/// Built-in agent ids an installed bundle must not claim: the compiled-in
+/// `hya-bare`. Other agent id clashes fail at catalog composition.
 #[must_use]
 pub fn reserved_agent_ids() -> Vec<&'static str> {
-    hya_engine::builtin_agent_ids()
+    vec![hya_engine::BARE_AGENT_ID]
 }
 
 /// The registry candidate of an inspected package.

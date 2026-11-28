@@ -628,7 +628,8 @@ impl Harness {
             .unwrap();
     }
 
-    pub async fn workflow(&self, nodes: &str, graph: &str) -> hya_app::WorkflowCommandResult {
+    /// Run the Workflow `m4` and return its raw `/command` `started` reply.
+    pub async fn workflow(&self, nodes: &str, graph: &str) -> serde_json::Value {
         let directory = self.dir.join(".hya/workflows");
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("m4.hya.md"), format!("---\nkind: Workflow\nname: m4\ndescription: Lifecycle fixture\nnodes:\n{nodes}---\nflowchart TD\n{graph}\n")).unwrap();
@@ -654,9 +655,7 @@ impl Harness {
         .expect("Workflow exceeded fixture deadline")
         .unwrap();
         assert_eq!(outcome.status, 200, "{}", outcome.body);
-        let result: hya_app::WorkflowRunResult =
-            serde_json::from_value(outcome.body["started"].clone()).unwrap();
-        hya_app::WorkflowCommandResult::Run { result }
+        outcome.body["started"].clone()
     }
 }
 

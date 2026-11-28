@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 
 use crate::lsp_post_edit;
 use crate::service::CodingExtrasState;
-use crate::utf8_bom;
 
 /// Hook identifier for the post-edit formatter + LSP diagnostics hook.
 pub const POST_EDIT_HOOK_ID: &str = "coding-extras.post-edit";
@@ -127,82 +126,50 @@ impl NativeHook for PostEditHook {
             });
         }
 
-        let formatter = self.state.formatter();
-        let lsp = self.state.lsp();
-        if !formatter.is_configured() && !lsp.is_configured() {
+        if !self.state.formatter().is_configured() && !self.state.lsp().is_configured() {
             return Ok(NativeToolAfterOutcome::Continue {
                 result: NativeToolResult::Ok { output, time_ms },
             });
         }
 
         let workdir = self.resolve_workdir(input.session, &file, &output).await;
-
-        // 1. Run formatter before LSP so diagnostics inspect formatted bytes.
-        if formatter.is_configured() {
-            let had_bom = tokio::fs::read(&file)
-                .await
-                .map(|bytes| bytes.starts_with(b"\xEF\xBB\xBF"))
-                .unwrap_or(false);
-            match formatter.format_file(&workdir, &file).await {
-                Ok(true) => {
-                    if let Err(error) = utf8_bom::sync_file(&file, had_bom).await {
-                        tracing::warn!(
-                            path = %file.display(),
-                            %error,
-                            "post-edit BOM restoration failed"
-                        );
-                    }
+        let post_edit =
+            lsp_post_edit::format_and_diagnose(&self.state, &workdir, std::slice::from_ref(&file))
+                .await;
+        for error in post_edit.formatter_failures {
+            tracing::warn!(path = %file.display(), %error, "post-edit formatter failed");
+            append_warning(&mut output, format!("Formatter failed: {error}"));
+        }
+        match post_edit.diagnostics {
+            None => {}
+            Some(Ok(diagnostics)) => {
+                if let Some(metadata) = ensure_metadata_object(&mut output) {
+                    metadata.insert("diagnostics".to_string(), diagnostics.clone());
                 }
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        path = %file.display(),
-                        %error,
-                        "post-edit formatter failed"
-                    );
-                    append_warning(&mut output, format!("Formatter failed: {error}"));
+                let relative = file.strip_prefix(&workdir).unwrap_or(&file);
+                let label = display_path(relative);
+                let mut diag_block = String::new();
+                lsp_post_edit::append_patch_diagnostics(
+                    &mut diag_block,
+                    &file,
+                    &label,
+                    &diagnostics,
+                );
+                if !diag_block.is_empty()
+                    && let Some(text) = output.get("output").and_then(Value::as_str)
+                {
+                    let updated = format!("{text}{diag_block}");
+                    if let Some(object) = output.as_object_mut() {
+                        object.insert("output".to_string(), Value::String(updated));
+                    }
                 }
             }
-        }
-
-        // 2. Touch document in LSP and attach error diagnostics.
-        if lsp.is_configured() {
-            match lsp_post_edit::touch_many_and_diagnostics_with_plane(
-                &lsp,
-                &workdir,
-                std::slice::from_ref(&file),
-            )
-            .await
-            {
-                Ok(diagnostics) => {
-                    if let Some(metadata) = ensure_metadata_object(&mut output) {
-                        metadata.insert("diagnostics".to_string(), diagnostics.clone());
-                    }
-                    let relative = file.strip_prefix(&workdir).unwrap_or(&file);
-                    let label = display_path(relative);
-                    let mut diag_block = String::new();
-                    lsp_post_edit::append_patch_diagnostics(
-                        &mut diag_block,
-                        &file,
-                        &label,
-                        &diagnostics,
-                    );
-                    if !diag_block.is_empty()
-                        && let Some(text) = output.get("output").and_then(Value::as_str)
-                    {
-                        let updated = format!("{text}{diag_block}");
-                        if let Some(object) = output.as_object_mut() {
-                            object.insert("output".to_string(), Value::String(updated));
-                        }
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        path = %file.display(),
-                        %error,
-                        "post-edit LSP diagnostics failed"
-                    );
-                }
+            Some(Err(error)) => {
+                tracing::warn!(
+                    path = %file.display(),
+                    %error,
+                    "post-edit LSP diagnostics failed"
+                );
             }
         }
 

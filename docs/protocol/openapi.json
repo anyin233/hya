@@ -307,17 +307,6 @@
         "x-server-streaming": false
       }
     },
-    "/v2/fs/symbols": {
-      "get": {
-        "operationId": "Files.SearchSymbols",
-        "summary": "Symbol search (definitions) across the directory.",
-        "tags": [
-          "Files"
-        ],
-        "x-grpc-method": "hya.v2.Files.SearchSymbols",
-        "x-server-streaming": false
-      }
-    },
     "/v2/health": {
       "get": {
         "operationId": "Process.GetHealth",
@@ -3286,53 +3275,6 @@
           }
         }
       },
-      "SearchSymbolsRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "directory": {
-            "type": "string"
-          },
-          "query": {
-            "type": "string"
-          },
-          "limit": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "Symbol": {
-        "type": "object",
-        "description": "One discovered symbol.",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/SymbolKind"
-          },
-          "line_number": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "SearchSymbolsResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "symbols": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Symbol"
-            }
-          }
-        }
-      },
       "Interaction": {
         "type": "object",
         "description": "One pending interaction request.",
@@ -4183,9 +4125,6 @@
             "items": {
               "$ref": "#/components/schemas/SavedRule"
             }
-          },
-          "formatter_available": {
-            "type": "boolean"
           },
           "sessions_cursor": {
             "type": "string"
@@ -5478,17 +5417,6 @@
           "DIR_ENTRY_KIND_FILE",
           "DIR_ENTRY_KIND_DIRECTORY",
           "DIR_ENTRY_KIND_SYMLINK"
-        ]
-      },
-      "SymbolKind": {
-        "type": "string",
-        "description": "Kind of a discovered symbol.",
-        "enum": [
-          "SYMBOL_KIND_UNSPECIFIED",
-          "SYMBOL_KIND_FUNCTION",
-          "SYMBOL_KIND_TYPE",
-          "SYMBOL_KIND_MODULE",
-          "SYMBOL_KIND_OTHER"
         ]
       },
       "InteractionType": {

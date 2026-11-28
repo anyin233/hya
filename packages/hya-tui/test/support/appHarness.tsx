@@ -1147,7 +1147,7 @@ export function builtinTuiCatalogEntry(name: string): Record<string, unknown> {
     preparedDigest: digest,
     apiVersion: 2,
     entry,
-    sdk: "2.0.0",
+    sdk: /^  sdk: "([^"]+)"$/m.exec(tuiBlock)?.[1] ?? "2.0.0",
     permissions,
     firstParty: true,
     files: fileEntries,

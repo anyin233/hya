@@ -32,7 +32,6 @@ impl SessionEngine {
             .clone()
             .unwrap_or_else(|| ModelRef::new("unknown"));
         let errors = HostErrors::default();
-        let config = self.rewriter_config();
         let log = TurnLog {
             engine: self,
             actor_claim: None,
@@ -63,7 +62,7 @@ impl SessionEngine {
             overhead_tokens: 0,
             pressure: None,
             workdir: &workdir,
-            config: &config,
+            token_accounting: self.token_accounting.mode(),
             log: &log,
             transcript: &EpisodeTranscript,
             models: Some(&models),

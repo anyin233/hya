@@ -1,5 +1,5 @@
 //! Goal-mode iteration driver, safety caps, contract validation, and ABI v2
-//! [`GoalDriver`] implementation backed strictly by [`HostRuntime`].
+//! The `hya/goal` [`NativeDriver`] (`hya/goal:goal`), backed strictly by [`HostRuntime`].
 
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -9,8 +9,10 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use hya_proto::{AgentName, ModelRef, PartProjection, Projection, SessionId};
 use hya_runtime_abi::{
-    DriverRunOutcome, GoalDriver, GoalRunRequest, HostError, HostRuntime, TurnStartRequest,
+    DriverReport, DriverRequest, DriverRunOutcome, HostError, HostRuntime, NativeDriver, TurnStart,
+    TurnStartRequest,
 };
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::evaluator::{
@@ -385,12 +387,15 @@ impl IterationExecutor for LeadTurnExecutor {
             .run_turn(
                 TurnStartRequest {
                     session: self.session,
-                    prompt: directive.to_string(),
+                    prompt: Some(directive.to_string()),
                     agent: self.agent.clone(),
                     model: self.model.clone(),
                     system_override: None,
                     metadata: None,
                     actor_claim: None,
+                    guidance: None,
+                    route: None,
+                    start: TurnStart::Always,
                 },
                 cancel.clone(),
             )
@@ -479,6 +484,38 @@ async fn resolve_configured_evaluator_model(runtime: &dyn HostRuntime) -> Option
     None
 }
 
+/// One goal-mode run.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct GoalRunRequest {
+    /// Lead session the goal drives.
+    pub session: SessionId,
+    /// Goal condition.
+    pub goal: String,
+    /// Iteration cap.
+    pub max_iterations: u32,
+    /// Wall-clock cap in seconds (`0` uses the default).
+    pub max_wall_clock_secs: u64,
+    /// Worker agent.
+    pub agent: Option<AgentName>,
+    /// Worker model.
+    pub model: Option<ModelRef>,
+    /// `{evaluator_model?, default_model?}`.
+    pub config: Value,
+}
+
+/// Default `--max-iterations` of `hya -p`.
+pub const DEFAULT_MAX_ITERATIONS: u32 = 6;
+
+/// Arguments of the `-p` CLI contribution.
+#[derive(serde::Deserialize)]
+struct GoalArgs {
+    prompt: String,
+    #[serde(default)]
+    max_iterations: Option<u32>,
+    #[serde(default)]
+    evaluator_model: Option<String>,
+}
+
 /// Bind goal evaluator resources through `runtime` and prepare the cancellable
 /// goal driver future.
 ///
@@ -510,7 +547,7 @@ pub async fn prepare_goal(
     );
     let has_hook = runtime
         .extension_registry()
-        .has_goal_evaluate_hook(Some(request.session))
+        .has_hook(Some(request.session), crate::evaluator::EVALUATE_HOOK)
         .await
         .unwrap_or(false);
     let evaluator: Arc<dyn GoalEvaluator> = if has_hook {
@@ -543,22 +580,37 @@ pub async fn prepare_goal(
     ))
 }
 
-/// Native ABI v2 [`GoalDriver`] exported by `hya/goal`.
-#[derive(Debug, Default)]
+/// Native ABI v2 driver `hya/goal:goal`, behind `hya -p`.
+#[derive(Debug, Default, Clone, Copy)]
 pub struct NativeGoalDriver;
 
 #[async_trait]
-impl GoalDriver for NativeGoalDriver {
-    fn id(&self) -> &str {
+impl NativeDriver for NativeGoalDriver {
+    fn name(&self) -> &str {
         GOAL_DRIVER_ID
     }
 
-    async fn run_goal(
+    async fn run(
         &self,
         runtime: Arc<dyn HostRuntime>,
-        request: GoalRunRequest,
+        request: DriverRequest,
         cancel: CancellationToken,
-    ) -> Result<DriverRunOutcome, HostError> {
-        prepare_goal(runtime, request, cancel).await?.await
+    ) -> Result<DriverReport, HostError> {
+        let args: GoalArgs = serde_json::from_value(request.args)
+            .map_err(|error| HostError::InvalidInput(format!("goal arguments: {error}")))?;
+        let run = GoalRunRequest {
+            session: request.session,
+            goal: args.prompt,
+            max_iterations: args.max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS),
+            max_wall_clock_secs: 1800,
+            agent: request.agent,
+            model: request.model,
+            config: serde_json::json!({ "evaluator_model": args.evaluator_model }),
+        };
+        let outcome = prepare_goal(runtime, run, cancel).await?.await?;
+        Ok(DriverReport {
+            stdout: format!("goal outcome: {outcome:?}\n"),
+            ..DriverReport::default()
+        })
     }
 }

@@ -1129,13 +1129,16 @@ impl Provider for WaitingMemberProvider {
 async fn member_fixture() -> (AppState, Arc<ResidentSupervisor>, SessionId, SessionId) {
     let provider = Arc::new(WaitingMemberProvider(tokio::sync::Notify::new()));
     let (permission, _) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(SessionEngine::new(
-        SessionStore::connect_memory().await.unwrap(),
-        Arc::new(ProviderRouter::new().with(provider.clone())),
-        support::test_runtime(Arc::new(hya_tool_loader::builtins())),
-        permission,
-        EventBus::default(),
-    ));
+    let engine = Arc::new(
+        SessionEngine::new(
+            SessionStore::connect_memory().await.unwrap(),
+            Arc::new(ProviderRouter::new().with(provider.clone())),
+            support::test_runtime(Arc::new(hya_tool_loader::builtins())),
+            permission,
+            EventBus::default(),
+        )
+        .with_legacy_coordination(),
+    );
     let agent = Arc::new(AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new("fake"),

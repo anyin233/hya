@@ -3,65 +3,45 @@
  * - Renders `plan_exit` (and alias `plan`) tool calls as a dedicated approval card.
  * - Contributes a `Plan` status badge while the open session runs the `hya-plan` agent.
  */
-import { defineTuiExtension, type RenderNode, type ToolCallInput, type TuiExtensionApi } from "@hya/tui-sdk";
+import { defineTuiExtension, type ToolCardPresentation, type ToolCallInput, type TuiExtensionApi } from "@hya/tui-sdk";
 
-function isPlanExitTool(tool: string): boolean {
-  return tool === "plan_exit" || tool === "plan" || tool === "plan__plan_exit";
-}
-
-function renderPlanExitCard(input: ToolCallInput): RenderNode | null {
-  if (!isPlanExitTool(input.tool)) return null;
-
+function renderPlanExitCard(input: ToolCallInput): ToolCardPresentation {
   const statusMeta = (() => {
     switch (input.status) {
       case "completed":
-        return { glyph: "✓", label: "approved · switching to build agent", color: "success" };
+        return "approved · switching to build agent";
       case "error":
-        return { glyph: "✗", label: "rejected", color: "warning" };
+        return "rejected";
       case "running":
-        return { glyph: "◌", label: "awaiting approval to exit plan mode", color: "warning" };
+        return "awaiting approval to exit plan mode";
       default:
-        return { glyph: "○", label: "preparing plan exit", color: "muted" };
+        return "preparing plan exit";
     }
   })();
 
-  const detail =
-    input.error
-      ? input.error
-      : typeof input.output === "string" && input.output.trim()
-        ? input.output.trim()
-        : input.status === "completed"
-          ? "User approved switching from plan mode to the build agent."
-          : input.status === "running"
-            ? "Confirm in the prompt dock to switch to the build agent."
-            : input.summary || "Requesting transition out of plan mode.";
+  const output = input.output;
+  const result = output && typeof output === "object" && "output" in output ? output.output : output;
+  const detail = typeof result === "string" && result.trim()
+    ? result.trim()
+    : input.status === "completed"
+      ? "User approved switching from plan mode to the build agent."
+      : input.status === "running"
+        ? "Confirm in the prompt dock to switch to the build agent."
+        : input.summary || "Requesting transition out of plan mode.";
 
   return {
-    kind: "box",
-    title: "Plan Mode Exit",
-    children: [
-      {
-        kind: "row",
-        children: [
-          { kind: "text", text: `${statusMeta.glyph} `, style: { color: statusMeta.color, bold: true } },
-          { kind: "text", text: statusMeta.label, style: { color: statusMeta.color, bold: true } },
-        ],
-      },
-      {
-        kind: "text",
-        text: detail,
-        style: { color: input.status === "error" ? "error" : "muted" },
-      },
-    ],
+    summary: "Plan Mode Exit",
+    statusChip: statusMeta,
+    expandedByDefault: true,
+    ...(input.error ? {} : { body: { kind: "text", text: detail, style: { color: "muted" } } }),
   };
 }
 
 export default defineTuiExtension({
   activate(api: TuiExtensionApi): void {
-    api.registerRenderer({
+    api.registerToolRenderer({
       id: "plan-exit-card",
-      target: "tool_call",
-      mode: "replace",
+      tools: ["plan_exit", "plan", "plan__plan_exit"],
       priority: 10,
       render: (input) => renderPlanExitCard(input),
     });

@@ -42,7 +42,7 @@ describe("extension runner v2", () => {
         api.onContext((next) => next.git?.branch !== "main");
       },
     }));
-    expect((await call(runner, "tui/initialize", { api_version: 2, sdk_version: "2.0.0", extension_id: "hya/multi-agent", permissions: [] })).result).toEqual({ api_version: 2, sdk_version: "2.0.0" });
+    expect((await call(runner, "tui/initialize", { api_version: 2, sdk_version: "2.0.0", extension_id: "hya/multi-agent", permissions: [] })).result).toEqual({ api_version: 2, sdk_version: "2.1.0" });
     expect((await call(runner, "tui/activate", { context })).result?.contributions).toEqual({
       panels: [{ id: "git", title: "Git", placement: "sidebar", replaces: "todos" }],
       panes: [{ id: "viewer", title: "Subagent", default_slot: "right", default_size: { width: "40%", min_width: 32 }, pinnable: true, closable: true }],

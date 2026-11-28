@@ -24,10 +24,6 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::HostError;
-use crate::extensions::{
-    GoalDriver, LoopDriver, NativeGoalEvaluateVerdict, NativeLoopPlanInput, NativePlannerOutput,
-    NativeVerifierVerdict,
-};
 
 // ---------------------------------------------------------------------------
 // HostSessionStore
@@ -139,6 +135,42 @@ pub trait HostSessionStore: Send + Sync {
     ) -> Result<Vec<SessionId>, HostError> {
         Ok(Vec::new())
     }
+
+    /// Stage an `Event::Extension` for `target`'s log that commits in the same
+    /// store transaction as the tool result `during` is producing.
+    ///
+    /// Call it from a `tool.execute.after` hook. When the result commits, the
+    /// host runs `on_commit` after the commit, in staging order; otherwise it
+    /// drops the event and `on_commit`. Returns `InvalidInput` when `during`
+    /// has no tool result in its after-hooks.
+    fn stage_extension_event(
+        &self,
+        _during: SessionId,
+        _target: SessionId,
+        _bundle: &str,
+        _kind: &str,
+        _payload: Value,
+        _on_commit: Option<Box<dyn FnOnce() + Send>>,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable(
+            "staged extension events are unavailable".into(),
+        ))
+    }
+
+    /// Append `events` (each to its own session log) in one transaction.
+    ///
+    /// The batch commits only when `fence` (if any) is the current holder of
+    /// its session fence and each `(session, seq)` in `expect` is still that
+    /// session's last sequence; otherwise nothing is written and the call
+    /// returns [`HostError::StaleClaim`] or [`HostError::Conflict`].
+    async fn append_batch(
+        &self,
+        _fence: Option<ActorClaim>,
+        _expect: Vec<(SessionId, EventSeq)>,
+        _events: Vec<(SessionId, Event)>,
+    ) -> Result<Vec<Envelope>, HostError> {
+        Err(HostError::Unavailable("batch append is unavailable".into()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +229,43 @@ pub struct BundleClaimLease {
 /// Generic bundle KV (`bundle_state`) and fenced lease (`bundle_claim`) storage.
 #[async_trait]
 pub trait HostBundleStorage: Send + Sync {
+    /// Read a process-local JSON value in a bundle's session scope.
+    fn get_transient_state(
+        &self,
+        _bundle: &str,
+        _session: SessionId,
+        _key: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Err(HostError::Unavailable(
+            "transient state is unavailable".into(),
+        ))
+    }
+
+    /// Set a process-local value, or remove it with `None`.
+    fn set_transient_state(
+        &self,
+        _bundle: &str,
+        _session: SessionId,
+        _key: &str,
+        _value: Option<Value>,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable(
+            "transient state is unavailable".into(),
+        ))
+    }
+
+    /// Watch one key's current value and subsequent changes, including removal.
+    fn subscribe_transient_state(
+        &self,
+        _bundle: &str,
+        _session: SessionId,
+        _key: &str,
+    ) -> Result<tokio::sync::watch::Receiver<Option<Value>>, HostError> {
+        Err(HostError::Unavailable(
+            "transient state is unavailable".into(),
+        ))
+    }
+
     /// Read one `bundle_state` entry.
     async fn get_state(
         &self,
@@ -260,12 +329,24 @@ pub trait HostBundleStorage: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Request to execute a single turn on an existing session.
+///
+/// A fenced turn (`actor_claim: Some`) runs as a child of its parent's
+/// binding (a session without a parent is [`HostError::InvalidInput`]): the
+/// fence is a `hya/multi-agent` claim keyed by the session id, and the host
+/// admits the prompt under it, resolves the agent, its system prompt, roster, and
+/// resource policy from the parent, re-validates the fence before each round
+/// and before opening each stream, fences every append, and keeps one
+/// sidecar for the session from its first fenced turn until the fence is
+/// released or the process stops. A lost sidecar fails the running turn with
+/// [`HostError::Unavailable`]. An unfenced turn binds the session itself and
+/// starts a sidecar per turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TurnStartRequest {
     /// Target session id.
     pub session: SessionId,
-    /// User/directive prompt text for this turn.
-    pub prompt: String,
+    /// User/directive prompt admitted before the turn; `None` runs on the
+    /// log tail the caller appended.
+    pub prompt: Option<String>,
     /// Optional agent override for this turn.
     pub agent: Option<AgentName>,
     /// Optional model override for this turn.
@@ -276,6 +357,25 @@ pub struct TurnStartRequest {
     pub metadata: Option<Value>,
     /// Optional actor claim fencing this turn.
     pub actor_claim: Option<ActorClaim>,
+    /// Guidance layer composed into the system prompt for this turn.
+    pub guidance: Option<String>,
+    /// Explicit model route resolved with [`HostModelCaller::resolve_model_route`].
+    pub route: Option<ResolvedModelRoute>,
+    /// Whether the turn queues behind an active turn or starts only when idle.
+    pub start: TurnStart,
+}
+
+/// How [`HostTurnRunner::run_turn`] takes the session's single turn lease.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnStart {
+    /// Wait for an active turn to end, then run.
+    #[default]
+    Always,
+    /// Take the lease atomically, or return [`HostError::Conflict`] without
+    /// admitting the prompt when a turn is active; `run_turn` returns
+    /// `Conflict` for no other reason.
+    IfIdle,
 }
 
 /// Request to spawn a new session (and optionally immediately run a turn).
@@ -501,18 +601,13 @@ pub struct MemberMailRevivalRequest {
     pub actor_claim: Option<ActorClaim>,
 }
 
-/// Staged unread-mail acknowledgment to be committed atomically alongside a
-/// tool result (ADR-0001 / atomic tool-result + `mail_consumed` invariant).
-#[derive(Clone, Debug, PartialEq)]
-pub struct StagedMailAck {
-    /// Team root session receiving the `mail_consumed` extension event.
-    pub root: SessionId,
-    /// Durable `Event::Extension` (`hya/agent-channels::mail_consumed`) to commit.
-    pub event: Event,
-    /// Updated local inbox watermark after acknowledgment.
-    pub mark: u64,
-    /// Whether incoming (non-self) unread mail was consumed.
-    pub consumed_incoming: bool,
+/// Result of archiving a session subtree.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionTreeArchive {
+    /// Whether an active turn of the requested session was cancelled.
+    pub cancelled_turn: bool,
+    /// Sessions newly archived below the requested session, descendants first.
+    pub descendants: Vec<SessionId>,
 }
 
 /// Session creation and turn-driving capability without linking `hya-engine`.
@@ -520,6 +615,19 @@ pub struct StagedMailAck {
 pub trait HostTurnRunner: Send + Sync {
     /// Create a session according to `request` without starting a turn.
     async fn spawn_session(&self, request: TurnSpawnRequest) -> Result<SessionId, HostError>;
+
+    /// Return direct child IDs in creation order, including archived children.
+    async fn list_child_sessions(&self, _parent: SessionId) -> Result<Vec<SessionId>, HostError> {
+        Err(HostError::Unavailable("session tree is unavailable".into()))
+    }
+
+    /// Archive this session and its descendants.
+    async fn archive_session_tree(
+        &self,
+        _root: SessionId,
+    ) -> Result<SessionTreeArchive, HostError> {
+        Err(HostError::Unavailable("session tree is unavailable".into()))
+    }
 
     /// Run a turn on an existing session and await its [`TurnOutcome`].
     async fn run_turn(
@@ -549,6 +657,7 @@ pub trait HostTurnRunner: Send + Sync {
     async fn turn_status(&self, session: SessionId) -> Result<TurnStatus, HostError>;
 
     /// Preflight team depth and capacity budget for `wanted` activations under `parent`.
+    // Adapter: removed in CHR-47.
     async fn preflight_member_capacity(
         &self,
         _parent: SessionId,
@@ -559,6 +668,7 @@ pub trait HostTurnRunner: Send + Sync {
 
     /// Acquire a root-session driver activity guard keeping the resident team active
     /// until the returned handle is dropped.
+    // Adapter: removed in CHR-47.
     async fn begin_root_activity(
         &self,
         _parent: SessionId,
@@ -567,6 +677,7 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Spawn a parked managed resident child member under `request.parent`.
+    // Adapter: removed in CHR-47.
     async fn spawn_managed_member(
         &self,
         _request: ManagedMemberSpawnRequest,
@@ -577,6 +688,7 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Activate a parked managed resident child member and await settlement.
+    // Adapter: removed in CHR-47.
     async fn activate_managed_member(
         &self,
         _request: ManagedMemberActivateRequest,
@@ -588,11 +700,13 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// End a managed resident child member and release its live capacity slot.
+    // Adapter: removed in CHR-47.
     async fn end_managed_member(&self, _parent: SessionId, _handle: &str) -> Result<(), HostError> {
         Ok(())
     }
 
     /// Resolve the effective channel policy snapshot for `session`, if any.
+    // Adapter: removed in CHR-47.
     async fn session_channel_policy(
         &self,
         _session: SessionId,
@@ -601,37 +715,32 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Return the in-memory acknowledged inbox watermark for `session`, if tracked.
+    // Adapter: removed in CHR-47.
     fn mail_mark(&self, _session: SessionId) -> Option<u64> {
         None
     }
 
     /// Advance the in-memory mail watermark for `session` and notify listeners.
+    // Adapter: removed in CHR-47.
     fn notify_mail_consumed(&self, _session: SessionId, _mark: u64, _consumed_incoming: bool) {}
 
     /// Return `true` when `handle` under `root` is currently parked by an explicit
     /// user stop/cancellation and should not receive in-flight resident wakeups.
+    // Adapter: removed in CHR-47.
     fn is_member_stopped_by_user(&self, _root: SessionId, _handle: &str) -> bool {
         false
     }
 
-    /// Return `true` when unread-mail steering is currently suppressed for `session`
-    /// (for example after `report` latched or while a defer-steer batch is active).
-    fn is_mail_steer_suppressed(&self, _session: SessionId) -> bool {
-        false
-    }
-
     /// Return the active fenced actor claim for the running turn on `session`, if any.
+    // Adapter: removed in CHR-47.
     fn active_actor_claim(&self, _session: SessionId) -> Option<ActorClaim> {
         None
     }
 
-    /// Stage a `mail_consumed` acknowledgment to be committed atomically with the
-    /// current tool result on `session`.
-    fn stage_mail_steer_ack(&self, _session: SessionId, _ack: StagedMailAck) {}
-
     /// Revive an archived direct child member and deliver its pending DM mail.
     ///
     /// Returns the delivered recipient count (`1`) on success.
+    // Adapter: removed in CHR-47.
     async fn revive_archived_member_with_mail(
         &self,
         _request: MemberMailRevivalRequest,
@@ -643,6 +752,7 @@ pub trait HostTurnRunner: Send + Sync {
 
     /// Archive a subagent session on the user's behalf, cancelling any active
     /// turn and archiving live descendants first.
+    // Adapter: removed in CHR-47.
     async fn archive_subagent(
         &self,
         _child: SessionId,
@@ -653,6 +763,7 @@ pub trait HostTurnRunner: Send + Sync {
     }
 
     /// Steer a subagent session with a user message delivered on its parent DM.
+    // Adapter: removed in CHR-47.
     async fn steer_subagent(
         &self,
         _child: SessionId,
@@ -834,6 +945,24 @@ pub struct ScopeCatalogSnapshot {
     pub bundles: Vec<Bundle>,
     /// Stable runtime fingerprint covering active catalogs/bundles.
     pub runtime_fingerprint: String,
+    /// Sources the scope skipped, one line each (`installed bundle <id>:
+    /// <error>`, `project bundle <dir>: <error>`), in load order.
+    pub diagnostics: Vec<String>,
+}
+
+/// Inputs of [`HostCatalogReader::resolve_agent_model`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentModelRequest {
+    /// Session whose binding (and agent model preferences) the child inherits.
+    pub parent: SessionId,
+    /// Agent the child session runs.
+    pub agent: AgentName,
+    /// Model the caller named, if any.
+    pub model: Option<ModelRef>,
+    /// Model category the caller named, if any.
+    pub category: Option<String>,
+    /// Reasoning effort the caller named, if any.
+    pub effort: Option<String>,
 }
 
 /// Read-only access to agents, skills, bundles, and effective configuration.
@@ -878,8 +1007,23 @@ pub trait HostCatalogReader: Send + Sync {
         ))
     }
 
+    /// Resolve the model (with any `#effort` suffix) a child of
+    /// `request.parent` running `request.agent` uses, with the spawn
+    /// precedence of `task`: from lowest to highest, the base model, the
+    /// agent's remembered preference, its category, its model, the request's
+    /// category, and the request's model matched against the provider catalog.
+    /// The parent's agent must be allowed to spawn `request.agent`.
+    async fn resolve_agent_model(
+        &self,
+        _request: AgentModelRequest,
+    ) -> Result<ModelRef, HostError> {
+        Err(HostError::Unavailable(
+            "agent model resolution is unavailable in this runtime".into(),
+        ))
+    }
+
     /// Authorize spawning `agent` from `caller` within `session`'s active scope.
-    async fn authorize_workflow_agent(
+    async fn authorize_agent_run(
         &self,
         _session: SessionId,
         _caller: &AgentName,
@@ -911,10 +1055,8 @@ pub enum ExtensionKind {
     ProjectionReducer,
     /// Custom URI scheme handler (`scheme://`).
     UriScheme,
-    /// Goal iteration driver.
-    GoalDriver,
-    /// Loop iteration driver.
-    LoopDriver,
+    /// Run driver.
+    Driver,
 }
 
 /// Descriptor for one registered extension item.
@@ -983,49 +1125,26 @@ pub trait HostExtensionRegistry: Send + Sync {
         cancel: CancellationToken,
     ) -> Result<Value, HostError>;
 
-    /// Return `true` when at least one `goal.evaluate` hook provider is
-    /// registered for `session` (or globally when `session` is `None`).
-    async fn has_goal_evaluate_hook(&self, _session: Option<SessionId>) -> Result<bool, HostError> {
+    /// Whether any hook bound to `session` implements the bundle-declared
+    /// hook point `point` (`<bundle-id>:<name>`).
+    async fn has_hook(&self, session: Option<SessionId>, point: &str) -> Result<bool, HostError> {
+        let _ = (session, point);
         Ok(false)
     }
 
-    /// Dispatch the `goal.evaluate` hook chain for `session`, returning
-    /// `Ok(None)` when no `goal.evaluate` provider is registered.
-    async fn invoke_goal_evaluate_hook(
+    /// Dispatch the bundle-declared hook point `point` for `session`: the
+    /// first implementer that answers wins, a failing implementer is skipped
+    /// with a warning, and `Ok(None)` means no implementer answered.
+    ///
+    /// # Errors
+    /// [`HostError::InvalidInput`] when no loaded bundle declares `point`.
+    async fn invoke_hook(
         &self,
-        _session: Option<SessionId>,
-        _condition: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeGoalEvaluateVerdict>, HostError> {
-        Ok(None)
-    }
-
-    /// Consult registered `loop.should_stop` hooks for `session` (`Ok(None)` when none stop).
-    async fn invoke_loop_should_stop(
-        &self,
-        _session: SessionId,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<String>, HostError> {
-        Ok(None)
-    }
-
-    /// Invoke registered `loop.verifier` hooks for `session` (`Ok(None)` when unregistered).
-    async fn invoke_loop_verify(
-        &self,
-        _session: SessionId,
-        _target: &str,
-        _transcript: &str,
-    ) -> Result<Option<NativeVerifierVerdict>, HostError> {
-        Ok(None)
-    }
-
-    /// Invoke registered `loop.planner` hooks for `session` (`Ok(None)` when unregistered).
-    async fn invoke_loop_plan(
-        &self,
-        _session: SessionId,
-        _input: NativeLoopPlanInput,
-    ) -> Result<Option<NativePlannerOutput>, HostError> {
+        session: Option<SessionId>,
+        point: &str,
+        input: Value,
+    ) -> Result<Option<Value>, HostError> {
+        let _ = (session, point, input);
         Ok(None)
     }
 }
@@ -1061,15 +1180,4 @@ pub trait HostRuntime: Send + Sync {
 
     /// Query and invoke registered extensions and bundle APIs.
     fn extension_registry(&self) -> &dyn HostExtensionRegistry;
-
-    /// Look up the active [`GoalDriver`] registered by a loaded native bundle
-    /// (such as `hya/goal`), returning `None` when disabled or in `--bare` mode.
-    fn goal_driver(&self) -> Option<Arc<dyn GoalDriver>> {
-        None
-    }
-
-    /// Return the active [`LoopDriver`] registered by `hya/loop`, if loaded.
-    fn loop_driver(&self) -> Option<Arc<dyn LoopDriver>> {
-        None
-    }
 }

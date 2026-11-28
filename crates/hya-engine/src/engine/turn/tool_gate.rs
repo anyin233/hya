@@ -1,4 +1,4 @@
-//! One tool call of a full-mode turn, for its harness's `ToolGate`: hooks,
+//! One tool call of a turn, for its harness's `ToolGate`: hooks,
 //! permissions, tool context, file snapshots, output capping, and steer
 //! notices around the call.
 
@@ -19,13 +19,13 @@ use super::messages::hidden_behind;
 use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
-    HookDispatcher, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative, activation_hook_for,
+    HookChain, NativeToolAfterInput, NativeToolBeforeInput, NativeToolBeforeOutcome,
+    NativeToolResult, activation_hook_for,
 };
 use crate::kernel::ToolCall;
 use crate::runtime_registry::CompiledResourceView;
 
-/// One round's tool calls of a full-mode turn.
+/// One round's tool calls.
 pub(super) struct TurnToolGate<'a> {
     pub(super) engine: &'a SessionEngine,
     pub(super) session: SessionId,
@@ -39,32 +39,21 @@ pub(super) struct TurnToolGate<'a> {
     pub(super) actor_claim: Option<&'a ActorClaim>,
     pub(super) guidance: &'a Option<Arc<str>>,
     pub(super) cancel: &'a tokio_util::sync::CancellationToken,
-    /// Set when a `report` of this turn is accepted.
-    pub(super) report_latch: &'a ReportLatch,
+    pub(super) state: &'a mut ToolState,
     /// Engine handle for nested tool calls, cloned once per turn on first use.
     pub(super) nested_engine: &'a mut Option<Arc<SessionEngine>>,
     pub(super) defer_steer: bool,
     pub(super) parent_session: Option<SessionId>,
     /// Tool schemas the round's request offered.
     pub(super) offered: &'a [ToolSchema],
+    /// Parent links between the session and its tree root.
+    pub(super) depth: u32,
 }
 
-/// Whether a turn's agent delivers by `report`, so its deadline notices
-/// take the text for that.
-pub(super) fn can_report(
-    engine: &SessionEngine,
-    binding: &TurnBinding,
-    agent: &AgentSpec,
-    parent_session: Option<SessionId>,
-    offered: &[ToolSchema],
-) -> Result<bool, CoreError> {
-    let policy = crate::channel_policy::from_binding(binding)
-        .map_err(CoreError::bundle)?
-        .snapshot_for(agent.name.as_str());
-    Ok(parent_session.is_some()
-        && engine.lifecycle.is_connected()
-        && crate::lifecycle::report_allowed(policy)
-        && offered.iter().any(|tool| tool.name.as_str() == "report"))
+#[derive(Default)]
+pub(super) struct ToolState {
+    pub(super) done: bool,
+    report_latch: ReportLatch,
 }
 
 impl TurnToolGate<'_> {
@@ -83,11 +72,12 @@ impl TurnToolGate<'_> {
             actor_claim,
             guidance,
             cancel,
-            report_latch,
+            ref mut state,
             ref mut nested_engine,
             ref mut defer_steer,
             parent_session,
             offered,
+            depth,
         } = self;
         engine.validate_actor_claim(actor_claim).await?;
         let activation_hooks = activation_hook_for(session);
@@ -97,13 +87,11 @@ impl TurnToolGate<'_> {
             call: tc.call,
             tool: &tc.name,
         };
-        let has_hooks =
-            engine.native_hooks.is_some() || engine.hooks.is_some() || activation_hooks.is_some();
-        if has_hooks {
+        let tool_hooks = engine.active_hook_dispatcher(session);
+        let has_hooks = tool_hooks.is_some();
+        if let Some(hooks) = &tool_hooks {
             let input = apply_tool_execute_before_hooks(
-                engine.native_hooks.as_ref(),
-                engine.hooks.as_ref(),
-                activation_hooks.as_ref(),
+                hooks,
                 &hook_context,
                 std::mem::take(&mut tc.input),
             )
@@ -136,6 +124,8 @@ impl TurnToolGate<'_> {
         let nested_stamps = Arc::new(Mutex::new(BTreeMap::new()));
         let behind = hidden_behind(offered, engine.exclusive_tool.as_deref(), tc.name.as_str());
         let wait_ack = hya_tool::WaitAckSlot::default();
+        let mut ends_turn = false;
+        let mut suppresses_notices = false;
         let collect_tool = async {
             Ok::<_, CoreError>(match (behind, resources.resolve_tool(&tc.name)) {
                 (Some(exclusive), Some(_)) => (
@@ -179,28 +169,16 @@ impl TurnToolGate<'_> {
                                 )
                                 .with(
                                     engine
-                                        .mailbox
-                                        .for_session_with_actor(session, actor_claim.copied())
-                                        .with_channel_policy(channel_policy),
-                                )
-                                .with(
-                                    engine
                                         .lifecycle
                                         .for_session_with_actor(session, actor_claim.copied())
                                         .with_channel_policy(channel_policy)
-                                        .with_report_latch(report_latch.clone())
+                                        .with_report_latch(state.report_latch.clone())
                                         .with_wait_ack(wait_ack.clone()),
                                 )
                                 .with(engine.project_activity.for_session(session))
                                 .with(agents.clone());
                             if let Some(parent) = parent_session {
                                 extensions.insert(hya_tool::ParentSession(parent));
-                            }
-                            if engine.lsp.is_configured() {
-                                extensions.insert(engine.lsp.clone());
-                            }
-                            if engine.formatter.is_configured() {
-                                extensions.insert(engine.formatter.clone());
                             }
                             let mut ctx = ToolCtx {
                                 workdir: binding.workdir().to_path_buf(),
@@ -218,7 +196,12 @@ impl TurnToolGate<'_> {
                                 extensions,
                             };
                             let visibility = engine
-                                .tool_visibility_outcome(session, Some(&live_agent.name), resources)
+                                .tool_visibility_outcome(
+                                    session,
+                                    Some(&live_agent.name),
+                                    resources,
+                                    depth,
+                                )
                                 .await;
                             let nested = super::super::nested_tools::TurnNestedTools {
                                 engine: Arc::clone(
@@ -250,10 +233,13 @@ impl TurnToolGate<'_> {
                             ))
                             .await;
                             engine.validate_actor_claim(actor_claim).await?;
-                            resolved
+                            let result = resolved
                                 .tool
                                 .execute(&ctx, std::mem::take(&mut tc.input))
-                                .await
+                                .await;
+                            ends_turn = result.is_ok() && resolved.tool.ends_turn();
+                            suppresses_notices = resolved.tool.suppresses_notices();
+                            result
                         }
                         Err(error) => Err(error),
                     };
@@ -270,6 +256,57 @@ impl TurnToolGate<'_> {
             () = cancel.cancelled() => (Err(ToolError::Cancelled), hya_tool::ToolResultPolicy::Default),
             result = collect_tool => result?,
         };
+        let mut artifact_guard =
+            BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
+        let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        engine.validate_actor_claim(actor_claim).await?;
+        let mut staged = Vec::new();
+        let mut hooks_unhealthy = false;
+        let replacement =
+            if !cancel.is_cancelled() && !matches!(&result, Err(ToolError::Cancelled)) && has_hooks
+            {
+                let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
+                let mut native = match &result {
+                    Ok(output) => NativeToolResult::Ok {
+                        output: output.clone(),
+                        time_ms,
+                    },
+                    Err(e) => NativeToolResult::Err {
+                        message: e.to_string(),
+                    },
+                };
+                let original_native = native.clone();
+                engine.open_staged_events(session);
+                engine.set_mail_steer_suppressed(
+                    session,
+                    state.report_latch.is_set()
+                        || *defer_steer
+                        || wait_ack.saw_wait()
+                        || ends_turn
+                        || suppresses_notices,
+                );
+                native = apply_tool_execute_after_hooks(
+                    tool_hooks.as_deref().unwrap_or(&HookChain::default()),
+                    &hook_context,
+                    input_for_after.unwrap_or_default(),
+                    native,
+                )
+                .await;
+                engine.set_mail_steer_suppressed(session, false);
+                staged = engine.take_staged_events(session);
+                hooks_unhealthy = activation_hooks
+                    .as_ref()
+                    .is_some_and(|hooks| !hooks.is_healthy());
+                (!was_permission_err && native != original_native).then(|| match native {
+                    NativeToolResult::Ok { output, .. } => Ok(output),
+                    NativeToolResult::Err { message } => Err(ToolError::Other(message)),
+                })
+            } else {
+                None
+            };
+        // Stamp after the after-hooks so a file they rewrote (a formatter) is
+        // the tool's own change, not an external one; the capture still sees
+        // the tool's own result.
         let (changed, stamps) = Box::pin(file_capture.finish(
             &engine.store,
             session,
@@ -282,60 +319,13 @@ impl TurnToolGate<'_> {
         if let Some(changed) = changed {
             engine.emit_for_actor(actor_claim, session, changed).await?;
         }
+        if hooks_unhealthy {
+            return Err(CoreError::Cancelled);
+        }
         let mut stamps_by_path = std::mem::take(&mut *nested_stamps.lock().await);
         stamps_by_path.extend(stamps.into_iter().map(|file| (file.path.clone(), file)));
-        let mut artifact_guard =
-            BashArtifactGuard::capture(tc.name.as_str(), result.as_ref().ok(), binding.workdir());
-        let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        engine.validate_actor_claim(actor_claim).await?;
-        let mut was_hook_replaced = false;
-        let result =
-            if !cancel.is_cancelled() && !matches!(&result, Err(ToolError::Cancelled)) && has_hooks
-            {
-                let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));
-                let mut native = match &result {
-                    Ok(output) => ToolOutcomeNative::Ok {
-                        output: output.clone(),
-                        time_ms,
-                    },
-                    Err(e) => ToolOutcomeNative::Err {
-                        message: e.to_string(),
-                    },
-                };
-                let original_native = native.clone();
-                let _ = engine.take_staged_mail_ack(session);
-                engine.set_mail_steer_suppressed(
-                    session,
-                    report_latch.is_set() || *defer_steer || wait_ack.saw_wait(),
-                );
-                native = apply_tool_execute_after_hooks(
-                    engine.native_hooks.as_ref(),
-                    engine.hooks.as_ref(),
-                    activation_hooks.as_ref(),
-                    &hook_context,
-                    input_for_after.unwrap_or_default(),
-                    native,
-                )
-                .await;
-                engine.set_mail_steer_suppressed(session, false);
-                if activation_hooks
-                    .as_ref()
-                    .is_some_and(|hooks| !hooks.is_healthy())
-                {
-                    return Err(CoreError::Cancelled);
-                }
-                if was_permission_err || native == original_native {
-                    result
-                } else {
-                    was_hook_replaced = true;
-                    match native {
-                        ToolOutcomeNative::Ok { output, .. } => Ok(output),
-                        ToolOutcomeNative::Err { message } => Err(ToolError::Other(message)),
-                    }
-                }
-            } else {
-                result
-            };
+        let was_hook_replaced = replacement.is_some();
+        let result = replacement.unwrap_or(result);
         let wait_state = wait_ack.take_state();
         let wait_ack = if wait_state.saw_wait {
             let intact = result.is_ok() && !was_hook_replaced && !cancel.is_cancelled();
@@ -344,9 +334,8 @@ impl TurnToolGate<'_> {
         } else {
             None
         };
-        let mail_mark = engine.mail_mark(session);
-        let staged_mail_ack = engine.take_staged_mail_ack(session);
         let tool_succeeded = result.is_ok();
+        state.done |= state.report_latch.is_set() || (ends_turn && tool_succeeded);
         let (event, retains_artifact) = match result {
             Ok(mut output) => {
                 artifact_guard.remove_unowned_path(&mut output);
@@ -367,13 +356,19 @@ impl TurnToolGate<'_> {
                 // Deadline notices ride the same result tail; unread-mail
                 // steering ran through the `hya/agent-channels` NativeHook
                 // during `apply_tool_execute_after_hooks`.
-                if !report_latch.is_set()
+                if !state.done
                     && let Some(deadline) = hya_tool::deadline::current()
                 {
                     if let Some(stage) = deadline.take_notice(session) {
-                        let can_report =
-                            can_report(engine, binding, live_agent, parent_session, offered)?;
-                        let notice = deadline.notice(stage, can_report);
+                        let delivery = super::hooks::delivery_tool(
+                            engine,
+                            binding,
+                            live_agent,
+                            resources,
+                            parent_session,
+                            offered,
+                        )?;
+                        let notice = deadline.notice(stage, delivery);
                         append_steer_notice(&mut output, &format!("\n\n{notice}"));
                     } else if let Some(clock) = deadline.take_clock(session) {
                         append_steer_notice(&mut output, &format!("\n\n{clock}"));
@@ -393,13 +388,22 @@ impl TurnToolGate<'_> {
                 )
             }
         };
-        let (acknowledgement, mail_mark, consumed_incoming) = match wait_ack {
-            Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
-            None if tool_succeeded => match staged_mail_ack {
-                Some(ack) => (Some(ack.event), Some(ack.mark), ack.consumed_incoming),
-                None => (None, mail_mark, false),
-            },
-            None => (None, mail_mark, false),
+        // A wait ack takes precedence; staged events commit only with a
+        // successful result, and dropped ones take their callbacks with them.
+        let (extra, wait_mail, callbacks) = match wait_ack {
+            Some(ack) => (
+                vec![ack.event],
+                Some((ack.mark, ack.consumed_incoming)),
+                Vec::new(),
+            ),
+            None if tool_succeeded => {
+                let (extra, callbacks) = staged
+                    .into_iter()
+                    .map(|staged| (staged.event, staged.on_commit))
+                    .unzip();
+                (extra, None, callbacks)
+            }
+            None => (Vec::new(), None, Vec::new()),
         };
         let mut events = vec![event];
         events.extend(observation(
@@ -408,9 +412,15 @@ impl TurnToolGate<'_> {
             stamps_by_path.into_values().collect(),
         ));
         engine
-            .emit_tool_result_with_mail(actor_claim, session, events, acknowledgement)
+            .emit_tool_result_with_staged(actor_claim, session, events, extra)
             .await?;
-        engine.notify_mail_consumed(session, mail_mark, consumed_incoming);
+        if let Some((mark, consumed_incoming)) = wait_mail {
+            engine.notify_mail_consumed(session, Some(mark), consumed_incoming);
+        }
+        callbacks
+            .into_iter()
+            .flatten()
+            .for_each(|on_commit| on_commit());
         if retains_artifact {
             artifact_guard.disarm();
         } else {
@@ -428,52 +438,41 @@ struct ToolHookContext<'a> {
 }
 
 async fn apply_tool_execute_before_hooks(
-    native: Option<&Arc<dyn HookDispatcher>>,
-    global: Option<&Arc<dyn HookDispatcher>>,
-    activation: Option<&Arc<dyn HookDispatcher>>,
+    hooks: &HookChain,
     context: &ToolHookContext<'_>,
-    mut input: serde_json::Value,
+    input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    for hooks in [native, global, activation].into_iter().flatten() {
-        match hooks
-            .tool_execute_before(ToolExecuteBeforeInput {
-                session: context.session,
-                message: context.message,
-                call: context.call,
-                tool: context.tool.to_string(),
-                input,
-            })
-            .await
-        {
-            ToolExecuteBeforeOutcome::Continue { input: next } => input = next,
-            ToolExecuteBeforeOutcome::Veto { reason } => return Err(reason),
-        }
+    match hooks
+        .tool_execute_before(NativeToolBeforeInput {
+            session: context.session,
+            message: context.message,
+            call: context.call,
+            tool: context.tool.to_string(),
+            input,
+        })
+        .await
+    {
+        NativeToolBeforeOutcome::Continue { input } => Ok(input),
+        NativeToolBeforeOutcome::Veto { reason } => Err(reason),
     }
-    Ok(input)
 }
 
 async fn apply_tool_execute_after_hooks(
-    native: Option<&Arc<dyn HookDispatcher>>,
-    global: Option<&Arc<dyn HookDispatcher>>,
-    activation: Option<&Arc<dyn HookDispatcher>>,
+    hooks: &HookChain,
     context: &ToolHookContext<'_>,
     input: serde_json::Value,
-    mut result: ToolOutcomeNative,
-) -> ToolOutcomeNative {
-    for hooks in [native, global, activation].into_iter().flatten() {
-        let ToolExecuteAfterOutcome::Continue { result: next } = hooks
-            .tool_execute_after(ToolExecuteAfterInput {
-                session: context.session,
-                message: context.message,
-                call: context.call,
-                tool: context.tool.to_string(),
-                input: input.clone(),
-                result,
-            })
-            .await;
-        result = next;
-    }
-    result
+    result: NativeToolResult,
+) -> NativeToolResult {
+    hooks
+        .tool_execute_after(NativeToolAfterInput {
+            session: context.session,
+            message: context.message,
+            call: context.call,
+            tool: context.tool.to_string(),
+            input,
+            result,
+        })
+        .await
 }
 
 /// Splice a steer notice into a tool result's model-facing text.
@@ -494,24 +493,5 @@ fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::append_steer_notice;
-
-    #[test]
-    fn steer_notices_on_one_result_accumulate() {
-        for (mut output, key, expected) in [
-            (
-                serde_json::json!({"output":"ok"}),
-                "output",
-                "ok\n\nmail\n\ntime",
-            ),
-            (serde_json::json!({"title":"t"}), "steer", "mail\n\ntime"),
-            (serde_json::json!({"output":42}), "steer", "mail\n\ntime"),
-            (serde_json::json!("ok"), "steer", "mail\n\ntime"),
-        ] {
-            append_steer_notice(&mut output, "\n\nmail");
-            append_steer_notice(&mut output, "\n\ntime");
-            assert_eq!(output[key], expected);
-        }
-    }
-}
+#[path = "tool_gate_tests.rs"]
+mod tests;

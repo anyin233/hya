@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use hya_tool::LspError;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
+use super::LspError;
 use super::config::ServerConfig;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -85,7 +85,7 @@ pub(super) fn file_uri(path: &Path) -> Result<String, LspError> {
     Ok(encoded)
 }
 
-fn uri_to_file_path(uri: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn uri_to_file_path(uri: &str) -> Option<std::path::PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let path_part = if let Some(after_local) = rest.strip_prefix("localhost/") {
         format!("/{after_local}")

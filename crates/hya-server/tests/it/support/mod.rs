@@ -178,11 +178,20 @@ pub fn test_agents() -> Vec<AgentFixture> {
     ]
 }
 
-/// One prepared bundle per agent, over the compiled-in built-ins and `hya/multi-agent`.
+/// One prepared bundle per agent, over the first-party `hya/core-agents` and
+/// `hya/multi-agent`.
 fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
+    let core_agents =
+        hya_bundle::first_party_bundle("hya/core-agents").expect("first-party hya/core-agents");
+    let is_core_agent = |id: &str| {
+        core_agents.bundles()[0]
+            .agents()
+            .iter()
+            .any(|agent| agent.id.as_str() == id)
+    };
     let mut out: Vec<Bundle> = agents
         .iter()
-        .filter(|agent| hya_engine::preset_agent(agent.stable_id).is_none())
+        .filter(|agent| !is_core_agent(agent.stable_id))
         .map(|agent| Bundle {
             check: None,
             format_version: 4,
@@ -248,6 +257,9 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
             overrides: None,
         })
         .collect();
@@ -263,6 +275,7 @@ fn prepared_bundles(agents: &[AgentFixture]) -> Vec<Bundle> {
     {
         out.extend(multi_agent.bundles().iter().cloned());
     }
+    out.extend(core_agents.bundles().iter().cloned());
     out
 }
 

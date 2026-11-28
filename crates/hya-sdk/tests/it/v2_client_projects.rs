@@ -18,7 +18,10 @@ async fn serve() -> String {
     let providers =
         Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new()))));
     let tools = Arc::new(hya_tool_loader::builtins());
-    let catalog = BundleCatalog::from_prepared(&[]).expect("catalog");
+    // `hya/core-agents` provides the default `hya-main` agent.
+    let core_agents =
+        hya_bundle::first_party_bundle("hya/core-agents").expect("first-party hya/core-agents");
+    let catalog = BundleCatalog::from_prepared(core_agents.bundles()).expect("catalog");
     let catalog = hya_engine::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog");
     let runtime = Arc::new(RuntimeRegistry::from_snapshot(
         tools.snapshot(),

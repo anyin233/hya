@@ -40,9 +40,9 @@ pub use coordination::{
 };
 pub use hook::{UNREAD_MAIL_STEER_HOOK_ID, UnreadMailSteerHook, append_steer_notice};
 pub use mail::{
-    CHANNEL_RANDOM_LEN, ChannelHistoryRead, ChannelKind, ChannelPolicySnapshot, MAIL_PREVIEW_CHARS,
-    MAIN_HANDLE, MailEndpoint, MailKind, SteeredMail, dm_channel_between, is_minted_channel_id,
-    mail_preview, mint_channel_id,
+    CHANNEL_RANDOM_LEN, ChannelHistoryRead, ChannelKind, ChannelPolicySnapshot, ChannelRow,
+    MAIL_PREVIEW_CHARS, MAIN_HANDLE, MailEndpoint, MailKind, MemberStatusRow, SteeredMail,
+    dm_channel_between, is_minted_channel_id, mail_preview, mint_channel_id,
 };
 pub use policy::{
     AGENT_CHANNELS_PRESET_ID, BIT_FOLLOW_UP, BIT_REPORT, BIT_RESIDENT_MAIL, BIT_SEND, BIT_STEER,

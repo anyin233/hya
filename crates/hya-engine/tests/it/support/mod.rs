@@ -12,18 +12,15 @@ use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, Bundle, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, ResourceView,
 };
+use hya_engine::hooks::{NativeToolAfterInput, NativeToolAfterOutcome, NativeToolResult};
 use hya_engine::{
-    AgentCatalog, AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
-    CommandExecuteBeforeOutcome, CreateSession, EventBus, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, RuntimeRegistry, SessionEngine, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    AgentCatalog, AgentSpec, CreateSession, EventBus, NativeHook, RuntimeRegistry, SessionEngine,
 };
 use hya_proto::{
-    AgentName, Envelope, ModelRef, PartProjection, Role, SessionId, SessionKind, ToolName,
-    ToolSchema,
+    AgentName, ModelRef, PartProjection, Role, SessionId, SessionKind, ToolName, ToolSchema,
 };
 use hya_provider::{Provider, ProviderRouter};
+use hya_runtime_abi::NativeRegistrations;
 use hya_store::SessionStore;
 use hya_tool::{
     PermissionPlane, PermissionRules, SkillDiscovery, Tool, ToolCtx, ToolError, ToolRegistry,
@@ -49,14 +46,36 @@ pub fn discover_local_skills(workdir: Option<&Path>, roots: &[PathBuf]) -> Skill
     discovery
 }
 
-/// One installed bundle per requested agent, over the compiled-in built-ins.
+/// The first-party `hya/core-agents` package (`hya-main`, `hya-title`).
+pub fn core_agents() -> &'static hya_bundle::PreparedCatalog {
+    hya_bundle::first_party_bundle("hya/core-agents").expect("first-party hya/core-agents")
+}
+
+/// `bundles` plus the first-party `hya/core-agents`.
+pub fn with_core_agents(bundles: &[Bundle]) -> Vec<Bundle> {
+    let mut all = bundles.to_vec();
+    all.extend(core_agents().bundles().iter().cloned());
+    all
+}
+
+fn is_core_agent(stable_id: &str) -> bool {
+    core_agents().bundles()[0]
+        .agents()
+        .iter()
+        .any(|agent| agent.id.as_str() == stable_id)
+}
+
+/// One installed bundle per requested agent, over the first-party
+/// `hya/core-agents` and (unless a fixture agent replaces one of its agents)
+/// `hya/multi-agent`.
 ///
 /// A bundle defines exactly one agent, so a fixture asking for N agents becomes
-/// N single-agent bundles.
+/// N single-agent bundles; a requested `hya-main` or `hya-title` is the
+/// first-party one.
 pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
     let mut bundles = agents
         .iter()
-        .filter(|(stable_id, _, _)| hya_engine::preset_agent(stable_id).is_none())
+        .filter(|(stable_id, _, _)| !is_core_agent(stable_id))
         .map(|(stable_id, role, can_spawn)| Bundle {
             check: None,
             format_version: 4,
@@ -102,6 +121,9 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
             commands: Vec::new(),
             runtime: None,
             permission_modes: vec![],
+            cli: Vec::new(),
+            requires: Vec::new(),
+            default_agent: None,
             overrides: None,
         })
         .collect::<Vec<_>>();
@@ -117,6 +139,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
     {
         bundles.extend(multi_agent.bundles().iter().cloned());
     }
+    bundles.extend(core_agents().bundles().iter().cloned());
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("test catalog must be valid: {catalog:?}");
@@ -128,24 +151,67 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
     Arc::new(catalog)
 }
 
-/// Agent catalog with no installed bundles: the compiled-in built-ins only.
+/// Agent catalog of the first-party `hya/core-agents` alone.
 pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
-    let bundles = BundleCatalog::from_verified_catalogs(&[]).expect("empty bundle catalog");
+    let bundles =
+        BundleCatalog::from_verified_catalogs(&[core_agents()]).expect("core-agents catalog");
     Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("builtin-only agent catalog"))
+}
+
+/// A runtime plus the `hya/agent-channels` registrations from the load that
+/// produced its tools, so [`fixture_engine`] starts the service those tools hold.
+pub struct TestRuntime {
+    pub runtime: Arc<RuntimeRegistry>,
+    pub channels: NativeRegistrations,
+}
+
+/// A custom registry plus a separate `hya/agent-channels` load: the hook, URI
+/// handler, and reducer work, while channels tools in `runtime` (if any) hold
+/// a service that is never started.
+impl From<Arc<RuntimeRegistry>> for TestRuntime {
+    fn from(runtime: Arc<RuntimeRegistry>) -> Self {
+        let mut channels = hya_tool_loader::load_v2(
+            "hya/agent-channels",
+            Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+        )
+        .expect("load hya/agent-channels");
+        channels.tools.clear();
+        Self { runtime, channels }
+    }
+}
+
+fn multi_agent_catalog() -> Arc<AgentCatalog> {
+    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").expect("hya/multi-agent");
+    let bundles = BundleCatalog::from_verified_catalogs(&[core_agents(), multi_agent])
+        .expect("multi-agent catalog");
+    Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("multi-agent agent catalog"))
 }
 
 /// Default runtime for root/main turn integration fixtures.
 ///
-/// Uses the compiled-in built-in roster plus `hya/multi-agent` and
+/// Uses the first-party `hya/core-agents` and `hya/multi-agent` rosters and
 /// workdir/root-only skill discovery (never reading `$HOME`) so tests stay
 /// hermetic and parallel-safe.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
-    let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").expect("hya/multi-agent");
-    let bundles =
-        BundleCatalog::from_verified_catalogs(&[multi_agent]).expect("multi-agent catalog");
-    let catalog =
-        Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("multi-agent agent catalog"));
-    test_runtime_with_catalog(tools, catalog)
+    test_runtime_with_catalog(tools, multi_agent_catalog())
+}
+
+/// [`test_runtime`] over every builtin tool bundle.
+pub fn builtin_test_runtime() -> TestRuntime {
+    builtin_test_runtime_with_catalog(multi_agent_catalog())
+}
+
+/// [`test_runtime_with_catalog`] over every builtin tool bundle.
+pub fn builtin_test_runtime_with_catalog(catalog: Arc<AgentCatalog>) -> TestRuntime {
+    let (tools, bundles) = hya_tool_loader::builtin_bundles().expect("builtin bundles");
+    let channels = bundles
+        .into_iter()
+        .find_map(|(id, regs)| (id == "hya/agent-channels").then_some(regs))
+        .expect("hya/agent-channels registrations");
+    TestRuntime {
+        runtime: test_runtime_with_catalog(Arc::new(tools), catalog),
+        channels,
+    }
 }
 
 /// Runtime backed by a custom agent catalog and workdir/root-only skill discovery.
@@ -161,6 +227,91 @@ pub fn test_runtime_with_catalog(
     )
 }
 
+/// The production turn path with only the tools explicitly installed by the test.
+pub fn kernel_engine(
+    store: SessionStore,
+    router: Arc<ProviderRouter>,
+    permission: PermissionPlane,
+    tools: &[Arc<dyn Tool>],
+) -> SessionEngine {
+    let registry = ToolRegistry::default();
+    for tool in tools {
+        let permission = match tool.name() {
+            "read" | "grep" => hya_tool::ToolPermission::ReadOnly,
+            "bash" => hya_tool::ToolPermission::Command,
+            _ => hya_tool::ToolPermission::Tool,
+        };
+        registry.register_builtin(tool.clone(), permission, [], "hya/bare", None);
+    }
+    kernel_engine_with_registry(store, router, permission, registry)
+}
+
+pub fn kernel_engine_with_registry(
+    store: SessionStore,
+    router: Arc<ProviderRouter>,
+    permission: PermissionPlane,
+    registry: ToolRegistry,
+) -> SessionEngine {
+    let bundles = Arc::new(BundleCatalog::from_verified_catalogs(&[]).unwrap());
+    let catalog = Arc::new(AgentCatalog::new(bundles).unwrap());
+    let runtime = Arc::new(RuntimeRegistry::new(registry, catalog).with_pure_skills(true));
+    SessionEngine::new(store, router, runtime, permission, EventBus::default())
+        .with_pure_context(true)
+}
+
+/// Compose real native extensions for the fixtures that exercise them.
+pub async fn fixture_engine(
+    store: SessionStore,
+    router: Arc<ProviderRouter>,
+    runtime: impl Into<TestRuntime>,
+    permission: PermissionPlane,
+    bus: EventBus,
+) -> SessionEngine {
+    let TestRuntime { runtime, channels } = runtime.into();
+    let regs = hya_tool_loader::load_v2(
+        "hya/compaction",
+        Arc::new(hya_tool_loader::MinimalHostRuntime::empty()),
+    )
+    .expect("load native rewriters");
+    let engine =
+        SessionEngine::new(store, router, runtime, permission, bus).with_rewriters(regs.rewriters);
+    let host = engine.host_runtime();
+    for service in &channels.services {
+        service
+            .start(Arc::clone(&host))
+            .await
+            .expect("start agent-channels service");
+    }
+    let engine = channels
+        .hooks
+        .into_iter()
+        .fold(engine, SessionEngine::with_hooks)
+        .with_uri_schema_handlers(channels.uri_schema_handlers, host)
+        .with_legacy_coordination();
+    engine.register_native_projection_reducers(regs.projection_reducers);
+    engine.register_native_projection_reducers(channels.projection_reducers);
+    engine
+}
+
+/// The `hya/compaction` rewriters with `keep_recent` set through the bundle's
+/// own config (each load binds its own runtime, so tests do not share it).
+pub fn compaction_rewriters(keep_recent: usize) -> Vec<Arc<dyn hya_context::rewrite::Rewriter>> {
+    hya_tool_loader::load_v2(
+        "hya/compaction",
+        Arc::new(hya_tool_loader::MinimalHostRuntime::with_bundle_config(
+            move |id| {
+                if id == "hya/compaction" {
+                    json!({ "keep_recent": keep_recent })
+                } else {
+                    Value::Null
+                }
+            },
+        )),
+    )
+    .expect("load native rewriters")
+    .rewriters
+}
+
 /// Compact `SessionEngine` with in-memory SQLite, builtin tools, and zero retry backoff.
 pub async fn engine_with_provider(
     provider: Arc<dyn Provider>,
@@ -168,7 +319,7 @@ pub async fn engine_with_provider(
 ) -> SessionEngine {
     engine_with_router_and_runtime(
         Arc::new(ProviderRouter::new().with(provider)),
-        test_runtime(Arc::new(hya_tool_loader::builtins())),
+        builtin_test_runtime(),
         rules,
     )
     .await
@@ -177,13 +328,43 @@ pub async fn engine_with_provider(
 /// Compact `SessionEngine` with custom router/runtime and zero retry backoff.
 pub async fn engine_with_router_and_runtime(
     router: Arc<ProviderRouter>,
-    runtime: Arc<RuntimeRegistry>,
+    runtime: impl Into<TestRuntime>,
     rules: PermissionRules,
 ) -> SessionEngine {
     let store = SessionStore::connect_memory().await.expect("memory store");
     let (permission, _rx) = PermissionPlane::new(rules);
-    SessionEngine::new(store, router, runtime, permission, EventBus::default())
+    fixture_engine(store, router, runtime, permission, EventBus::default())
+        .await
         .with_round_retry_waits(&ZERO_RETRY_WAITS)
+}
+
+/// The unread-mail notice the `hya/agent-channels` steer hook would show
+/// `session` now, under the session's cached channel policy.
+pub async fn steer_notice(engine: &SessionEngine, session: SessionId) -> Option<String> {
+    hya_agent_channels_core::AgentChannelsService::prepare_unread_steer(
+        engine.host_runtime().as_ref(),
+        session,
+    )
+    .await
+    .expect("prepare unread steer")
+    .and_then(|prepared| prepared.notice)
+}
+
+/// Read `channel` as `session` through the `hya/agent-channels` service.
+pub async fn read_channel(
+    engine: &SessionEngine,
+    session: SessionId,
+    channel: &str,
+    last: Option<usize>,
+) -> Result<hya_agent_channels_core::ChannelHistoryRead, hya_runtime_abi::HostError> {
+    hya_agent_channels_core::AgentChannelsService::read_channel_history(
+        engine.host_runtime().as_ref(),
+        None,
+        session,
+        channel,
+        last,
+    )
+    .await
 }
 
 /// Create a root project session on `engine`.
@@ -380,50 +561,33 @@ impl MaskFirstResult {
 }
 
 #[async_trait]
-impl HookDispatcher for MaskFirstResult {
-    fn dispatch_event(&self, _envelope: &Envelope) {}
+impl NativeHook for MaskFirstResult {
+    fn id(&self) -> &str {
+        "MaskFirstResult"
+    }
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolExecuteAfter]
+    }
 
-    async fn command_execute_before(
+    async fn tool_execute_after(
         &self,
-        input: CommandExecuteBeforeInput,
-    ) -> CommandExecuteBeforeOutcome {
-        CommandExecuteBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
-        TextCompleteOutcome::Continue { text: input.text }
-    }
-
-    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
-        MessageUserBeforeOutcome::Continue { text: input.text }
-    }
-
-    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
-        ChatParamsOutcome::Continue {
-            request: input.request,
-        }
-    }
-
-    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
-        ToolExecuteBeforeOutcome::Continue { input: input.input }
-    }
-
-    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
-        if let ToolOutcomeNative::Ok { output, .. } = &input.result
+        input: NativeToolAfterInput,
+    ) -> Result<NativeToolAfterOutcome, hya_runtime_abi::HostError> {
+        if let NativeToolResult::Ok { output, .. } = &input.result
             && let Some(path) = output["metadata"]["outputPath"].as_str()
         {
             *self.captured_output_path.lock().unwrap() = Some(path.to_string());
         }
-        ToolExecuteAfterOutcome::Continue {
+        Ok(NativeToolAfterOutcome::Continue {
             result: if self.masked.swap(true, Ordering::SeqCst) {
                 input.result
             } else {
-                ToolOutcomeNative::Ok {
+                NativeToolResult::Ok {
                     output: json!({ "masked": true }),
                     time_ms: 0,
                 }
             },
-        }
+        })
     }
 }
 

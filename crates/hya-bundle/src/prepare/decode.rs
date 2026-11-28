@@ -11,7 +11,7 @@ use super::extensions::{
 use super::parse::{normalize_source_path, validate_identity};
 use super::resources::validate_resource_views;
 use super::workflow::{is_canonical_workflow_path, validate_prepared_workflow};
-use super::{PREPARED_FORMAT_VERSION, channels_are_canonical, validate_tui};
+use super::{PREPARED_FORMAT_VERSION, channels_are_canonical, validate_relations, validate_tui};
 use crate::error::BundleError;
 use crate::model::{
     Bundle, PreparedAgent, PreparedBundleApis, PreparedBundleIndex, PreparedBundlePermissionModes,
@@ -59,6 +59,13 @@ impl PreparedCatalog {
                 return Err(BundleError::NonCanonicalPreparedCatalog);
             }
             validate_prepared_content_digests(bundle)?;
+            validate_relations(
+                &bundle.identity().id,
+                bundle.requires(),
+                bundle.default_agent(),
+                bundle.agents(),
+                bundle.workflow().is_some(),
+            )?;
             if prepared_bundle_digest(bundle)? != bundle.digest() {
                 return Err(BundleError::PreparedBundleDigestMismatch {
                     bundle_id: bundle.identity().id.clone(),
@@ -150,6 +157,7 @@ fn prepared_bundle_is_canonical(bundle: &Bundle) -> bool {
     }
     bundle.format_version == PREPARED_FORMAT_VERSION
         && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.id.as_str()))
+        && is_strictly_sorted(bundle.requires.iter().map(String::as_str))
         && channels_are_canonical(
             &bundle.channels,
             &bundle

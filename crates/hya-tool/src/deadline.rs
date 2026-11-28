@@ -551,24 +551,24 @@ impl RunDeadline {
         )
     }
 
-    /// The notice for `stage` (`WrapUp` or later); `subagent` selects the
-    /// text for an agent that delivers by `report`.
+    /// The notice for `stage` (`WrapUp` or later), naming the delivery tool
+    /// when the agent has one.
     #[must_use]
-    pub fn notice(&self, stage: Stage, subagent: bool) -> String {
+    pub fn notice(&self, stage: Stage, delivery_tool: Option<&str>) -> String {
         let (elapsed, budget, left) = (
             self.elapsed().as_secs(),
             self.budget.as_secs(),
             self.remaining().as_secs(),
         );
-        match (stage, subagent) {
-            (Stage::Normal | Stage::WrapUp, false) => format!(
+        match (stage, delivery_tool) {
+            (Stage::Normal | Stage::WrapUp, None) => format!(
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left. At the limit \
                  the run is killed and only files on disk count. Stop exploring and polishing: \
                  make sure every requested deliverable exists at its requested path and passes \
                  the request's own checks, then finish. Start only commands that finish well \
                  within the time left."
             ),
-            (Stage::Final | Stage::Over, false) => format!(
+            (Stage::Final | Stage::Over, None) => format!(
                 "HEADLESS RUN — FINAL {left}s: {elapsed}s of {budget}s used. Write any missing \
                  deliverable now from the work you have, commit if the request asks for a \
                  commit, then end your turn. If a delivered file already passes your checks, \
@@ -578,13 +578,13 @@ impl RunDeadline {
                  well \
                  within the time left."
             ),
-            (Stage::Normal | Stage::WrapUp, true) => format!(
+            (Stage::Normal | Stage::WrapUp, Some(tool)) => format!(
                 "HEADLESS RUN — TIME: {elapsed}s of {budget}s used, {left}s left in the whole \
                  run; at the limit every agent is stopped. Finish the piece in hand and call \
-                 `report` with what you have."
+                 `{tool}` with what you have."
             ),
-            (Stage::Final | Stage::Over, true) => {
-                format!("HEADLESS RUN — FINAL {left}s: call `report` now with what you have.")
+            (Stage::Final | Stage::Over, Some(tool)) => {
+                format!("HEADLESS RUN — FINAL {left}s: call `{tool}` now with what you have.")
             }
         }
     }
@@ -697,7 +697,7 @@ mod tests {
             Duration::from_secs(40),
         );
         assert_eq!(
-            deadline.notice(Stage::Final, false),
+            deadline.notice(Stage::Final, None),
             "HEADLESS RUN — FINAL 40s: 0s of 40s used. Write any missing deliverable now from \
              the work you have, commit if the request asks for a commit, then end your turn. \
              If a delivered file already passes your checks, do not edit it in place — test \
@@ -706,7 +706,7 @@ mod tests {
              fails. Start only commands that finish well within the time left."
         );
         assert_eq!(
-            deadline.notice(Stage::Final, true),
+            deadline.notice(Stage::Final, Some("report")),
             "HEADLESS RUN — FINAL 40s: call `report` now with what you have."
         );
     }

@@ -1,5 +1,6 @@
-//! CLI integration tests for `hya loop` routed through `hya/loop`'s `LoopDriver`,
-//! including `--bare` and disabled `hya/loop` error reporting.
+//! CLI integration tests for `hya loop`, the command the `hya/loop` bundle
+//! contributes: it runs the `hya/loop:loop` driver, and does not exist with
+//! `--bare` or with `hya/loop` disabled.
 
 use crate::common::{Scratch, TestResult};
 
@@ -7,7 +8,7 @@ use crate::common::{Scratch, TestResult};
 fn loop_succeeds_with_until_predicate_and_errors_cleanly_when_bare_or_disabled() -> TestResult {
     let scratch = Scratch::new("loop-cli")?;
 
-    // 1. Full mode: `hya loop --until true` succeeds via `hya/loop` `LoopDriver`.
+    // 1. Full mode: `hya loop --until true` succeeds via the `hya/loop:loop` driver.
     let ok = scratch
         .hya()
         .args([
@@ -33,7 +34,7 @@ fn loop_succeeds_with_until_predicate_and_errors_cleanly_when_bare_or_disabled()
         "unexpected stdout: {stdout}"
     );
 
-    // 2. `--bare` mode: `hya --bare loop` returns a clear actionable error.
+    // 2. `--bare` mode: no built-in bundle contributes `loop`.
     let bare = scratch
         .hya()
         .args([
@@ -53,11 +54,11 @@ fn loop_succeeds_with_until_predicate_and_errors_cleanly_when_bare_or_disabled()
         "expected `hya --bare loop` to fail cleanly"
     );
     assert!(
-        bare_stderr.contains("hya/loop") && bare_stderr.contains("--bare"),
-        "bare error must be actionable: {bare_stderr}"
+        bare_stderr.contains("unrecognized subcommand 'loop'"),
+        "bare `hya loop` must be an unknown command: {bare_stderr}"
     );
 
-    // 3. `config.yaml` with `hya/loop` disabled returns a clear actionable error.
+    // 3. With `hya/loop` disabled in `config.yaml`, `loop` is unknown too.
     let cfg_dir = scratch.0.join("config/hya");
     std::fs::create_dir_all(&cfg_dir)?;
     std::fs::write(
@@ -82,9 +83,49 @@ fn loop_succeeds_with_until_predicate_and_errors_cleanly_when_bare_or_disabled()
         "expected `hya loop` to fail when hya/loop is disabled"
     );
     assert!(
-        disabled_stderr.contains("hya/loop"),
-        "disabled error must mention hya/loop: {disabled_stderr}"
+        disabled_stderr.contains("unrecognized subcommand 'loop'"),
+        "disabled `hya loop` must be an unknown command: {disabled_stderr}"
     );
 
+    Ok(())
+}
+
+/// With no bundle claiming `-p` (`--bare`), `hya -p` runs one headless turn
+/// and prints its transcript; with `hya/goal` enabled it runs goal mode.
+#[test]
+fn prompt_runs_one_turn_when_bare_and_goal_mode_otherwise() -> TestResult {
+    let scratch = Scratch::new("prompt-cli")?;
+    let bare = scratch
+        .hya()
+        .args(["--bare", "--model", "hya/offline", "-p", "say hi"])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&bare.stdout);
+    assert!(
+        bare.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+    assert!(
+        stdout.contains("say hi") && !stdout.contains("goal outcome"),
+        "bare -p must print one turn's transcript: {stdout}"
+    );
+
+    let full = scratch
+        .hya()
+        .args([
+            "--model",
+            "hya/offline",
+            "-p",
+            "say hi",
+            "--max-iterations",
+            "1",
+        ])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&full.stdout);
+    assert!(
+        stdout.contains("goal outcome:"),
+        "full -p must run goal mode: {stdout}\n{}",
+        String::from_utf8_lossy(&full.stderr)
+    );
     Ok(())
 }

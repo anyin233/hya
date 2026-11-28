@@ -1,7 +1,8 @@
-//! T2.20, T2.25–T2.28, T2.30, T2.50–T2.52 — bundle policies & first-party / extra
-//! bundles: `hya/goal-loop` + patched `goal.evaluate`, installed channel policy,
-//! `hya-extra/zvec-grep` + `hya-extra/scout`, `hya-extra/jev-model-router`,
-//! `hya-extra/model-fallback`, `hya-extra/token-summary`, and `hya/code-mode` modes.
+//! T1.25, T2.20, T2.25–T2.28, T2.30, T2.50–T2.52 — bundle policies & first-party /
+//! extra bundles: `hya/coding-extras` formatting after edits, `hya/goal-loop` +
+//! patched `hya/goal:evaluate`, installed channel policy, `hya-extra/zvec-grep` +
+//! `hya-extra/scout`, `hya-extra/jev-model-router`, `hya-extra/model-fallback`,
+//! `hya-extra/token-summary`, and `hya/code-mode` modes.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::net::SocketAddr;
@@ -15,7 +16,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use hya_api::v2 as pb;
 use hya_bundle::{BundleSource, SourceFile, write_public_package};
-use hya_e2e::{E2eEnv, E2eEnvBuilder, fake_requests_from, text_step, tool_step, unique_temp_dir};
+use hya_e2e::{
+    E2eEnv, E2eEnvBuilder, fake_requests_from, text_step, tool_step, tools_step, unique_temp_dir,
+};
 use hya_proto::{Event, SessionId};
 use serde_json::{Value, json};
 use tokio::process::Command;
@@ -77,7 +80,7 @@ fn uninstall_bundle(env: &E2eEnv, id: &str) {
     );
 }
 
-/// T2.20 (`hya/goal-loop` preset + patched `goal.evaluate` injection) and
+/// T2.20 (`hya/goal-loop` preset + patched `hya/goal:evaluate` injection) and
 /// T2.25 (installed channel policy denies child sends; uninstall restores default).
 #[tokio::test]
 async fn goal_loop_and_channel_policy_bundles() {
@@ -89,9 +92,9 @@ for line in sys.stdin:
     req = json.loads(line)
     method = req.get("method")
     if method == "initialize":
-        result = {"protocol_version": 1, "plugin": {"id": "miao", "version": "1.0.0", "kind": "rust"}, "hooks": [{"name": "goal.evaluate"}], "tools": [], "workspaceAdapters": []}
+        result = {"protocol_version": 1, "plugin": {"id": "miao", "version": "1.0.0", "kind": "rust"}, "hooks": [{"name": "hya/goal:evaluate"}], "tools": [], "workspaceAdapters": []}
         print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
-    elif method == "hook/goal.evaluate":
+    elif method == "hook/hya/goal:evaluate":
         calls += 1
         with open(log_path, "a", encoding="utf-8") as log:
             log.write(json.dumps({"call": calls, "transcript": req["params"]["transcript"]}, ensure_ascii=False) + "\n")
@@ -154,7 +157,7 @@ for line in sys.stdin:
         .join("\n");
     assert!(skill_text.contains("Success criteria") && skill_text.contains("Re-ask rules"));
 
-    // 2. T2.20: patched `goal.evaluate` plugin pollutes goal session on second iteration.
+    // 2. T2.20: patched `hya/goal:evaluate` plugin pollutes goal session on second iteration.
     let plugin_dir = env.backend.project.join(".hya/plugins/miao");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::write(
@@ -217,7 +220,11 @@ for line in sys.stdin:
     );
     std::fs::remove_dir_all(&plugin_dir).unwrap();
 
-    // 2b. `hya -p` errors cleanly in `--bare` mode and when `hya/goal` is disabled.
+    // 2b. Without `hya/goal` (`--bare`, or disabled), `hya -p` runs one plain
+    // headless turn: no goal driver, no evaluator.
+    env.fake
+        .push_scripts([text_step("bare turn done")])
+        .unwrap();
     let bare_goal = Command::new(&env.backend.binary)
         .args(["--bare", "-p", "verify bare failure"])
         .env("XDG_CONFIG_HOME", &env.backend.xdg_config_home)
@@ -230,14 +237,13 @@ for line in sys.stdin:
         .output()
         .await
         .expect("spawn bare goal run");
+    let bare_stdout = String::from_utf8_lossy(&bare_goal.stdout);
     assert!(
-        !bare_goal.status.success(),
-        "hya --bare -p must fail when hya/goal is absent"
-    );
-    let bare_stderr = String::from_utf8_lossy(&bare_goal.stderr);
-    assert!(
-        bare_stderr.contains("hya/goal") && bare_stderr.contains("--bare"),
-        "expected actionable hya/goal error in --bare stderr, got: {bare_stderr}"
+        bare_goal.status.success()
+            && bare_stdout.contains("bare turn done")
+            && !bare_stdout.contains("goal outcome"),
+        "hya --bare -p must run one turn: {bare_stdout}\n{}",
+        String::from_utf8_lossy(&bare_goal.stderr)
     );
 
     let disabled_cfg_dir = tmp.path().join("disabled-goal-xdg");
@@ -259,14 +265,13 @@ for line in sys.stdin:
         .output()
         .await
         .expect("spawn disabled-goal run");
+    let disabled_stdout = String::from_utf8_lossy(&disabled_goal.stdout);
     assert!(
-        !disabled_goal.status.success(),
-        "hya -p must fail when hya/goal is disabled in config.yaml"
-    );
-    let disabled_stderr = String::from_utf8_lossy(&disabled_goal.stderr);
-    assert!(
-        disabled_stderr.contains("hya/goal") && disabled_stderr.contains("bundles.builtin"),
-        "expected actionable hya/goal disabled error in stderr, got: {disabled_stderr}"
+        disabled_goal.status.success()
+            && disabled_stdout.contains("[User] verify disabled hya/goal failure")
+            && !disabled_stdout.contains("goal outcome"),
+        "hya -p with hya/goal disabled must run one turn: {disabled_stdout}\n{}",
+        String::from_utf8_lossy(&disabled_goal.stderr)
     );
 
     // 3. T2.25: installed channel policy denies child sends; uninstall restores default delivery.
@@ -919,4 +924,149 @@ async fn code_mode_only_with_tools_and_default() {
         !listed.contains("hya/code-mode"),
         "promoted core code-mode must not appear as a bundle: {listed}"
     );
+}
+
+/// Upper-cases a `.txt` file in place: a formatter whose effect is visible in the bytes.
+const UPPERCASE_FORMATTER: &str = r#"formatter:
+  upper:
+    command: [sh, -c, 'v=$(tr a-z A-Z < "$1"); printf "%s\n" "$v" > "$1"', sh, "$FILE"]
+    extensions: [.txt]
+lsp: false
+"#;
+
+/// Write the `hya/coding-extras` formatter config and restart the backend so
+/// the bundle service reads it at startup.
+fn configure_uppercase_formatter(env: &mut E2eEnv) {
+    let dir = env
+        .backend
+        .xdg_config_home
+        .join("hya/bundles/hya%2Fcoding-extras");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.yml"), UPPERCASE_FORMATTER).unwrap();
+    env.reopen().expect("reopen with formatter config");
+}
+
+/// Run one prompt over the scripted rounds and return the session's events.
+async fn run_rounds(env: &E2eEnv, rounds: Vec<hya_e2e::ScriptStep>) -> Vec<hya_proto::Envelope> {
+    env.fake.push_scripts(rounds).unwrap();
+    let session = env.create_session().await.unwrap();
+    let turn = env.prompt(session, "edit the files").await.unwrap();
+    assert!(
+        turn.error_message.is_empty(),
+        "turn error: {}",
+        turn.error_message
+    );
+    assert_eq!(turn.state, pb::TurnState::Finished as i32);
+    env.events(session, None).await.unwrap()
+}
+
+/// Paths of `names` that a round-start cut reported as changed outside a tool.
+fn externally_observed(events: &[hya_proto::Envelope], names: &[&str]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Event::FilesObserved {
+                external: true,
+                files,
+                ..
+            } => Some(files),
+            _ => None,
+        })
+        .flatten()
+        .map(|stamp| stamp.path.clone())
+        .filter(|path| names.iter().any(|name| path.ends_with(&format!("/{name}"))))
+        .collect()
+}
+
+/// T1.25 — full mode formats files after `write`/`edit` (hashline's and the
+/// standard ones) and `apply_patch` through `hya/coding-extras`; a file the tool
+/// itself formatted is not reported as an external change; with
+/// `hya/coding-extras` disabled nothing formats.
+#[tokio::test]
+async fn coding_extras_formats_after_write_edit_and_apply_patch() {
+    // 1. Default full profile: `write`/`edit` are `hya/hashline`'s.
+    {
+        let mut env = E2eEnvBuilder::new().build().await.expect("full env");
+        configure_uppercase_formatter(&mut env);
+        let events = run_rounds(
+            &env,
+            vec![
+                tool_step("write", json!({"path": "a.txt", "content": "alpha\n"})),
+                tool_step(
+                    "edit",
+                    json!({
+                        "path": "a.txt",
+                        "edits": [{"op": "replace_text", "oldText": "ALPHA", "newText": "beta"}]
+                    }),
+                ),
+                tool_step(
+                    "apply_patch",
+                    json!({"patchText": "*** Begin Patch\n*** Add File: b.txt\n+gamma\n*** End Patch\n"}),
+                ),
+                tools_step(vec![
+                    ("read", json!({"path": "a.txt"})),
+                    ("read", json!({"path": "b.txt"})),
+                ]),
+                text_step("FORMATTED_FULL"),
+            ],
+        )
+        .await;
+        assert_eq!(env.read_project_file("a.txt").unwrap(), "BETA\n");
+        assert_eq!(env.read_project_file("b.txt").unwrap(), "GAMMA\n");
+        // `apply_patch` formats inline and the hook formats `write`/`edit`, both
+        // before the tool's file capture.
+        let external = externally_observed(&events, &["a.txt", "b.txt"]);
+        assert!(
+            external.is_empty(),
+            "formatter output seen as external: {external:?}"
+        );
+    }
+
+    // 2. `hya/hashline` disabled: the standard `write`/`edit` format the same way.
+    {
+        let mut env = E2eEnvBuilder::new()
+            .disable_builtin_bundle("hya/hashline")
+            .build()
+            .await
+            .expect("hashline-disabled env");
+        configure_uppercase_formatter(&mut env);
+        let events = run_rounds(
+            &env,
+            vec![
+                tool_step("write", json!({"path": "a.txt", "content": "alpha\n"})),
+                tool_step(
+                    "edit",
+                    json!({"path": "a.txt", "old": "ALPHA", "new": "beta"}),
+                ),
+                tool_step("read", json!({"path": "a.txt"})),
+                text_step("FORMATTED_STANDARD"),
+            ],
+        )
+        .await;
+        assert_eq!(env.read_project_file("a.txt").unwrap(), "BETA\n");
+        let external = externally_observed(&events, &["a.txt"]);
+        assert!(
+            external.is_empty(),
+            "formatter output seen as external: {external:?}"
+        );
+    }
+
+    // 3. `hya/coding-extras` disabled: nothing formats.
+    {
+        let mut env = E2eEnvBuilder::new()
+            .disable_builtin_bundle("hya/coding-extras")
+            .build()
+            .await
+            .expect("coding-extras-disabled env");
+        configure_uppercase_formatter(&mut env);
+        run_rounds(
+            &env,
+            vec![
+                tool_step("write", json!({"path": "a.txt", "content": "alpha\n"})),
+                text_step("UNFORMATTED"),
+            ],
+        )
+        .await;
+        assert_eq!(env.read_project_file("a.txt").unwrap(), "alpha\n");
+    }
 }

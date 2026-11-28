@@ -65,8 +65,8 @@ test("plan renders plan_exit tool cards, ignores unrelated tools, and shows Plan
         output: "User approved switching to build agent.",
       } as unknown as JsonValue,
     });
-    expect(flatten(approved.root).join("\n")).toContain("Plan Mode Exit");
-    expect(flatten(approved.root).join("\n")).toContain("approved · switching to build agent");
+    expect(approved.card?.summary).toBe("Plan Mode Exit");
+    expect(approved.card?.statusChip).toBe("approved · switching to build agent");
 
     const rejected = await call("tui/render", {
       surface: { kind: "renderer", id: "plan-exit-card" },
@@ -81,8 +81,8 @@ test("plan renders plan_exit tool cards, ignores unrelated tools, and shows Plan
         error: "plan exit rejected by user",
       } as unknown as JsonValue,
     });
-    expect(flatten(rejected.root).join("\n")).toContain("rejected");
-    expect(flatten(rejected.root).join("\n")).toContain("plan exit rejected by user");
+    expect(rejected.card?.statusChip).toBe("rejected");
+    expect(rejected.root).toBeNull();
 
     // Unrelated tools fall back cleanly to built-in host rendering.
     const other = await call("tui/render", {

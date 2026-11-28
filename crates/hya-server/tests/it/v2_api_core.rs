@@ -66,10 +66,11 @@ async fn session_crud_defaults_and_error_model() {
     let app = router(hello_state().await);
     let workdir = std::env::temp_dir().to_string_lossy().into_owned();
 
-    // Empty agent/model falls back to server default; explicit model keeps default agent.
+    // Empty agent falls back to the bound catalog's default agent, empty model
+    // to the server default; an explicit model keeps the default agent.
     assert_eq!(
         ok_post(&app, "/v2/sessions", json!({"workdir": workdir})).await["session"]["agent"],
-        json!("build")
+        json!("hya-main")
     );
     let explicit = ok_post(
         &app,
@@ -82,7 +83,7 @@ async fn session_crud_defaults_and_error_model() {
             &explicit["session"]["agent"],
             &explicit["session"]["model"]["modelId"]
         ),
-        (&json!("build"), &json!("m"))
+        (&json!("hya-main"), &json!("m"))
     );
 
     // Create, get, patch, list, delete, and 404 after delete.

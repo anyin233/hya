@@ -11,11 +11,16 @@
 //!     both standard `hya-bare` `write`/`edit` and `hya/hashline` `write`/`edit`.
 //!   - [`AskUserVisibilityHook`] (`tool.visibility`): hides `ask_user` when no
 //!     interactive human receiver is connected.
+//! - **BundleApi (`NativeBundleApiHandler`):** [`LspApi`] serving
+//!   `GET /lsp/symbols` (workspace symbol search).
+//!
+//! The tools, hooks, and API all read the formatter and LSP planes from one
+//! shared [`CodingExtrasState`]; nothing else configures them.
 
 use std::sync::Arc;
 
 use hya_runtime_abi::{HostRuntime, NativeHook, NativeService};
-use hya_tool::{FormatterPlane, LspPlane, Tool};
+use hya_tool::Tool;
 
 mod apply_patch;
 mod ask_user;
@@ -25,6 +30,7 @@ pub mod formatter;
 mod fs_tools;
 /// Native hooks (`PostEditHook`, `AskUserVisibilityHook`).
 pub mod hooks;
+mod lsp_api;
 mod lsp_post_edit;
 /// Language server lifecycle and configuration.
 pub mod lsp_service;
@@ -35,28 +41,13 @@ pub mod service;
 mod utf8_bom;
 
 pub use formatter::BuiltinFormatterProvider;
-pub use formatter::config::{RawFormatterConfig, RawFormatterEntry};
 pub use hooks::{
     ASK_USER_VISIBILITY_HOOK_ID, AskUserVisibilityHook, POST_EDIT_HOOK_ID, PostEditHook,
 };
-pub use lsp_service::config::{Selection as LspSelection, ServerConfig as LspServerConfig};
+pub use lsp_api::LspApi;
 pub use service::{
     BUNDLE_ID, CodingExtrasConfig, CodingExtrasService, CodingExtrasState, SERVICE_ID,
 };
-
-/// Build a [`FormatterPlane`] from a raw formatter configuration value.
-#[must_use]
-pub fn build_formatter_plane(config: RawFormatterConfig) -> FormatterPlane {
-    FormatterPlane::new(Arc::new(BuiltinFormatterProvider::new(config.into())))
-}
-
-/// Build an [`LspPlane`] from an optional LSP selection configuration.
-///
-/// # Errors
-/// Returns a diagnostic message when a configured LSP server entry is invalid.
-pub fn build_lsp_plane(selection: Option<LspSelection>) -> Result<LspPlane, String> {
-    lsp_service::plane_from_selection(selection)
-}
 
 /// Construct the seven coding-extras tools sharing `state`.
 #[must_use]
@@ -90,7 +81,7 @@ pub fn coding_extras_service(state: Arc<CodingExtrasState>) -> Arc<dyn NativeSer
     Arc::new(CodingExtrasService::new(state))
 }
 
-/// Register all `hya/coding-extras` tools, services, and hooks into `out`.
+/// Register all `hya/coding-extras` tools, services, hooks, and API handlers into `out`.
 pub fn register_bundle(
     ctx: &hya_runtime_abi::NativePluginContext,
     out: &mut hya_runtime_abi::NativeRegistrations,
@@ -99,6 +90,8 @@ pub fn register_bundle(
     let runtime = Arc::clone(ctx.runtime());
     out.tools.extend(coding_extras_tools(Arc::clone(&state)));
     out.services.push(coding_extras_service(Arc::clone(&state)));
+    out.api_handlers
+        .push(Arc::new(LspApi::new(Arc::clone(&state))));
     out.hooks.extend(coding_extras_hooks(state, Some(runtime)));
 }
 
@@ -125,16 +118,17 @@ mod tests {
         SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome,
         TurnSpawnRequest, TurnStartRequest, TurnStatus,
     };
-    use hya_tool::{
-        AgentDef, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
-        FormatterProvider, FormatterStatus, LspError, LspPlane, LspProvider, LspRequest,
-        SkillCatalogEntry, path::display_path,
-    };
+    use hya_tool::{AgentDef, SkillCatalogEntry, path::display_path};
     use serde_json::{Value, json};
     use tokio::sync::{Mutex, broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::formatter::{
+        FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
+        FormatterStatus,
+    };
+    use crate::lsp_service::{LspError, LspPlane, LspProvider, LspRequest};
 
     struct TempDir(PathBuf);
 
@@ -745,6 +739,7 @@ mod tests {
                 agent: None,
                 candidate_tools: vec!["read".into(), "ask_user".into()],
                 interactive: false,
+                depth: 0,
             })
             .await
             .unwrap();
@@ -761,6 +756,7 @@ mod tests {
                 agent: None,
                 candidate_tools: vec!["read".into(), "ask_user".into()],
                 interactive: true,
+                depth: 0,
             })
             .await
             .unwrap();

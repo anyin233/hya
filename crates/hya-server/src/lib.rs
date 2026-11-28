@@ -39,7 +39,6 @@ mod support;
 #[path = "../tests/it/support/mod.rs"]
 mod test_support;
 mod v2;
-mod workflow;
 
 pub use agent_model_control::{
     AGENT_MODEL_CONFIGURED, AGENT_MODEL_CONTROL_FAILURE, AGENT_MODEL_CONTROL_UNAVAILABLE,
@@ -56,7 +55,6 @@ pub use ephemeral::EphemeralGrace;
 pub use host::{GrpcHostGuard, GrpcHostLayer, HostPolicy, LOOPBACK_HOSTS};
 #[allow(deprecated, reason = "retain the public compatibility path")]
 pub use hya_proto::WorkspaceAdapterInfo;
-pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
 pub use origin::Origin;
 pub use provider_control::{
@@ -143,8 +141,8 @@ fn spawn_catalog_scope_notices(state: &ServerState) {
 
 /// Publish `projectsUpdated` whenever the set of busy Projects changes.
 ///
-/// A session becomes busy only by starting a turn or a Workflow run, which
-/// appends an event on the bus; its run registry entry and turn lease are
+/// A session becomes busy only by starting a turn or a bundle service run,
+/// which appends an event on the bus; its run registry entry and turn lease are
 /// released shortly after the closing event. So the watcher tracks every
 /// session a turn-boundary event named, re-checks the tracked ones on each
 /// such event and every 100 ms while any is tracked, and drops a session
@@ -210,21 +208,13 @@ fn spawn_project_busy_watcher(state: ServerState) {
     });
 }
 
-/// The session whose busy state an event may flip: turn and Workflow run
-/// boundaries.
+/// The session whose busy state an event may flip: turn boundaries, and
+/// bundle events (a bundle service run starts or ends with one).
 fn turn_boundary_session(event: &hya_proto::Event) -> Option<hya_proto::SessionId> {
     match event {
         hya_proto::Event::MessageStarted { session, .. }
-        | hya_proto::Event::MessageFinished { session, .. } => Some(*session),
-        hya_proto::Event::Extension { .. } => {
-            match hya_tool::extension::ExtensionEvent::from_event(event)? {
-                hya_tool::extension::ExtensionEvent::WorkflowRunStarted { session, .. }
-                | hya_tool::extension::ExtensionEvent::WorkflowRunFinished { session, .. } => {
-                    Some(session)
-                }
-                _ => None,
-            }
-        }
+        | hya_proto::Event::MessageFinished { session, .. }
+        | hya_proto::Event::Extension { session, .. } => Some(*session),
         _ => None,
     }
 }

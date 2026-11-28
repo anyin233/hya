@@ -69,6 +69,28 @@ impl PreparedPlugin {
         self.conn.has_hook(hook)
     }
 
+    /// The hooks the plugin registered during initialization.
+    pub fn hook_ids(&self) -> impl Iterator<Item = &crate::messages::HookId> {
+        self.conn.hooks.iter()
+    }
+
+    /// Whether the plugin registered the bundle-declared hook point `point`.
+    #[must_use]
+    pub fn declares(&self, point: &str) -> bool {
+        self.conn.declares(point)
+    }
+
+    /// Call a registered bundle-declared hook point with JSON params.
+    ///
+    /// # Errors
+    /// Returns a diagnostic for transport or reply failures.
+    pub async fn call_declared(&self, point: &str, params: Value) -> Result<Value, String> {
+        self.conn
+            .call_hook(crate::messages::HookId::Declared(point.to_string()), params)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     /// Send typed hook params and decode the reply for a registered hook.
     ///
     /// # Errors
@@ -175,7 +197,7 @@ struct LiveClient {
 pub(crate) struct PluginConn {
     io_tasks: Option<tokio_util::task::TaskTracker>,
     pub(crate) id: String,
-    pub(crate) hooks: HashSet<HookName>,
+    pub(crate) hooks: HashSet<crate::messages::HookId>,
     pub(crate) contributions: PluginContributionSet,
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
@@ -253,16 +275,24 @@ impl PluginConn {
     }
 
     pub(crate) fn has_hook(&self, hook: HookName) -> bool {
-        self.hooks.contains(&hook)
+        self.hooks.contains(&crate::messages::HookId::Core(hook))
+    }
+
+    pub(crate) fn declares(&self, point: &str) -> bool {
+        self.hooks
+            .contains(&crate::messages::HookId::Declared(point.to_string()))
     }
 
     pub(crate) async fn call_hook(
         &self,
-        hook: HookName,
+        hook: impl Into<crate::messages::HookId>,
         params: Value,
     ) -> Result<Value, PluginError> {
         let client = self.ensure_client().await?;
-        match client.call(&hook.method(), params, self.timeout).await {
+        match client
+            .call(&hook.into().method(), params, self.timeout)
+            .await
+        {
             Ok(value) => Ok(value),
             Err(error) => {
                 self.invalidate_client(&client).await;
@@ -504,7 +534,7 @@ fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<
     declaration
         .contributions
         .hooks
-        .sort_by_key(|hook| hook.name);
+        .sort_by(|left, right| left.name.cmp(&right.name));
     declaration.contributions.tools.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -734,7 +764,7 @@ impl PluginHost {
     /// Queue an event for every connection that declared the event hook.
     pub fn fan_out_event(&self, envelope: &Envelope) {
         for conn in &self.plugins {
-            if conn.hooks.contains(&HookName::Event) {
+            if conn.has_hook(HookName::Event) {
                 conn.enqueue_event(envelope);
             }
         }
@@ -1016,10 +1046,10 @@ for line in sys.stdin:
             contributions: PluginContributionSet {
                 hooks: vec![
                     HookRegistration {
-                        name: HookName::PermissionAsk,
+                        name: HookName::PermissionAsk.into(),
                     },
                     HookRegistration {
-                        name: HookName::CommandExecuteBefore,
+                        name: HookName::CommandExecuteBefore.into(),
                     },
                 ],
                 tools: vec![
@@ -1075,7 +1105,7 @@ for line in sys.stdin:
         );
 
         let mut changed_hook = original.clone();
-        changed_hook.contributions.hooks[0].name = HookName::SessionEnd;
+        changed_hook.contributions.hooks[0].name = HookName::SessionEnd.into();
 
         assert_ne!(
             canonical,
