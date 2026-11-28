@@ -36,7 +36,7 @@ async function open(context: ExtensionContext = base) {
     if (response.error || response.result === undefined) throw new Error(response.error?.message ?? `${method}: no result`);
     return response.result;
   };
-  await call("tui/initialize", { api_version: 1, sdk_version: "1.0.0", extension_id: "hya/basic-tui-components", permissions: [] });
+  await call("tui/initialize", { api_version: 2, sdk_version: "2.0.0", extension_id: "hya/basic-tui-components", permissions: [] });
   await call("tui/activate", { context });
   const surface = (panel: string) => ({ kind: "panel" as const, id: panel });
   return {
@@ -192,5 +192,16 @@ test("Context line: segments by priority while they fit", async () => {
   expect(lines(await panel.render("context-line", 200, 1))).toEqual(["mode manual · Work · 0.44.6/0.45.3 · m1:high · ctx 42% · build · 1.2k tok · /home/me/work · ⎇ main · 3 msgs · 127.0.0.1:8080"]);
   // `0.44.6/0.45.3` (priority 1) no longer fits; the shorter `m1:high` (priority 2) still does.
   expect(lines(await panel.render("context-line", 30, 1))).toEqual(["mode manual · Work · m1:high"]);
+  panel.vm.dispose();
+});
+
+test("Jobs: active turn, busy/waiting sessions, and running subagents", async () => {
+  const panel = await open({ ...base, session: { id: "a", title: "A", agent: "build", busy: true } });
+  expect(lines(await panel.render("jobs", 60))).toEqual([
+    "● A · turn running",
+    "↳ hya-scout-skade · running",
+    "◌ C · waiting for input",
+  ]);
+  expect((await panel.action("jobs", { id: "c" })).commands).toEqual([{ command: "session.open", id: "c", token: "open" }]);
   panel.vm.dispose();
 });

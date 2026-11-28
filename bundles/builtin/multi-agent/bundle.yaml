@@ -31,3 +31,22 @@ agents:
   - path: agents/hya-task.md
   - path: agents/hya-scout.md
   - path: agents/hya-reviewer.md
+assets:
+  - { id: tui-main, path: tui/main.ts }
+  - { id: tui-state, path: tui/state.ts }
+  - { id: tui-subagents, path: tui/subagents.ts }
+  - { id: tui-viewer, path: tui/viewer.ts }
+  - { id: tui-commands, path: tui/commands.ts }
+tui:
+  api_version: 2
+  entry: tui/main.ts
+  sdk: "2.0.0"
+  permissions:
+    - tui.panel
+    - tui.action
+    - tui.keys
+    - tui.session.read
+    - tui.sessions.read
+    - tui.bundle_api
+    - tui.extension_state.read
+    - tui.transcript.embed

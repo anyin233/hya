@@ -1,21 +1,21 @@
-import { SubagentsPane, SubagentViewer } from "./SubagentPanes"
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { Show, type Component } from "solid-js"
 import type { DiffScroller, PaneInputHandle } from "../app/context"
-import { resolveBinding } from "../keys/bindings"
 import { useApp } from "../app/context"
-import { mainContent, modelReference, shownServer } from "../state/format"
+import { resolveBinding } from "../keys/bindings"
+import { modelReference, shownServer } from "../state/format"
+import { paneDefinitions, paneKinds, type BundledPaneKind, type PaneDefinition, type PaneKind, type PaneLeaf } from "../state/panes"
 import type { AppState } from "../state/store"
-import { paneDefinitions, paneKinds, type PaneDefinition, type PaneKind, type PaneLeaf } from "../state/panes"
-import { PaneFrame } from "./PaneFrame"
 import { colors } from "../theme"
-import { ConversationPane } from "./ConversationPane"
-import { MessagePane } from "./MessagePane"
-import { WorkingIndicator } from "./WorkingIndicator"
-import { ExtensionPanel } from "../extensions/Host"
-import { extensionManager } from "../extensions/manager"
-import { LayoutPane } from "./LayoutPane"
 import { tuiVersion } from "../version"
+import { ExtensionPane, ExtensionPanel } from "../extensions/Host"
+import { extensionManager } from "../extensions/manager"
+import type { JsonValue } from "../extensions/wire"
+import { ConversationPane } from "./ConversationPane"
+import { LayoutPane } from "./LayoutPane"
+import { MessagePane } from "./MessagePane"
+import { PaneFrame } from "./PaneFrame"
+import { WorkingIndicator } from "./WorkingIndicator"
 
 export interface PaneRenderProps {
   node: PaneLeaf
@@ -32,6 +32,7 @@ export interface RegisteredPane extends PaneDefinition {
   render: Component<PaneRenderProps>
   input?(context: PaneInputContext): PaneInputHandle
 }
+
 function scrollInput({ scroll }: PaneInputContext): PaneInputHandle {
   return { onKey: (key) => {
     const action = resolveBinding(key)
@@ -43,88 +44,108 @@ function scrollInput({ scroll }: PaneInputContext): PaneInputHandle {
   } }
 }
 
-/** Jobs shown here are current projection facts: busy sessions, live members, queued prompts, and pending asks. */
-export function jobsText(state: AppState): string {
-  const lines: string[] = []
-  if (state.running && state.selected) lines.push(`● ${state.selected.title || state.selected.id} · turn running`)
-  for (const session of state.sessions) {
-    if (session.busy && !(state.running && session.id === state.selected?.id)) lines.push(`● ${session.title || session.id} · busy`)
-  }
-  for (const member of state.members) {
-    if (member.status === "MEMBER_STATUS_RUNNING" || member.status === "MEMBER_STATUS_SPAWNING") {
-      const activity = member.child ? state.children.get(member.child)?.activity : undefined
-      lines.push(`↳ ${member.description || member.agent || member.member} · ${member.status === "MEMBER_STATUS_SPAWNING" ? "starting" : "running"}${activity ? ` · ${activity}` : ""}`)
-    }
-  }
-  if (state.queued.length) lines.push(`${state.queued.length} queued prompt${state.queued.length === 1 ? "" : "s"}`)
-  if (state.interactions.length) lines.push(`${state.interactions.length} pending request${state.interactions.length === 1 ? "" : "s"} · /pending to review`)
-  return lines.length ? lines.join("\n") : "No active jobs. Busy sessions update on refresh; the open session's turn and members update live."
+function statusPaneText(state: AppState, server: string): string {
+  return [
+    `Server      ${shownServer(state, server)}`,
+    `Version     ${tuiVersion}/${state.serverVersion || "unknown"}`,
+    `Connection  ${state.connected ? "connected" : "disconnected"}`,
+    `Session     ${state.selected?.title || state.selected?.id || "none"}`,
+    `Agent       ${state.selected?.agent || "none"}`,
+    `Model       ${state.selected ? modelReference(state.selected) || "default" : "none"}`,
+    `Mode        ${state.selected?.permissionMode || "manual"}`,
+    `Directory   ${state.selected?.workdir || "none"}`,
+  ].join("\n")
 }
 
-function paneText(state: AppState, kind: PaneKind, server: string): string {
-  switch (kind) {
-    case "jobs": return jobsText(state)
-    case "status": return [
-      `Server      ${shownServer(state, server)}`,
-      `Version     ${tuiVersion}/${state.serverVersion || "unknown"}`,
-      `Connection  ${state.connected ? "connected" : "disconnected"}`,
-      `Session     ${state.selected?.title || state.selected?.id || "none"}`,
-      `Agent       ${state.selected?.agent || "none"}`,
-      `Model       ${state.selected ? modelReference(state.selected) || "default" : "none"}`,
-      `Mode        ${state.selected?.permissionMode || "manual"}`,
-      `Directory   ${state.selected?.workdir || "none"}`,
-    ].join("\n")
-    case "models": case "workflows": case "interactions": case "api": return mainContent(state, kind)
-    case "composer": case "activity": case "projects": case "conversation": case "sessions": case "todos": case "context": case "layout": case "extension": case "subagents": case "subagent-viewer": return ""
-  }
-}
-
-function TextPane(props: PaneRenderProps) {
+function StatusPane(props: PaneRenderProps) {
   const { store, server } = useApp()
-  return <PaneFrame kind={props.node.kind} focused={props.focused}
-    title={`${props.focused ? "▸ " : ""}${props.node.kind} · ${props.node.id}`} background={colors.bg}>
+  return <PaneFrame kind="status" focused={props.focused}
+    title={`${props.focused ? "▸ " : ""}status · ${props.node.id}`} background={colors.bg}>
     <scrollbox ref={props.scrollRef} width="100%" flexGrow={1} paddingY={1}>
-      <Show when={extensionManager.replacement(props.node.kind as "jobs" | "status" | "models" | "workflows" | "interactions" | "api")?.key} keyed
-        fallback={<text width="100%" wrapMode="word" fg={colors.fg}>{paneText(store.state, props.node.kind, server)}</text>}>
+      <Show when={extensionManager.replacement("status")?.key} keyed
+        fallback={<text width="100%" wrapMode="word" fg={colors.fg}>{statusPaneText(store.state, server)}</text>}>
         {(key) => <ExtensionPanel panelKey={key} width={props.width - 4} height={props.height - 2} paddingX={0} />}
       </Show>
     </scrollbox>
   </PaneFrame>
 }
-/** Built-ins and custom panels share the layout's border and keyboard ownership. */
+
+/** Bundle-supplied slots (`projects`, `sessions`, `todos`, `context`, `jobs`) and dynamic v2 panes (`extension` / `<bundle>#<pane>`). */
 function BundledPane(props: PaneRenderProps) {
-  const panel = () => props.node.kind === "extension" ? props.node.panel : extensionManager.replacement(props.node.kind as "projects" | "sessions" | "todos" | "context")?.key
-  const title = () => extensionManager.panels().find((item) => item.key === panel())?.title ?? paneDefinitions[props.node.kind].title
+  const panel = () => props.node.kind === "extension"
+    ? props.node.panel
+    : extensionManager.replacement(props.node.kind as BundledPaneKind)?.key
+  const dynamicPane = () => {
+    const key = panel()
+    return key ? extensionManager.panes().find((item) => item.key === key) : undefined
+  }
+  const title = () => {
+    const base = props.node.title
+      ?? dynamicPane()?.title
+      ?? extensionManager.panels().find((item) => item.key === panel())?.title
+      ?? paneDefinitions[props.node.kind].title
+    return props.node.pinned ? `${base} · pinned` : base
+  }
+  const contentWidth = () => props.width - (paneDefinitions[props.node.kind].selectable ? 4 : 2)
+  const contentHeight = () => props.height - (paneDefinitions[props.node.kind].selectable ? 2 : 1)
   return <PaneFrame kind={props.node.kind} focused={props.focused} title={title()}>
-    <Show when={panel()} keyed fallback={<text wrapMode="word" fg={colors.muted}>{extensionManager.placeholder(props.node.kind as "projects" | "sessions" | "todos" | "context") ?? "Loading…"}</text>}>
-      {(key) => <ExtensionPanel panelKey={key} width={props.width - (paneDefinitions[props.node.kind].selectable ? 4 : 2)}
-        height={props.height - (paneDefinitions[props.node.kind].selectable ? 2 : 1)} paddingX={0} scrollRef={props.scrollRef} />}
+    <Show when={panel()} keyed fallback={<text wrapMode="word" fg={colors.muted}>{extensionManager.placeholder(props.node.kind as BundledPaneKind) ?? "Loading…"}</text>}>
+      {(key) => (
+        <Show
+          when={dynamicPane()}
+          fallback={<ExtensionPanel panelKey={key} width={contentWidth()} height={contentHeight()} paddingX={0} scrollRef={props.scrollRef} />}
+        >
+          <ExtensionPane
+            paneKey={key}
+            width={contentWidth()}
+            height={contentHeight()}
+            {...(props.node.instance ? { instance: props.node.instance } : {})}
+            {...(props.node.params !== undefined ? { params: props.node.params as JsonValue } : {})}
+            paddingX={0}
+            scrollRef={props.scrollRef}
+          />
+        </Show>
+      )}
     </Show>
   </PaneFrame>
 }
+
 function bundledInput(context: PaneInputContext): PaneInputHandle {
   const fallback = scrollInput(context)
   return { onKey: (key) => {
-    const panel = context.node.kind === "extension" ? extensionManager.panels().find((entry) => entry.key === context.node.panel)
-      : extensionManager.replacement(context.node.kind as "projects" | "sessions")
+    if (context.node.kind === "extension" && context.node.panel) {
+      const pane = extensionManager.panes().find((entry) => entry.key === context.node.panel)
+      if (pane?.keys) { void extensionManager.paneKey(pane.key, key, context.node.instance); return }
+      const panel = extensionManager.panels().find((entry) => entry.key === context.node.panel)
+      if (panel?.keys) { void extensionManager.key(panel.key, key); return }
+      fallback.onKey(key)
+      return
+    }
+    const panel = extensionManager.replacement(context.node.kind as BundledPaneKind)
     if (panel?.keys) void extensionManager.key(panel.key, key)
     else if (context.node.kind !== "projects") fallback.onKey(key)
   } }
 }
+
 const renderers: Record<PaneKind, Component<PaneRenderProps>> = {
   conversation: () => <ConversationPane />,
   composer: (props) => <MessagePane width={props.width} />,
   activity: () => <WorkingIndicator />,
-  projects: BundledPane, sessions: BundledPane, todos: BundledPane, context: BundledPane, extension: BundledPane,
-  jobs: TextPane, status: TextPane, models: TextPane, workflows: TextPane, interactions: TextPane, api: TextPane,
+  status: StatusPane,
   layout: LayoutPane,
-  subagents: SubagentsPane, "subagent-viewer": SubagentViewer,
+  projects: BundledPane,
+  sessions: BundledPane,
+  todos: BundledPane,
+  context: BundledPane,
+  jobs: BundledPane,
+  extension: BundledPane,
 }
+
 /** Every pane uses the same registration and input ownership contract. */
 export const paneRegistry: Record<PaneKind, RegisteredPane> = Object.fromEntries(
   paneKinds.map((kind) => [kind, {
-    ...paneDefinitions[kind], render: renderers[kind],
-    input: !paneDefinitions[kind].selectable || kind === "composer" || kind === "layout" || kind === "subagents" ? undefined
-      : bundledInput,
+    ...paneDefinitions[kind],
+    render: renderers[kind],
+    input: !paneDefinitions[kind].selectable || kind === "composer" || kind === "layout" ? undefined : bundledInput,
   }]),
 ) as Record<PaneKind, RegisteredPane>

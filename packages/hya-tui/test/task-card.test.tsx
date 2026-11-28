@@ -23,11 +23,11 @@ test("live roster and transcript updates preserve clickable task rows", async ()
   const controller = createController({ client, store, directory: "/workspace" })
   const open = mock(async (_id: string) => {})
   controller.openSession = open
-  const members = [
-    { member: "mbr_routes", child: "hysec_routes", agent: "hya-task", callId: "call_batch", handle: "main/routes", status: "MEMBER_STATUS_RUNNING" },
-    { member: "mbr_tests", child: "hysec_tests", agent: "hya-task", callId: "call_batch", handle: "main/tests", status: "MEMBER_STATUS_RUNNING" },
+  const sessions = [
+    { id: "hysec_routes", parent: "hysec_root", agent: "hya-task", workdir: "/workspace", title: "main/routes", busy: true },
+    { id: "hysec_tests", parent: "hysec_root", agent: "hya-task", workdir: "/workspace", title: "main/tests", busy: true },
   ]
-  store.setMembers(members)
+  store.setSessions(sessions)
   const initial: MessageView = { id: "message", role: "assistant", agent: "hya-main", model: "fake/model", streaming: false, queued: false, blocks: [
     { id: "part", kind: "tool", callId: "call_batch", card: { tool: "task", status: "done", summary: "two inspections", body: [], task: {
       agent: "hya-task", description: "", members: [
@@ -45,8 +45,8 @@ test("live roster and transcript updates preserve clickable task rows", async ()
       await setup.renderOnce()
       const drawn = link(setup.renderer.root, child)!
       expect(drawn).toBeDefined()
-      // Roster frames and projection reads replace link data while the UI is live.
-      store.setMembers(members.map((row, at) => ({ ...row, status: at === index ? "MEMBER_STATUS_DONE" : row.status })))
+      // Session list updates and projection reads replace link data while the UI is live.
+      store.setSessions(sessions.map((row, at) => ({ ...row, busy: at === index ? false : row.busy })))
       setView(structuredClone(initial))
       await setup.renderOnce()
       expect(drawn.isDestroyed).toBe(false)
@@ -54,7 +54,7 @@ test("live roster and transcript updates preserve clickable task rows", async ()
       await setup.mockMouse.click(drawn.x + 7, drawn.y)
       expect(open).toHaveBeenLastCalledWith(child)
       await setup.renderOnce()
-      expect(setup.captureCharFrame()).toContain("done")
+      expect(setup.captureCharFrame()).toContain("idle")
     }
   } finally { setup.renderer.destroy() }
 })

@@ -9,8 +9,8 @@
 import { extensionManager } from "../extensions/manager"
 import { todoGlyphs, todoStatusText } from "./format"
 import { paneLeaves, visiblePaneRoot, type PaneKind } from "./panes"
+import { treeSessionIds, waitingKind } from "./prompts"
 import type { AppState } from "./store"
-import { subagentRows } from "./subagents"
 
 export interface DockRow {
   glyph: string
@@ -51,18 +51,35 @@ export function todoDockRows(state: AppState, columns: number): DockRow[] {
   return rows
 }
 
+/** Whether an extension panel `<bundle>#<pane>` is drawn right now. */
+function extensionPaneVisible(state: AppState, columns: number, panelKey: string): boolean {
+  if (!state.structure.sidebar.enabled) return false
+  return paneLeaves(visiblePaneRoot(state.paneLayout.root, columns, state.sidebar, state.projectsSidebar, extensionManager.visiblePaneOptions())).some((pane) => pane.kind === "extension" && pane.panel === panelKey)
+}
+
 /**
- * Subagents of the open session that are starting, running, or waiting for an
- * answer, at most `maxSubagentRows`; empty when the component is off or a
- * visible Subagents pane lists them.
+ * Busy or waiting descendant sessions of the open session, at most
+ * `maxSubagentRows`; empty when the component is off or the
+ * `hya/multi-agent#subagents` pane is visible.
  */
 export function subagentDockRows(state: AppState, columns: number): DockRow[] {
-  if (!state.structure.subagents.enabled || paneVisible(state, columns, "subagents")) return []
-  const live = subagentRows(state, { includeArchived: false }).filter((row) => row.status === "running" || row.status === "starting" || row.status === "waiting")
+  const root = state.selected?.id
+  if (!root || !state.structure.subagents.enabled || extensionPaneVisible(state, columns, "hya/multi-agent#subagents")) return []
+  const tree = treeSessionIds(root, state.sessions)
+  const live = state.sessions
+    .filter((session) => session.id !== root && tree.has(session.id) && !session.archived)
+    .flatMap((session) => {
+      const waiting = waitingKind(state.interactions, session.id)
+      if (!waiting && !session.busy) return []
+      return [{
+        label: session.title || session.agent || session.id,
+        waiting: Boolean(waiting),
+      }]
+    })
   const rows = live.slice(0, live.length > maxSubagentRows ? maxSubagentRows - 1 : maxSubagentRows).map((row): DockRow => ({
     glyph: "↳",
-    text: `${row.handle || row.label}${row.status === "waiting" ? " · waiting for an answer" : row.activity ? ` · ${row.activity}` : row.status === "starting" ? " · starting" : ""}`,
-    tone: row.status === "waiting" ? "warning" : "activity",
+    text: `${row.label}${row.waiting ? " · waiting for an answer" : ""}`,
+    tone: row.waiting ? "warning" : "activity",
   }))
   if (live.length > rows.length) rows.push({ glyph: "…", text: `+${live.length - rows.length} more · /subagents`, tone: "muted" })
   return rows

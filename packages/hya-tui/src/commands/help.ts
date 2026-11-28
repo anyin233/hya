@@ -22,7 +22,7 @@ import { skillsKeyRows } from "../state/skills"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Layout", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Skills", "Subagents", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Layout", "Providers", "Diff", "Mcp", "Bundles", "Rules", "Agents", "Skills", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -169,21 +169,11 @@ const mouseRows: HelpRow[] = [
   { group: "Views", keys: "Drag a sidebar border", description: "Resize the pane beside it (the right sidebar stays at least 29 columns); the width is saved with the layout" },
 ]
 
-const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = { local: "local", command: "server", skill: "skill" }
+const sources: Record<CommandEntry["source"], NonNullable<HelpRow["source"]>> = { local: "local", extension: "local", command: "server", skill: "skill" }
 
 /** Every key (grouped, in `helpGroups` order) and every command of `commands` (the merged `/` menu list). */
 export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
   const bindingRows: HelpRow[] = keyBindings.filter((binding) => !isKeyOverridden(binding.label)).map((binding) => ({ group: actionGroups[binding.action], keys: binding.label, description: binding.description }))
-  bindingRows.push(
-    { group: "Subagents", keys: "Up / Down", description: "Selector: preview the previous / next child without leaving the parent" },
-    { group: "Subagents", keys: "Enter", description: "Selector: pin the preview to the first following viewer, or reuse the first pinned viewer" },
-    { group: "Subagents", keys: "Ctrl+A", description: "Selector: toggle archived helpers (/subagents archived); hidden by default" },
-    { group: "Subagents", keys: "n", description: "Selector: add a separate viewer pinned to the preview" },
-    { group: "Subagents", keys: "x", description: "Selector: interrupt the selected subagent's turn (/subagents interrupt); it stays available" },
-    { group: "Subagents", keys: "s", description: "Selector: steer the selected subagent: opens /subagents steer <session> to type the message" },
-    { group: "Subagents", keys: "d", description: "Selector: archive the selected subagent after Enter confirms (/subagents archive); steering wakes it" },
-    { group: "Subagents", keys: "PgUp / PgDn, Home / End", description: "Selector: scroll the viewer Enter pins to" },
-  )
   const commandRows: HelpRow[] = commands.map((entry) => ({
     group: "Commands",
     keys: `${entry.name}${entry.argumentHint ? ` ${entry.argumentHint}` : ""}`,

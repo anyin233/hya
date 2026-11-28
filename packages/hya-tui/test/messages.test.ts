@@ -105,7 +105,7 @@ test("queued prompts are dim user views tagged queued", () => {
 
 test("the transcript merges the overlay and appends only waiting queued prompts", () => {
   const store = createAppStore()
-  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: [], interactions: [], models: [], providers: [], commands: [] })
   store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
   store.setMessages("hysec_1", [{ id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: "hi" } }] }])
   store.applyEvent({ seq: "5", session: "hysec_1", messageStarted: { message: "m_a", role: "ROLE_ASSISTANT" } })
@@ -215,19 +215,6 @@ test("tool cards are collapsed by default; /tools and a click expand them; shell
   expect(toolExpanded(store.state, card)).toBe(false)
   store.setTools(false)
   expect(toolExpanded(store.state, { ...card, shell: true })).toBe(false)
-})
-
-test("member frames and SessionInfo.members fold into the store", () => {
-  const store = createAppStore()
-  store.openSession({ id: "hysec_1", agent: "hya-main", workdir: "/w", members: [{ member: "mbr_1", child: "hysec_c", agent: "scout", status: "MEMBER_STATUS_SPAWNING" }] })
-  expect(store.state.members).toHaveLength(1)
-  const effect = store.applyEvent({ seq: "4", session: "hysec_1", memberUpdated: { member: "mbr_1", status: "MEMBER_STATUS_DONE", summary: "ok" } })
-  expect(effect.durable).toBe(true)
-  expect(store.state.members[0]).toMatchObject({ agent: "scout", status: "MEMBER_STATUS_DONE", summary: "ok" })
-  store.setChild("hysec_c", { busy: true, activity: "read a.txt" })
-  expect(store.state.children.get("hysec_c")).toEqual({ busy: true, activity: "read a.txt" })
-  store.openSession({ id: "hysec_2", agent: "hya-main", workdir: "/w" })
-  expect(store.state.members).toEqual([])
 })
 
 test("a shell turn run from this TUI shows its command on both messages", () => {

@@ -16,8 +16,6 @@ export interface SessionInfo {
   permissionMode?: string
   /** Parent session id when this is a subagent's session. */
   parent?: string
-  /** Subagents this session spawned (folded rows; populated directly or from `extensions["hya/multi-agent"]`). */
-  members?: MemberInfo[]
   /** Per-bundle extension state folded from `Event::Extension` events (`hya.v2`). */
   extensions?: Record<string, unknown>
   /** When the session was created (RFC 3339); stable ordering for sidebar numbers. */
@@ -114,38 +112,6 @@ export interface TokenUsage {
   cacheRead?: string
   cacheWrite?: string
   reasoningUnknown?: boolean
-}
-
-/** A subagent (member) spawned by a session (`MemberInfo`, docs/protocol/README.md "Subagents"). */
-export interface MemberInfo {
-  /** Internal stable member id within the parent session (not user-facing). */
-  member: string
-  /** Stable human-readable handle when roster binding is available. */
-  handle?: string
-  /** Child session id when known. */
-  child?: string
-  /** Subagent type (agent name). */
-  agent?: string
-  description?: string
-  /** `MEMBER_STATUS_SPAWNING`, `_RUNNING`, `_DONE`, `_FAILED`, `_CANCELLED`. */
-  status?: string
-  /** Bounded finish summary. */
-  summary?: string
-  /** `ToolCallPart.callId` of the spawning `task` call; empty for resident spawns. */
-  callId?: string
-  depth?: number
-  /** Actor archival, independent of task outcome; absent if no binding is known. */
-  archived?: boolean
-  archiveReason?: string
-}
-
-/** Durable team-root event, keyed by child session rather than parent-local member id. */
-export interface MemberLifecycleChanged {
-  child: string
-  handle?: string
-  /** Protojson may omit false on revival. */
-  archived?: boolean
-  archiveReason?: string
 }
 
 /** `ToolCallPart` (docs/protocol/README.md "Tool calls"). */
@@ -506,12 +472,6 @@ export interface AgentSummary {
   hidden?: boolean
 }
 
-export interface WorkflowSummary {
-  name: string
-  description?: string
-  stageCount?: number
-}
-
 /** `VcsStatus` (`GET /v2/vcs`): the status bar reads only `branch`. */
 export interface VcsStatus {
   branch?: string
@@ -550,15 +510,11 @@ export interface StreamEvent {
   errorReported?: { message?: string; code?: string; errorMessage?: string }
   /** A tool part's state; fields it does not carry are empty (fold without clearing). An empty `callId` marks a direct part overwrite. */
   toolStateChanged?: { message: string; part: string } & Partial<ToolCallPart>
-  /** A member (subagent) spawn or status change on the parent session; partial frames fold by `member`. */
-  memberUpdated?: MemberInfo
-  memberLifecycleChanged?: MemberLifecycleChanged
   /** Bundle-owned extension event emitted on a session stream (`hya.v2`). */
   extensionEvent?: { sessionId?: string; bundle?: string; kind?: string; payload?: unknown }
   permissionRequested?: { interaction?: Interaction }
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }
-  workflowUpdated?: unknown
   /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. `busy` (live-only, seq 0) mirrors `SessionInfo.busy` and is carried on root sessions' global-stream frames only (`docs/protocol/README.md` "Session list push"). */
   sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string; archived?: boolean; busy?: boolean }
   /** A root session was created (also a fork); global-stream only, durable (`docs/protocol/README.md` "Session list push"). */
@@ -607,126 +563,6 @@ export interface StreamEvent {
 export interface StreamFrame {
   event?: StreamEvent
   resync?: { lastSeq?: string }
-}
-
-function mapMemberRunStatus(status: unknown): string | undefined {
-  switch (status) {
-    case "spawning": return "MEMBER_STATUS_SPAWNING"
-    case "running": return "MEMBER_STATUS_RUNNING"
-    case "done": return "MEMBER_STATUS_DONE"
-    case "failed": return "MEMBER_STATUS_FAILED"
-    case "cancelled": return "MEMBER_STATUS_CANCELLED"
-    default: return typeof status === "string" ? status : undefined
-  }
-}
-
-/** Extract subagent member rows from `SessionInfo` (`members` or v2 `extensions["hya/multi-agent"]`). */
-export function sessionMembers(session: SessionInfo | undefined): MemberInfo[] {
-  if (!session) return []
-  if (session.members?.length) return session.members
-  const ext = session.extensions?.["hya/multi-agent"]
-  if (!ext || typeof ext !== "object") return []
-  const state = ext as {
-    members?: Array<Record<string, unknown>>
-    roster?: Record<string, { handle?: string; session?: string }>
-    archived?: Record<string, { handle?: string; session?: string; reason?: string }>
-  }
-  const bySession = new Map<string, { handle?: string; archived: boolean; archiveReason?: string }>()
-  for (const [handle, row] of Object.entries(state.roster ?? {})) {
-    if (row?.session) bySession.set(row.session, { handle: row.handle || handle, archived: false })
-  }
-  for (const [handle, row] of Object.entries(state.archived ?? {})) {
-    if (row?.session) bySession.set(row.session, { handle: row.handle || handle, archived: true, ...(row.reason ? { archiveReason: row.reason } : {}) })
-  }
-  return (state.members ?? []).flatMap((raw) => {
-    const member = typeof raw.member === "string" ? raw.member : ""
-    if (!member) return []
-    const child = typeof raw.child === "string" ? raw.child : undefined
-    const binding = child ? bySession.get(child) : undefined
-    const status = mapMemberRunStatus(raw.status)
-    return [{
-      member,
-      ...(binding?.handle ? { handle: binding.handle } : {}),
-      ...(child ? { child } : {}),
-      ...(typeof raw.subagent_type === "string" ? { agent: raw.subagent_type } : {}),
-      ...(typeof raw.description === "string" ? { description: raw.description } : {}),
-      ...(status ? { status } : {}),
-      ...(typeof raw.summary === "string" && raw.summary ? { summary: raw.summary } : {}),
-      ...(typeof raw.tool_call === "string" ? { callId: raw.tool_call } : {}),
-      ...(typeof raw.depth === "number" ? { depth: raw.depth } : {}),
-      ...(binding ? { archived: binding.archived, ...(binding.archiveReason ? { archiveReason: binding.archiveReason } : {}) } : {}),
-    }]
-  })
-}
-
-/** Normalize v2 `extensionEvent` payloads into TUI stream fields when present. */
-export function normalizeStreamEvent(event: StreamEvent): StreamEvent {
-  const ext = event.extensionEvent
-  if (!ext) return event
-  const payload = (ext.payload && typeof ext.payload === "object" ? ext.payload : {}) as Record<string, unknown>
-  if (ext.bundle === "hya/workflow") {
-    return { ...event, workflowUpdated: payload }
-  }
-  if (ext.bundle === "hya/multi-agent") {
-    if (ext.kind === "member_spawned" && typeof payload.member === "string") {
-      return {
-        ...event,
-        memberUpdated: {
-          member: payload.member,
-          ...(typeof payload.child === "string" ? { child: payload.child } : {}),
-          ...(typeof payload.subagent_type === "string" ? { agent: payload.subagent_type } : {}),
-          ...(typeof payload.description === "string" ? { description: payload.description } : {}),
-          ...(typeof payload.depth === "number" ? { depth: payload.depth } : {}),
-          ...(typeof payload.tool_call === "string" ? { callId: payload.tool_call } : {}),
-          status: "MEMBER_STATUS_SPAWNING",
-        },
-      }
-    }
-    if (ext.kind === "member_status_changed" && typeof payload.member === "string") {
-      const status = mapMemberRunStatus(payload.status)
-      return {
-        ...event,
-        memberUpdated: {
-          member: payload.member,
-          ...(status ? { status } : {}),
-        },
-      }
-    }
-    if (ext.kind === "member_finished" && typeof payload.member === "string") {
-      const status = mapMemberRunStatus(payload.status)
-      return {
-        ...event,
-        memberUpdated: {
-          member: payload.member,
-          ...(typeof payload.child === "string" ? { child: payload.child } : {}),
-          ...(status ? { status } : {}),
-          ...(typeof payload.summary === "string" ? { summary: payload.summary } : {}),
-        },
-      }
-    }
-    if (ext.kind === "agent_archived" && typeof payload.child === "string") {
-      return {
-        ...event,
-        memberLifecycleChanged: {
-          child: payload.child,
-          ...(typeof payload.handle === "string" ? { handle: payload.handle } : {}),
-          archived: true,
-          ...(typeof payload.reason === "string" ? { archiveReason: payload.reason } : {}),
-        },
-      }
-    }
-    if (ext.kind === "agent_restarted" && typeof payload.child === "string") {
-      return {
-        ...event,
-        memberLifecycleChanged: {
-          child: payload.child,
-          ...(typeof payload.handle === "string" ? { handle: payload.handle } : {}),
-          archived: false,
-        },
-      }
-    }
-  }
-  return event
 }
 
 /** Decode SSE data blocks without assuming network chunks end on line boundaries. */
@@ -781,7 +617,7 @@ export function bridgeTokenHeaders(token: string | undefined): Record<string, st
   return token ? { [bridgeTokenHeader]: token } : {}
 }
 
-/** An HTTP failure with its status preserved for optional v1 capabilities. */
+/** An HTTP failure with its status preserved for optional v2 capabilities. */
 export class HttpError extends Error {
   /** `detail` is the server's `code: message` (or `HTTP <status>`), without the method and path. */
   constructor(readonly status: number, method: string, path: string, readonly detail: string) {
@@ -790,7 +626,7 @@ export class HttpError extends Error {
   }
 }
 
-/** Parse one command-view request; never allow a remote URL or non-v1 path. */
+/** Parse one command-view request; never allow a remote URL or non-v2 path. */
 export function parseApiCommand(input: string): ApiCommand {
   const match = /^\/api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/v2\/\S+)(?:\s+([\s\S]+))?$/i.exec(input.trim())
   if (!match) throw new Error("Usage: /api METHOD /v2/path [JSON object]")
@@ -870,7 +706,7 @@ export class HyaClient {
   }
 
   /**
-   * One v1 call; `signal` aborts it (the Provider View's Esc on a running
+   * One v2 call; `signal` aborts it (the Provider View's Esc on a running
    * call). A scoped rpc names its scope in `path` or `body` (`directory`).
    */
   async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -1285,24 +1121,6 @@ export class HyaClient {
     return this.request("PUT", `/v2/agent-efforts/${encodeURIComponent(agentId)}`, { effort, ...(this.directory ? { directory: this.directory } : {}) }, signal)
   }
 
-  async listWorkflows(): Promise<WorkflowSummary[]> {
-    try {
-      const result = await this.request<{ workflows?: WorkflowSummary[] }>("GET", this.scoped("/v2/bundles/hya%2Fworkflow/api/workflows"))
-      return result.workflows ?? []
-    } catch (error) {
-      if (error instanceof HttpError && (error.status === 404 || error.status === 501)) return []
-      throw error
-    }
-  }
-
-  async getWorkflowState(session: string): Promise<Record<string, unknown>> {
-    return this.request("GET", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fworkflow/state`)
-  }
-
-  async submitWorkflow(session: string, command: Record<string, unknown>): Promise<unknown> {
-    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fworkflow/command`, command)
-  }
-
   async updateSessionModel(session: string, model: string): Promise<SessionInfo> {
     return this.request("PATCH", `/v2/sessions/${encodeURIComponent(session)}`, { model })
   }
@@ -1416,22 +1234,6 @@ export class HyaClient {
   /** `GetVcsStatus` (`GET /v2/vcs`) scoped to the client's `--dir`; status bar git branch. */
   async getVcsStatus(): Promise<VcsStatus> {
     return this.request("GET", this.scoped("/v2/vcs"))
-  }
-
-  /**
-   * Archive a subagent via the `hya/multi-agent` bundle API
-   * (`POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/archive`).
-   */
-  async archiveSubagent(session: string): Promise<{ handle?: string; cancelledTurn?: boolean; descendants?: string[] }> {
-    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fmulti-agent/archive`, {})
-  }
-
-  /**
-   * Steer a subagent via the `hya/multi-agent` bundle API
-   * (`POST /v2/sessions/{id}/bundles/hya%2Fmulti-agent/steer`).
-   */
-  async steerSubagent(session: string, text: string): Promise<{ from?: string }> {
-    return this.request("POST", `/v2/sessions/${encodeURIComponent(session)}/bundles/hya%2Fmulti-agent/steer`, { text })
   }
 
   async cancelTurn(session: string, turn: string): Promise<unknown> {

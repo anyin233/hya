@@ -56,7 +56,6 @@ test.skipIf(!backendBin)("OpenTUI gRPC transport drives a real hya backend", asy
     expect((await client.request<{ ok: boolean }>("GET", "/v2/health")).ok).toBe(true)
     client.setBaseUrl(`grpc://127.0.0.1:${grpcPort}`)
     expect((await client.request<{ ok: boolean }>("GET", "/v2/health")).ok).toBe(true)
-    expect(await client.listWorkflows()).toBeArray()
     expect(await client.listInteractions()).toEqual([])
     const session = await client.createSession("hya-main", "hya/offline", { workdir: root })
     expect(session.id).toStartWith("hysec_")

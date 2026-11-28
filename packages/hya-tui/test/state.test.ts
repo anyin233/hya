@@ -22,7 +22,6 @@ test("applies a catalog refresh and keeps the selected session in sync", () => {
     sessions: [session("hysec_1", { title: "new" }), session("hysec_2")],
     interactions: [{ id: "req_1", type: "PERMISSION", title: "bash" }],
     models: [{ id: "hya/offline" }],
-    workflows: [{ name: "release" }],
     providers: [{ id: "openai" }],
     commands: [{ name: "compact" }],
   })
@@ -133,7 +132,7 @@ test("builds the completion context from the current catalogs", () => {
   const store = createAppStore()
   store.applyBootstrap({ agents: [{ name: "hya-main" }], models: [{ id: "hya/offline" }], interactions: [] })
   store.applyCatalog({
-    sessions: [session("hysec_1")], interactions: [], models: [{ id: "hya/offline" }], workflows: [{ name: "release" }],
+    sessions: [session("hysec_1")], interactions: [], models: [{ id: "hya/offline" }],
     providers: [{ id: "openai" }], commands: [{ name: "compact" }],
   })
   const context = store.completionContext()
@@ -214,7 +213,7 @@ test("a sessionUpdated title/agent/model frame updates the open session and its 
   store.openSession(session("hysec_1", { title: "old" }))
   store.applyCatalog({
     sessions: [session("hysec_1", { title: "old" }), session("hysec_2", { title: "other" })],
-    interactions: [], models: [], workflows: [], providers: [], commands: [],
+    interactions: [], models: [], providers: [], commands: [],
   })
   // The backend's auto-generated title (no user action): the header/sidebar (state/format.ts) read `selected`/`sessions`.
   store.applyEvent({ seq: "1", session: "hysec_1", sessionUpdated: { title: "Fix the flaky test" } })

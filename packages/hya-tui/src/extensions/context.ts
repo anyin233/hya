@@ -4,7 +4,7 @@
  * (`sessions`, `projects`, `todos`, `status`) carry what those panes showed
  * when the TUI drew them itself; hya/basic-tui-components draws them now.
  */
-import { sessionMembers } from "../client"
+import type { SessionInfo } from "../client"
 import { contextUsage, modelEffortLabel, modelReference, sessionTokens, todoStatusText, webLabel } from "../state/format"
 import { effectiveMode, modeDisplay } from "../state/modes"
 import { waitingKind } from "../state/prompts"
@@ -12,7 +12,7 @@ import { sessionsInScope } from "../state/projects"
 import { mergeTranscript } from "../state/overlay"
 import { forkSourceText } from "../state/revert"
 import type { AppState } from "../state/store"
-import type { ExtensionContext } from "./wire"
+import { isJson, type ExtensionContext, type JsonValue } from "./wire"
 import { tuiVersion } from "../version"
 
 /** What the context needs from outside the store: the shown server, and the status items extensions contribute. */
@@ -26,6 +26,32 @@ type TodoStatus = NonNullable<ExtensionContext["todos"]>[number]["status"]
 const todoStatuses: readonly string[] = ["pending", "in_progress", "blocked", "completed"] satisfies TodoStatus[]
 const isTodoStatus = (status: string): status is TodoStatus => todoStatuses.includes(status)
 
+/** Extract optional child handle labels from v2 `extensions["hya/multi-agent"]` for sidebar rendering. */
+function extensionMembers(row: SessionInfo): { child: string; handle?: string; description?: string; agent?: string }[] {
+  const ext = row.extensions?.["hya/multi-agent"]
+  if (!ext || typeof ext !== "object" || Array.isArray(ext)) return []
+  const state = ext as {
+    members?: Array<Record<string, unknown>>
+    roster?: Record<string, { handle?: string; session?: string }>
+    archived?: Record<string, { handle?: string; session?: string }>
+  }
+  const handles = new Map<string, string>()
+  for (const [handle, entry] of Object.entries(state.roster ?? {})) {
+    if (entry?.session) handles.set(entry.session, entry.handle || handle)
+  }
+  for (const [handle, entry] of Object.entries(state.archived ?? {})) {
+    if (entry?.session && !handles.has(entry.session)) handles.set(entry.session, entry.handle || handle)
+  }
+  return (state.members ?? []).flatMap((raw) => {
+    const child = typeof raw.child === "string" && raw.child ? raw.child : undefined
+    if (!child) return []
+    const handle = handles.get(child) ?? (typeof raw.handle === "string" ? raw.handle : undefined)
+    const description = typeof raw.description === "string" ? raw.description : undefined
+    const agent = typeof raw.subagent_type === "string" ? raw.subagent_type : typeof raw.agent === "string" ? raw.agent : undefined
+    return [{ child, ...(handle ? { handle } : {}), ...(description ? { description } : {}), ...(agent ? { agent } : {}) }]
+  })
+}
+
 function sessionsSection(state: AppState): NonNullable<ExtensionContext["sessions"]> {
   const items = sessionsInScope(state.sessions, state.activeProjectId, false).map((row) => ({
     id: row.id,
@@ -38,15 +64,8 @@ function sessionsSection(state: AppState): NonNullable<ExtensionContext["session
     ...(row.parent ? { parent: row.parent } : {}),
     ...(Number.isFinite(Date.parse(row.timeCreated ?? "")) ? { created: Date.parse(row.timeCreated ?? "") } : {}),
     ...((() => {
-      const members = sessionMembers(row)
-      return members.length ? {
-        members: members.flatMap((member) => member.child ? [{
-          child: member.child,
-          ...(member.handle ? { handle: member.handle } : {}),
-          ...(member.description ? { description: member.description } : {}),
-          ...(member.agent ? { agent: member.agent } : {}),
-        }] : []),
-      } : {}
+      const members = extensionMembers(row)
+      return members.length ? { members } : {}
     })()),
   }))
   return { ready: state.ready, ...(state.selected ? { selected: state.selected.id } : {}), items }
@@ -87,12 +106,26 @@ function statusSection(state: AppState, feed: ExtensionStatusFeed): NonNullable<
   }
 }
 
+function extensionStateSection(raw: Record<string, unknown> | undefined): Readonly<Record<string, JsonValue>> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const out: Record<string, JsonValue> = {}
+  let count = 0
+  for (const [bundleId, value] of Object.entries(raw)) {
+    if (isJson(value)) {
+      out[bundleId] = value
+      count += 1
+    }
+  }
+  return count > 0 ? out : undefined
+}
+
 /** The complete host context; `scopeContext` drops what an extension's permissions do not grant. */
 export function extensionContext(state: AppState, terminal: { width: number; height: number }, feed: ExtensionStatusFeed): ExtensionContext {
   const session = state.selected
   const project = state.projects.find((row) => row.id === state.activeProjectId)
   const directory = session?.workdir || project?.roots[0] || ""
   const model = session ? modelReference(session) : undefined
+  const extensionState = extensionStateSection(session?.extensions)
   return {
     terminal: { columns: terminal.width, rows: terminal.height },
     ...(session ? {
@@ -128,5 +161,6 @@ export function extensionContext(state: AppState, terminal: { width: number; hei
       return isTodoStatus(status) ? [{ status, content: todo.content }] : []
     }),
     status: statusSection(state, feed),
+    ...(extensionState ? { extension_state: extensionState } : {}),
   }
 }

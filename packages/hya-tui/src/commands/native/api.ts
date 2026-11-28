@@ -4,7 +4,7 @@ import { matchValues, type CommandSpec } from "../registry"
 
 export const apiCommand: CommandSpec = {
   name: "/api",
-  description: "List all v1 HTTP operations, or call one",
+  description: "List all v2 HTTP operations, or call one",
   argumentHint: "[METHOD /v2/path [JSON object]]",
   complete: ({ words, current, head }, context) => {
     if (words.length === 1) return matchValues(head, current, ["GET", "POST", "PUT", "PATCH", "DELETE"])

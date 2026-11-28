@@ -50,7 +50,18 @@ To keep your favorite layout permanently, run `/config init` and set `preset = "
 
 ### Bare mode (`hya --bare`, zero TUI bundles)
 
-When running against a backend with no TUI bundles loaded (for example `hya --bare` with zero built-in bundles), the TUI settles immediately without waiting for `hya/basic-tui-components` and renders the clean single-column chat layout (`conversation` + `activity` + `composer` + bottom status line). Even if `~/.config/hya/tui.toml` selects `preset = "workspace"`, unavailable bundled sidebar panes (`projects`, `sessions`, `todos`, `context`) are hidden cleanly with no `"Loading…"` or missing-pane placeholders while preserving your saved `tui.json` layout. All core management overlays (`/key`, `/mcp`, `/skills`, `/bundles`, `/rules`, `/diff`) remain fully operational.
+When running against a backend with no TUI bundles loaded (for example `hya --bare` with zero built-in bundles), the TUI settles immediately without waiting for `hya/basic-tui-components` and renders the clean single-column chat layout (`conversation` + `activity` + `composer` + bottom status line). Even if `~/.config/hya/tui.toml` selects `preset = "workspace"`, unavailable bundled sidebar panes (`projects`, `sessions`, `todos`, `context`, `jobs`, and dynamic `extension` panes) are hidden cleanly with no `"Loading…"` or missing-pane placeholders while preserving your saved `tui.json` layout. All core management overlays (`/key`, `/mcp`, `/skills`, `/bundles`, `/rules`, `/diff`) remain fully operational.
+
+### Modular bundle panes & commands
+
+In full mode, domain panes and slash commands are contributed dynamically by built-in `@hya/tui-sdk` v2 bundles rather than hardcoded in the TUI host:
+
+- **Workspace panels (`hya/basic-tui-components`):** Provides the `Projects`, `Sessions`, `Todos`, `Context`, and `Jobs` panes plus the `/project` manager overlay.
+- **Subagents (`/subagents`, `hya/multi-agent`):** Opens the dynamic Subagents roster and live Subagent Viewer panes (`hya/multi-agent#subagents`, `hya/multi-agent#subagent-viewer`) and supports `/subagents steer`, `/subagents archive`, and `/subagents interrupt`.
+- **Workflows (`/workflow`, `/workflows`, `hya/workflow`):** Opens the dynamic Workflows pane (`hya/workflow#workflows`) and runs `/workflow select`, `/workflow run`, and `/workflow status`.
+- **Plan & Agent Channels (`hya/plan`, `hya/agent-channels`):** Add custom tool-call cards and live status badges (`PLAN (read-only)` and unread `Mail` counts).
+
+> **Upgrading from Hya v1:** Saved `tui.json` layouts use schema `version: 4` exclusively. Run `hya migrate` (powered by `crates/hya-migration`) to upgrade legacy v1 `tui.json` or `tui.toml` files; unmigrated legacy layouts are ignored and fall back to the default layout.
 
 ---
 

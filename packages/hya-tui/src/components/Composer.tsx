@@ -24,7 +24,7 @@ import { layoutBreakpoints, projectsSidebarVisible, sidebarTooNarrowNotice } fro
 import { bandRule, borderInfoText, statusLineShown } from "../state/statusline"
 import { StatusLine } from "./StatusLine"
 import { paneLeaves } from "../state/panes"
-import { subagentsWorking } from "../state/subagents"
+import { hasBusyDescendant } from "../state/prompts"
 import { focusedPane, keyboardOwner } from "../state/focus"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
@@ -413,7 +413,10 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
         else if (mcpOpen()) controller.mcpKey(key)
         else if (rulesOpen()) controller.rulesKey(key)
         else if (skillsOpen()) controller.skillsKey(key)
-        else if (overlay) void extensionManager.key(overlay, key)
+        else if (overlay) {
+          if (extensionManager.panes().some((pane) => pane.key === overlay)) void extensionManager.paneKey(overlay, key)
+          else void extensionManager.key(overlay, key)
+        }
         else controller.agentsKey(key)
         return
       }
@@ -586,7 +589,7 @@ function BaseComposer(props: { width: number; decorationRows?: () => number }) {
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, subagentsWorking: subagentsWorking(store.state), inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
+        const escape = escapeAction({ menuOpen: open !== undefined, running: store.state.running, subagentsWorking: hasBusyDescendant(store.state), inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()

@@ -50,7 +50,7 @@ function host(serveFs: (method: string, params: Record<string, unknown>) => Prom
   const load = async (ext: string, entry: string, permissions: string[] = [], jit = false, deadlineMs?: number) => {
     const loaded = await request("host/load", { ext, entry: fixture(entry), permissions, jit, ...(deadlineMs !== undefined ? { deadlineMs } : {}) });
     if (loaded.error) return loaded.error.message;
-    await call(ext, "tui/initialize", { api_version: 1, sdk_version: "1.0.0", extension_id: ext, permissions });
+    await call(ext, "tui/initialize", { api_version: 2, sdk_version: "2.0.0", extension_id: ext, permissions });
     await call(ext, "tui/activate", { context: { terminal: { columns: 80, rows: 24 } } });
     return undefined;
   };
@@ -164,3 +164,38 @@ describe("trusted extensions (jit: JavaScriptCore on their own thread)", () => {
     expect((await h.render("reader", "read")).result).toEqual({ root: { kind: "text", text: "read:late" } });
   }, 10_000);
 });
+
+test("v2 host bridge relays bundle/api and extension_state/read and prevents VM ext spoofing (VM and JIT)", async () => {
+  for (const jit of [false, true]) {
+    const asked: { method: string; params: Record<string, unknown> }[] = [];
+    const h = host(async (method, params) => {
+      asked.push({ method, params });
+      if (method === "bundle/api") return { ok: true, seenExt: params.ext };
+      if (method === "extension_state/read") return { state: { stage: "running" } };
+      return null;
+    });
+    running = h.child;
+    await h.load("hya/workflow", "v2-host.ts", ["tui.panel", "tui.bundle_api", "tui.extension_state.read", "tui.transcript.embed"], jit);
+    const rendered = await h.call("hya/workflow", "tui/render", {
+      surface: { kind: "pane", id: "detail", instance: "hysec_sub_7" },
+      width: 44,
+      height: 20,
+      now: 0,
+    });
+    expect(rendered.result).toEqual({
+      root: {
+        kind: "column",
+        children: [
+          { kind: "text", text: JSON.stringify({ bundleId: "hya/workflow", apiReply: { ok: true, seenExt: "hya/workflow" }, state: { stage: "running" } }) },
+          { type: "transcript", sessionId: "hysec_sub_7", follow: true },
+        ],
+      },
+    });
+    const spoofed = await h.render("hya/workflow", "spoof");
+    expect(spoofed.result).toEqual({ root: { kind: "text", text: JSON.stringify({ ok: true, seenExt: "hya/workflow" }) } });
+    // Authoritative `ext` from the host always wins over VM-supplied `{ ext: "victim/bundle" }`.
+    expect(asked.every((entry) => entry.params.ext === "hya/workflow")).toBe(true);
+    h.child.kill();
+    running = undefined;
+  }
+}, 20_000);

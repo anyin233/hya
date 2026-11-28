@@ -316,8 +316,8 @@ describe("layout mutations, editor, direct keys, bubbling, reload, and persisten
 
       // Split left jobs and split up jobs; verify placement and focus cycle.
       await runCmd(app, "/layout split left jobs")
-      await app.waitForText("▸ jobs · pane-8")
-      const jobs = app.find("jobs · pane-8")!
+      await app.waitForText("Jobs")
+      const jobs = app.find("Jobs")!
       const draft = app.find("draft kept")!
       expect(jobs.col).toBeLessThan(draft.col)
 

@@ -1,7 +1,7 @@
 /**
  * The TUI workspace state; child viewers also use ephemeral projection mirrors.
  *
- * It holds a copy of the server projection read over the v1 API (sessions,
+ * It holds a copy of the server projection read over the v2 API (sessions,
  * transcript, interactions, catalogs) plus local UI state (view, status line,
  * the Provider View). Every field is a Solid signal, so components re-render
  * when a mutation runs; mutations are the only way to change state.
@@ -16,10 +16,8 @@
  * mask length here; the key itself stays in the controller's `SecretEntry`
  * (see completion.ts, state/providers.ts).
  */
-import { subagentRows } from "./subagents"
 import { batch, createSignal, type Accessor, type Setter } from "solid-js"
 import { apiOperationNames, operations } from "../api"
-import { normalizeStreamEvent, sessionMembers } from "../client"
 import type { VimMode } from "../composer/vim"
 import type {
   AgentModelState,
@@ -29,7 +27,6 @@ import type {
   CommandSummary,
   Interaction,
   McpServerStatus,
-  MemberInfo,
   MessageInfo,
   ModelSummary,
   ProjectInfo,
@@ -45,7 +42,6 @@ import type {
   TodoItem,
   TokenUsage,
   VcsStatus,
-  WorkflowSummary,
 } from "../client"
 import type { WebInfo } from "../cli"
 import type { CompletionContext } from "../completion"
@@ -55,7 +51,6 @@ import type { DiffViewState } from "./diff"
 import { toggledProjectsSidebar, toggledSidebar, type SidebarMode } from "./layout"
 import { paneNodes, paneLeaves, defaultPaneLayout, normalizePaneFocus, type PaneLayout } from "./panes"
 import { builtinPreset, type TuiStructure } from "../config/presets"
-import { foldMember, foldMemberLifecycle, type ChildState } from "./members"
 import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
 import { mergeInteractions } from "./prompts"
@@ -93,8 +88,6 @@ export interface AppState {
   /** `GET /v2/providers` (id, protocol, key source, auth, model count): the Provider View's list. */
   readonly providers: ProviderSummary[]
   readonly backendCommands: CommandSummary[]
-  readonly workflows: WorkflowSummary[]
-  readonly workflowState: Record<string, unknown> | undefined
   readonly selected: SessionInfo | undefined
   /** Snapshot of the streaming overlay (see overlay.ts), merged over `messages` for display. */
   readonly overlay: MessageInfo[]
@@ -109,9 +102,6 @@ export interface AppState {
   /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
-  /** Ephemeral child preview, independent of the main session and composer. */
-  readonly subagentsShowArchived: boolean
-  readonly subagentSelection: string | undefined
   /** Local editable workspace inside the central panel; one passive conversation viewer and one selectable message editor. */
   readonly paneLayout: PaneLayout
   /**
@@ -180,10 +170,6 @@ export interface AppState {
   readonly tools: boolean | undefined
   /** Per-card expansion that overrides `tools` (a click on the card header), by part id. */
   readonly toolToggles: ReadonlyMap<string, boolean>
-  /** Subagents of the open session (`SessionInfo.members` + `memberUpdated` frames, folded by member). */
-  readonly members: MemberInfo[]
-  /** What the controller last read about each child session, by session id. */
-  readonly children: ReadonlyMap<string, ChildState>
   /** Bumped when the transcript should jump to its newest line (a prompt was submitted). */
   readonly followTick: number
   /** Commands of the shell turns run from this TUI, by the turn's assistant message id. */
@@ -323,7 +309,6 @@ export interface Catalog {
   models: ModelSummary[]
   /** `GET /v2/agents`; kept current so the `/agent` picker (C12) reflects catalog changes, not just bootstrap. Omitted keeps the rows read before. */
   agents?: AgentSummary[]
-  workflows: WorkflowSummary[]
   providers: ProviderSummary[]
   commands: CommandSummary[]
   /** `GET /v2/permission-modes`; omitted keeps the rows read before. */
@@ -345,8 +330,6 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     models: [],
     providers: [],
     backendCommands: [],
-    workflows: [],
-    workflowState: undefined,
     selected: undefined,
     overlay: [],
     queued: [],
@@ -355,8 +338,6 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     turnStartedAt: undefined,
     cursor: "0",
     view: "chat",
-    subagentsShowArchived: false,
-    subagentSelection: undefined,
     paneLayout: defaultPaneLayout(),
     structure: builtinPreset("workspace"),
     startupNotices: [],
@@ -390,8 +371,6 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     reasoningToggles: new Map(),
     tools: undefined,
     toolToggles: new Map(),
-    members: [],
-    children: new Map(),
     followTick: 0,
     shellCommands: new Map(),
     pendingShell: undefined,
@@ -592,7 +571,6 @@ export function createAppStore() {
         set("interactions", mergeInteractions(catalog.interactions, liveAsks, answered))
         set("models", catalog.models)
         if (catalog.agents) set("agents", catalog.agents)
-        set("workflows", catalog.workflows)
         set("providers", catalog.providers)
         set("backendCommands", catalog.commands)
         if (catalog.permissionModes) set("permissionModes", catalog.permissionModes)
@@ -612,15 +590,10 @@ export function createAppStore() {
      * previous session and are dropped.
      */
     openSession(session: SessionInfo): void {
-      const changedSession = state.selected?.id !== session.id
       fold.reset(session.lastSeq ?? "0")
       noticedMode = session.permissionMode || manualMode
       batch(() => {
         set("selected", session)
-        if (changedSession) {
-          set("subagentSelection", undefined)
-          set("subagentsShowArchived", false)
-        }
         set("view", "chat")
         set("cursor", fold.lastSeq)
         set("messages", [])
@@ -629,8 +602,6 @@ export function createAppStore() {
         set("running", false)
         set("turnId", "")
         set("turnStartedAt", undefined)
-        set("members", sessionMembers(session))
-        set("children", new Map())
         set("dividers", [])
         set("liveRound", undefined)
         // The sidebar's session list may hold a stale `busy` (the last list
@@ -672,8 +643,6 @@ export function createAppStore() {
         set("running", false)
         set("turnId", "")
         set("turnStartedAt", undefined)
-        set("members", [])
-        set("children", new Map())
         set("dividers", [])
         set("liveRound", undefined)
         set("todos", [])
@@ -750,18 +719,9 @@ export function createAppStore() {
     },
 
     /** Fold one stream event into the overlay (not yet visible; see `flushOverlay`). */
-    applyEvent(rawEvent: StreamEvent): OverlayEffect {
-      const event = normalizeStreamEvent(rawEvent)
+    applyEvent(event: StreamEvent): OverlayEffect {
       const effect = fold.apply(event)
       if (effect.durable) set("cursor", fold.lastSeq)
-      // Members fold here, not in the overlay: they are session state, not transcript parts.
-      if (event.memberUpdated?.member && (effect.durable || !event.seq)) set("members", foldMember(state.members, event.memberUpdated))
-      if (event.memberLifecycleChanged && (effect.durable || !event.seq)) {
-        const lifecycle = event.memberLifecycleChanged
-        set("members", foldMemberLifecycle(state.members, lifecycle))
-        set("children", new Map([...state.children].map(([id, child]) => [id, child.members
-          ? { ...child, members: foldMemberLifecycle(child.members, lifecycle) } : child])))
-      }
       // Pending asks are live frames: shown at once.
       applyAsk(event)
       // Durable session state below: skip a replayed duplicate (effect.durable is false for it).
@@ -821,11 +781,6 @@ export function createAppStore() {
     /** A `sessionDeleted` frame from the global stream. */
     dropSessionRow,
 
-    /** Replace the member rows (a fresh `SessionInfo.members` read). */
-    setMembers(rows: MemberInfo[]): void { set("members", rows) },
-    /** Record what was read about one child session. */
-    setChild(id: string, child: ChildState): void { set("children", new Map(state.children).set(id, child)) },
-
     /** Publish the overlay's current snapshot. */
     flushOverlay(): void { set("overlay", fold.messages()) },
 
@@ -862,16 +817,7 @@ export function createAppStore() {
     setDraft(value: boolean): void {
       if (value !== state.draft) set("draft", value)
     },
-    setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
-    setSubagentsShowArchived(show: boolean): void {
-      batch(() => {
-        set("subagentsShowArchived", show)
-        const rows = subagentRows(state)
-        if (!rows.some((row) => row.id === state.subagentSelection)) set("subagentSelection", rows[0]?.id)
-      })
-    },
-    selectSubagent(id: string | undefined): void { set("subagentSelection", id) },
     setPaneLayout(layout: PaneLayout): void { set("paneLayout", normalizePaneFocus(layout)) },
     setStructure(structure: TuiStructure): void { set("structure", structure) },
     setStartupNotices(lines: readonly string[]): void { set("startupNotices", lines) },
@@ -1069,13 +1015,11 @@ export function createAppStore() {
 
     completionContext(): CompletionContext {
       return {
-        subagents: subagentRows(state).map((row) => row.id),
         panes: paneLeaves(state.paneLayout.root).map(({ id, kind }) => ({ id, kind })),
         layoutContainers: paneNodes(state.paneLayout.root).flatMap((node) => node.type === "pane" ? [] : [{ id: node.id, children: node.children.map((child) => child.node.id), removable: paneLeaves(node).every((pane) => pane.kind !== "conversation" && pane.kind !== "composer") }]),
         backendCommands: state.backendCommands.map((command) => command.name),
         models: state.models.map((model) => model.id),
         sessions: state.sessions.map((session) => ({ id: session.id, title: session.title })),
-        workflows: state.workflows.map((workflow) => workflow.name),
         interactions: state.interactions.map((interaction) => interaction.id),
         agents: state.agents.map((agent) => agent.name),
         apiOperations: apiOperationNames,

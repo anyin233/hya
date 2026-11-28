@@ -1331,12 +1331,18 @@ async fn scoped_tui_extensions_permission_modes_and_bundle_apis() {
     );
 
     // TUI extensions: text files included, binary excluded, `known` digest cache hit/miss/validation.
-    assert_eq!(
-        ok_get(&app, &format!("/v2/tui-extensions?directory={c_q}")).await,
-        json!({})
+    let find_scoped_ext = |resp: &Value| {
+        resp["extensions"]
+            .as_array()
+            .and_then(|rows| rows.iter().find(|r| r["bundleId"] == SCOPED_BUNDLE))
+            .cloned()
+    };
+    assert!(
+        find_scoped_ext(&ok_get(&app, &format!("/v2/tui-extensions?directory={c_q}")).await)
+            .is_none()
     );
-    let ext =
-        ok_get(&app, &format!("/v2/tui-extensions?directory={a_q}")).await["extensions"][0].clone();
+    let ext = find_scoped_ext(&ok_get(&app, &format!("/v2/tui-extensions?directory={a_q}")).await)
+        .expect("scoped tui extension present in project scope");
     assert_eq!(ext["entry"], "extensions/main.ts");
     assert_eq!(
         ext["files"]
@@ -1353,12 +1359,9 @@ async fn scoped_tui_extensions_permission_modes_and_bundle_apis() {
         &format!("/v2/tui-extensions?directory={a_q}&known={digest}"),
     )
     .await;
-    assert_eq!(cached["extensions"][0]["cached"], true);
-    assert!(
-        cached["extensions"][0]["files"]
-            .as_array()
-            .is_none_or(Vec::is_empty)
-    );
+    let cached_ext = find_scoped_ext(&cached).expect("cached scoped tui extension");
+    assert_eq!(cached_ext["cached"], true);
+    assert!(cached_ext["files"].as_array().is_none_or(Vec::is_empty));
     assert_eq!(
         get_json(
             &app,

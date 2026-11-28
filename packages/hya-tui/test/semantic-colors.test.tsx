@@ -12,7 +12,7 @@ const hex = (color: RGBA | undefined) => color ? `#${[color.r, color.g, color.b]
 const span = (text: string) => setup?.captureSpans().lines.flatMap((line) => line.spans).find((item) => item.text.includes(text))
 
 test("a focused frame has a blue border and an independently neutral title", async () => {
-  setup = await testRender(() => <PaneFrame kind="subagents" title="Window title" focused><text>body</text></PaneFrame>, { width: 40, height: 6 })
+  setup = await testRender(() => <PaneFrame kind="sessions" title="Window title" focused><text>body</text></PaneFrame>, { width: 40, height: 6 })
   await setup.renderOnce()
   expect(hex(span("┌")?.fg)).toBe(colors.focus)
   expect(hex(span("Window title")?.fg)).toBe(colors.heading)

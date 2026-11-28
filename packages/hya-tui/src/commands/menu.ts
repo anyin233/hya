@@ -9,7 +9,7 @@ import type { CommandSummary } from "../client"
 import type { CommandSpec, Completion } from "./registry"
 
 /** Where a menu row came from. Local (TUI-registered) names win name clashes. */
-export type CommandSource = "local" | "command" | "skill"
+export type CommandSource = "local" | "command" | "skill" | "extension"
 
 export interface CommandEntry {
   /** Including the leading slash, e.g. `/model`. */
@@ -17,14 +17,24 @@ export interface CommandEntry {
   description: string
   argumentHint?: string
   source: CommandSource
-  /** A backend row's `scope` (`project`, `user`, `builtin`, a skill's `bundle`): the menu tags it `[skill · project]`. */
+  /** A backend row's `scope` (`project`, `user`, `builtin`, a skill's `bundle`, or an extension bundle id): the menu tags it `[skill · project]`. */
   scope?: string
+}
+
+/** Extension-contributed slash command entry merged into the command menu. */
+export interface ExtensionMenuCommand {
+  readonly name: string
+  readonly description: string
+  readonly argumentHint?: string
+  readonly extension: string
 }
 
 /** What the menu lists besides the local commands. */
 export interface MergeOptions {
   /** `false` (`tui.toml` `[commands] skill_commands = false`): no `/skill:*` rows; typing one still runs it. */
   skillCommands?: boolean
+  /** Running TUI extension slash commands (`extensionManager.commands()`). */
+  extensionCommands?: readonly ExtensionMenuCommand[]
 }
 
 /** A selectable row in the command pane, regardless of argument depth. */
@@ -46,7 +56,19 @@ export const commandSuggestionLimit = 12
  */
 export function mergeCommandEntries(local: CommandSpec[], backend: CommandSummary[], options: MergeOptions = {}): CommandEntry[] {
   const byName = new Map<string, CommandEntry>()
+  for (const ext of options.extensionCommands ?? []) {
+    const name = ext.name.startsWith("/") ? ext.name : `/${ext.name}`
+    if (byName.has(name)) continue
+    byName.set(name, {
+      name,
+      description: ext.description,
+      ...(ext.argumentHint ? { argumentHint: ext.argumentHint } : {}),
+      source: "extension",
+      scope: ext.extension,
+    })
+  }
   for (const spec of local) {
+    if (byName.has(spec.name)) continue
     byName.set(spec.name, { name: spec.name, description: spec.description, argumentHint: spec.argumentHint, source: "local" })
   }
   for (const command of backend) {

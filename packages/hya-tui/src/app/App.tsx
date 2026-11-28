@@ -39,6 +39,9 @@ export function App() {
     close: (panelKey) => { if (store.state.extensionOverlay === panelKey) store.setExtensionOverlay(undefined) },
     open: (panelKey) => { if (extensionManager.replacement("project_view")?.key === panelKey) store.setExtensionOverlay(panelKey) },
     executeCommand: (command, origin) => controller.hostCommand(command, origin),
+    invokeBundleApi: (request) => controller.invokeBundleApi(request),
+    readExtensionState: (bundleId, sessionId) => controller.readExtensionState(bundleId, sessionId),
+    paneCommand: (command, origin) => controller.paneCommand(command, origin),
   })
   let paintTimer: ReturnType<typeof setTimeout> | undefined
   const paint = (event: MouseEvent): void => {

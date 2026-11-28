@@ -1,10 +1,8 @@
-import { normalizeStreamEvent, sessionMembers, type HyaClient, type MessageInfo, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
+import { type HyaClient, type SessionInfo, type StreamEvent, type StreamFrame } from "../client"
 import { askSessionLabel, otherAskNotice } from "../state/format"
-import { childActivity } from "../state/members"
-import { askFrameRoute, globalAskRoute } from "../state/prompts"
+import { askFrameRoute, globalAskRoute, treeSessionIds } from "../state/prompts"
 import { sessionRow } from "../state/revert"
 import type { AppStore } from "../state/store"
-import { subagentRows } from "../state/subagents"
 import type { createBackendLifecycle } from "./backendLifecycle"
 import { createDebounce } from "./debounce"
 import { turnEndStatus, type createTurnRunner } from "./turns"
@@ -27,9 +25,7 @@ const flushMs = 16
 const refreshWaitMs = 120
 const refreshMaxWaitMs = 400
 
-/** Child-session re-read interval while a child is busy or a turn runs. */
-export const childPollMs = 1500
-/** Global stream reconnect backoff: the session stream's 800 ms, doubling up to 15 s while it keeps failing (an older backend without the route). */
+/** Global stream reconnect backoff: the session stream's 800 ms, doubling up to 15 s while it keeps failing. */
 const globalRetryMs = 800
 const globalRetryMaxMs = 15_000
 
@@ -43,12 +39,6 @@ export function createSubscriptions({ client, store, backend, turns, status, not
   /** Projection reads in flight complete out of order; only the newest one is applied. */
   let readsStarted = 0
   let readApplied = 0
-  /** Child polling: bumped on session switch so stale reads are dropped. */
-  let childGeneration = 0
-  let childTimer: ReturnType<typeof setTimeout> | undefined
-  let childReading = false
-  let childAgain = false
-  let lastChildRead = 0
 
   /** `projectsUpdated` (live, global stream only): one `ListProjects` per burst. */
   const projectsRefreshLater = createDebounce(() => {
@@ -65,7 +55,6 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     if (ticket < readApplied) return
     readApplied = ticket
     store.setMessages(selected.id, rows)
-    trackChildren()
     // A failed turn whose error text was not on the stream: take it from the projection.
     if (store.state.status === "Error · turn failed") {
       const failed = [...store.state.messages].reverse().find((message) => message.error)
@@ -73,9 +62,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     }
   }
 
-  /** `GetSessionTodo` for the live sidebar todo panel (E23); silent on failure (an offline backend still shows messages). */
-
-  /** Re-read the open session's row: `SessionInfo.usage` after a `tokensRecorded` (E22). */
+  /** Re-read the open session's row: `SessionInfo.usage` and folded `SessionInfo.extensions`. */
   async function refreshSession(): Promise<void> {
     const selected = store.state.selected
     if (!selected) return
@@ -83,7 +70,6 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     const current = store.state.selected
     if (current?.id === row.id) {
       store.setSelected(sessionRow(current, row))
-      store.setMembers(sessionMembers(row))
     }
   }
 
@@ -157,64 +143,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     }, flushMs)
   }
 
-  /** Read one child session: its busy flag, agent, latest activity, and whether its newest reply failed. */
-  async function readChild(id: string): Promise<void> {
-    const generation = childGeneration
-    const [session, messages] = await Promise.all([
-      client.request<SessionInfo>("GET", `/v2/sessions/${encodeURIComponent(id)}`),
-      client.listMessages(id),
-    ])
-    if (generation !== childGeneration || closing) return
-    const last = [...messages].reverse().find((message: MessageInfo) => message.role === "ROLE_ASSISTANT")
-    const activity = childActivity(messages)
-    store.setChild(id, {
-      busy: session.busy === true,
-      agent: session.agent,
-      members: sessionMembers(session),
-      ...(activity ? { activity } : {}),
-      ...(last?.error || last?.finish === "FINISH_REASON_ERROR" ? { failed: true } : {}),
-    })
-  }
-
-  /**
-   * Re-read the open session's child sessions: at once when the last round
-   * is older than `childPollMs`, else when it is due (at most one round per
-   * `childPollMs`). Rounds repeat while a child is busy or this client's
-   * turn runs.
-   */
-  function trackChildren(): void {
-    if (childReading) {
-      childAgain = true
-      return
-    }
-    if (childTimer || closing) return
-    childTimer = setTimeout(readChildren, Math.max(0, lastChildRead + childPollMs - Date.now()))
-  }
-
-  function readChildren(): void {
-    childTimer = undefined
-    const ids = subagentRows(store.state, { includeArchived: true }).map((row) => row.id)
-    if (!ids.length) return
-    const generation = childGeneration
-    childReading = true
-    childAgain = false
-    lastChildRead = Date.now()
-    void Promise.all([
-      ...ids.map((id) => readChild(id).catch(() => undefined)),
-      client.listSessions().then((rows) => generation === childGeneration && store.setSessions(rows)).catch(() => undefined),
-    ]).then(() => {
-      if (generation !== childGeneration) return
-      childReading = false
-      const busy = ids.some((id) => store.state.children.get(id)?.busy)
-      // The listing may discover another generation of descendants after the
-      // reads began. Load their member snapshots even if the whole team is idle.
-      const discovered = subagentRows(store.state, { includeArchived: true }).some((row) => !ids.includes(row.id))
-      if (childAgain || busy || discovered || store.state.running) trackChildren()
-    })
-  }
-
-  function applyEvent(rawEvent: StreamEvent): void {
-    const event = normalizeStreamEvent(rawEvent)
+  function applyEvent(event: StreamEvent): void {
     // Live, no seq, empty `session`: the provider/model catalog changed. Not
     // a transcript or ask frame, so it never reaches the store's fold —
     // debounced here instead of `scheduleRefresh()`'s projection re-read.
@@ -227,8 +156,10 @@ export function createSubscriptions({ client, store, backend, turns, status, not
       return
     }
     const effect = store.applyEvent(event)
-    if ((event.memberUpdated || event.memberLifecycleChanged) && effect.durable) trackChildren()
-    if (event.memberLifecycleChanged && effect.durable) sessionDue = true
+    if (event.extensionEvent && (effect.durable || !event.seq)) {
+      sessionDue = true
+      scheduleSessionListRefresh()
+    }
     if (effect.changed) scheduleFlush()
     // Text deltas only feed the overlay. Other durable frames (message and
     // part boundaries, tool state, errors) and live interaction frames
@@ -273,7 +204,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
       scheduleRefresh()
       return
     }
-    const event = frame.event ? normalizeStreamEvent(frame.event) : undefined
+    const event = frame.event
     if (!event) return
     const route = askFrameRoute(event, sessionId)
     if (route === "own") applyEvent(event)
@@ -326,15 +257,14 @@ export function createSubscriptions({ client, store, backend, turns, status, not
   async function onGlobalFrame(frame: StreamFrame): Promise<void> {
     if (backend.onStopping(frame.event)) return
     if (frame.resync) {
-      // Recover list, ask, and team-root lifecycle frames lost in the gap.
+      // Recover list, ask, and extension-state frames lost in the gap.
       await Promise.allSettled([
         client.listSessions().then((rows) => store.setSessions(rows)),
         refreshInteractions(), refreshSession(),
       ])
-      trackChildren()
       return
     }
-    const event = frame.event ? normalizeStreamEvent(frame.event) : undefined
+    const event = frame.event
     if (!event) return
     // Live, no seq, empty `session`: never an ask, so `globalAskRoute` would
     // ignore it; debounced with the copy that may also arrive on the open
@@ -349,15 +279,15 @@ export function createSubscriptions({ client, store, backend, turns, status, not
       return
     }
     const sessionId = event.session
-    // Actor lifecycle belongs to the team root, even when this client has
-    // opened a nested parent. Re-read projections without applying another
-    // session's sequence watermark to the open transcript.
-    if (event.memberLifecycleChanged) {
-      const child = event.memberLifecycleChanged.child
-      if (sessionId === store.state.selected?.id || subagentRows(store.state, { includeArchived: true }).some((row) => row.id === child)) {
+    // Bundle-owned extension events emitted on a root or sibling session:
+    // re-read the open session's folded projection (`SessionInfo.extensions`)
+    // without applying another session's sequence watermark to our transcript.
+    if (event.extensionEvent) {
+      const selected = store.state.selected
+      if (selected && (!sessionId || sessionId === selected.id || sessionId === selected.parent || treeSessionIds(selected.id, store.state.sessions).has(sessionId))) {
         sessionDue = true
         scheduleRefresh()
-        trackChildren()
+        scheduleSessionListRefresh()
       }
       return
     }
@@ -429,10 +359,8 @@ export function createSubscriptions({ client, store, backend, turns, status, not
             // A remote that was offline when it was entered: its catalogs now.
             const catalog = backend.refreshStaleCatalog()
             if (catalog) await catalog
-            // Asks and root lifecycle notifications before this subscription
-            // are not replayed here; refresh nested parents' member state too.
+            // Asks and extension updates before this subscription are not replayed here.
             await Promise.allSettled([refreshInteractions(), refreshSession()])
-            trackChildren()
           })
         } catch {
           // Silent: the session stream owns the connection state; this one only adds other sessions' asks.
@@ -459,15 +387,6 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     await client.deleteSession(id)
   }
 
-  function resetChildren(): void {
-    childGeneration++
-    if (childTimer) clearTimeout(childTimer)
-    childTimer = undefined
-    childReading = false
-    childAgain = false
-    lastChildRead = 0
-  }
-
   function stopSessionStream(): void {
     streamAbort?.abort()
     streamAbort = undefined
@@ -479,7 +398,6 @@ export function createSubscriptions({ client, store, backend, turns, status, not
     closing = true
     streamAbort?.abort()
     globalAbort?.abort()
-    if (childTimer) clearTimeout(childTimer)
     refreshLater.cancel()
     projectsRefreshLater.cancel()
     catalogRefreshLater.cancel()
@@ -487,7 +405,7 @@ export function createSubscriptions({ client, store, backend, turns, status, not
   }
 
   return {
-    refreshMessages, scheduleRefresh, resetChildren, startStream, startGlobalStream,
+    refreshMessages, scheduleRefresh, startStream, startGlobalStream,
     stopSessionStream, stopGlobalStream, deleteSession, dispose,
     get closing() { return closing },
     get streamReady() { return streamReady },

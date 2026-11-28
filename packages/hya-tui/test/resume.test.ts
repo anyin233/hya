@@ -42,7 +42,7 @@ test("sessionRows marks archived sessions; --continue never picks an archived on
 
 test("a sessionUpdated archived frame drops the sidebar row (the open one stays, marked) and an unarchive marks it back", () => {
   const store = createAppStore()
-  store.applyCatalog({ sessions: sessions.filter((row) => !row.archived), interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  store.applyCatalog({ sessions: sessions.filter((row) => !row.archived), interactions: [], models: [], providers: [], commands: [] })
   store.openSession({ id: "new", agent: "hya-main", workdir: "/w" })
   store.applyEvent({ seq: "5", session: "old", sessionUpdated: { archived: true } })
   expect(store.state.sessions.map((row) => row.id)).not.toContain("old")

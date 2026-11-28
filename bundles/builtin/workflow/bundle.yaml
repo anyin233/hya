@@ -34,3 +34,19 @@ agents:
     private: true
     role: subagent
     prompt: prompts/reviewer.md
+assets:
+  - { id: tui-main, path: tui/main.ts }
+  - { id: tui-workflows, path: tui/workflows.ts }
+  - { id: tui-commands, path: tui/commands.ts }
+tui:
+  api_version: 2
+  entry: tui/main.ts
+  sdk: "2.0.0"
+  permissions:
+    - tui.panel
+    - tui.action
+    - tui.keys
+    - tui.session.read
+    - tui.workspace.read
+    - tui.bundle_api
+    - tui.extension_state.read

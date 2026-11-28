@@ -78,3 +78,26 @@ test.describe("hya TUI golden path with fake model", () => {
     expect(fakeModel!.requests().length).toBe(3)
   })
 })
+
+test.describe("hya TUI in --bare mode (zero built-in bundles)", () => {
+  test.use({ bare: true, preset: "workspace" })
+
+  test("boots cleanly with zero TUI extensions, collapses bundled sidebars, and completes a prompt", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend), { viewport: wideViewport })
+    await term.waitForText("Message, !shell, or @file · / commands")
+    await term.waitForText("No messages yet. Type a prompt below.")
+    const initial = await term.text()
+    expect(initial).not.toContain("Loading…")
+    expect(initial).not.toContain("Sessions")
+    expect(initial).not.toContain("Todos")
+    expect(initial).not.toContain("Projects")
+    await term.type("hello in bare mode")
+    await term.press("Enter")
+    await term.waitForText("● hya-bare · hya/offline", 20_000)
+    await term.waitForText("No live provider is available")
+    await term.type("/exit")
+    await term.waitForText("▸ /exit")
+    await term.press("Enter")
+    expect(await term.waitForExit(15_000)).toBe(0)
+  })
+})

@@ -32,14 +32,14 @@ describe("command pane, overlay, and height", () => {
   test("floats above workspace, preserves drafts across resize, Backspace closes at wide & narrow widths", async () => {
     app = await renderApp({ preset: "workspace", width: 128, height: 37 })
     await app.submit("/layout split left jobs")
-    await app.waitForText("jobs · pane-8")
+    await app.waitForText("Jobs")
     await app.press("ARROW_RIGHT", { meta: true })
     await app.type("keep this draft")
     expect(app.controller.ui.composerInput?.text).toBe("keep this draft")
 
     // Open command pane from another pane, verify floating geometry and draft preservation across resize.
     await app.press("ARROW_LEFT", { meta: true })
-    await app.waitForText("▸ jobs · pane-8")
+    await app.waitForText("Jobs")
     await app.type("/layout split")
     await app.waitForText("Commands")
     const boxWide = commandBox(app)!
@@ -172,7 +172,7 @@ describe("command pane, overlay, and height", () => {
     await app.waitForText("▸ /layout split up jobs")
     await app.press("TAB")
     await app.press("RETURN")
-    await app.waitForText("jobs · pane-8")
+    await app.waitForText("Jobs")
     // Return focus to composer (`pane-1`) so later paste & composer assertions target the composer.
     app.controller.ui.command?.open("/layout focus pane-1")
     await app.render()

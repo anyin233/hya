@@ -59,6 +59,8 @@ export type BackendSetup = {
   /** `agents.<id>.model` pins in the backend config, by agent id (docs/configuration.md). */
   agentModels?: Record<string, string>
   mcpServers?: Record<string, McpServerOption>
+  /** Pass `--bare` to `hya serve` (zero built-in bundles, `hya-bare` agent). */
+  bare?: boolean
 }
 
 /** One stdio MCP server of the backend config's `mcp:` map (docs/configuration.md). */
@@ -143,7 +145,8 @@ export async function prepareBackend(root: string, setup: BackendSetup): Promise
 export async function startBackend(root: string, setup: BackendSetup): Promise<{ child: ChildProcess; backend: Backend }> {
   const { dir, env } = await prepareBackend(root, setup)
   const { HYA_MODEL: _model, ...inherited } = process.env
-  const child = spawn(hyaBin, ["serve", "--bind", "127.0.0.1:0", "--db", join(root, "hya.db")], {
+  const args = ["serve", "--bind", "127.0.0.1:0", "--db", join(root, "hya.db"), ...(setup.bare ? ["--bare"] : [])]
+  const child = spawn(hyaBin, args, {
     cwd: dir,
     env: { ...inherited, ...env },
     stdio: ["ignore", "pipe", "pipe"],

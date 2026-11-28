@@ -145,6 +145,8 @@ type Options = {
    * Unset (the default) writes nothing, so the TUI uses its default preset.
    */
   preset: string | undefined
+  /** Start the isolated `hya serve` with `--bare` (zero built-in bundles). */
+  bare: boolean | undefined
 }
 
 /** Write `preset = "<name>"` to `path` unless a spec already wrote that file. */
@@ -154,7 +156,7 @@ async function writePreset(path: string, preset: string | undefined): Promise<vo
   await writeFile(path, `preset = ${JSON.stringify(preset)}\n`)
 }
 
-const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | undefined, projectBundles: Record<string, BundleFiles> | undefined, mcpServers?: Record<string, McpServerOption>): BackendSetup => ({
+const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | undefined, projectBundles: Record<string, BundleFiles> | undefined, mcpServers?: Record<string, McpServerOption>, bare?: boolean): BackendSetup => ({
   fakeModel,
   protocol: model?.protocol ?? "chat",
   permission: model?.permission ?? "default",
@@ -164,6 +166,7 @@ const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | unde
   ...(model?.modelModalities ? { modelModalities: model.modelModalities } : {}),
   ...(model?.agentModels ? { agentModels: model.agentModels } : {}),
   ...(mcpServers ? { mcpServers } : {}),
+  ...(bare ? { bare: true } : {}),
 })
 
 const withOptions = base.extend<{ fakeModel: FakeModel | undefined } & Options>({
@@ -171,6 +174,7 @@ const withOptions = base.extend<{ fakeModel: FakeModel | undefined } & Options>(
   projectBundles: [undefined, { option: true }],
   mcpServers: [undefined, { option: true }],
   preset: [undefined, { option: true }],
+  bare: [undefined, { option: true }],
   fakeModel: async ({ model }, use) => {
     if (!model) {
       await use(undefined)
@@ -210,10 +214,10 @@ export const launchTest = withOptions.extend<{ workspace: Workspace }>({
 })
 
 export const test = withOptions.extend<Fixtures>({
-  backend: async ({ fakeModel, model, projectBundles, mcpServers }, use) => {
+  backend: async ({ fakeModel, model, projectBundles, mcpServers, bare }, use) => {
     requireHya()
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, setupOf(fakeModel, model, projectBundles, mcpServers))
+    const { child, backend } = await startBackend(root, setupOf(fakeModel, model, projectBundles, mcpServers, bare))
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))

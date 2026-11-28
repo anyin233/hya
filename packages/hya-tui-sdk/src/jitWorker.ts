@@ -82,7 +82,7 @@ function pump(): void {
   if (!current) return
   const out = realm.poll(current.key)
   if (typeof out === "string" && out) finish(out)
-  else if (outstanding === 0) finish(failure(current.id, "handler never settles (extensions have no timers; only api.fs is asynchronous)"))
+  else if (outstanding === 0) finish(failure(current.id, "handler never settles (extensions have no timers; only host APIs are asynchronous)"))
 }
 
 /** A macrotask later, so the realm's microtasks have all run: forward what they queued, see whether the request settled. */

@@ -39,7 +39,9 @@ export const layoutCommand: CommandSpec = {
     if (words[0] === "wrap" && words.length === 4) return matchValues(head, current, paneKinds.filter((kind) => kind !== "conversation" && kind !== "composer" && kind !== "extension"))
     if (words[0] === "wrap" && words.length === 5) return matchValues(head, current, ["before", "after"])
     if (words[0] === "assign" && words.length === 2) return matchValues(head, current, [...paneKinds])
-    if ((words[0] === "split" && words.length === 4 && words[2] === "extension") || (words[0] === "assign" && words.length === 3 && words[1] === "extension")) return matchValues(head, current, extensionManager.panels().map((panel) => panel.key))
+    if ((words[0] === "split" && words.length === 4 && words[2] === "extension") || (words[0] === "assign" && words.length === 3 && words[1] === "extension")) {
+      return matchValues(head, current, [...extensionManager.panels().map((panel) => panel.key), ...extensionManager.panes().map((pane) => pane.key)])
+    }
     if (words[0] === "focus" && words.length === 2) return matchValues(head, current, ["left", "right", "up", "down", "next", "previous"])
     return []
   },
@@ -88,7 +90,7 @@ export const layoutCommand: CommandSpec = {
       }
       case "split": {
         const direction = args[1]
-        const kind = args[2] ?? "jobs"
+        const kind = args[2] ?? "status"
         if ((direction !== "up" && direction !== "left") || !paneKinds.includes(kind as PaneKind) || args.length > (kind === "extension" ? 4 : 3)) throw new Error("Usage: /layout split <up|left> [job] (extension <bundle>#<panel>)")
         next = splitPane(current, direction === "up" ? "horizontal" : "vertical", kind as PaneKind, true, args[3])
         break

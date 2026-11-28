@@ -29,15 +29,10 @@ test("adding or assigning a passive pane cannot take input ownership", () => {
   expect(normalizePaneFocus({ ...layout, active: "pane-6" }).active).toBe("pane-1")
 })
 
-test("legacy layout migration preserves old editor id, split weights, and eligible focus", () => {
+test("legacy v2 layout is rejected by v4-only parser", () => {
   const legacy = { version: 2, active: "pane-2", root: { type: "split", axis: "vertical", weight: 0.6,
     first: { type: "pane", id: "pane-1", kind: "conversation" }, second: { type: "pane", id: "pane-2", kind: "status" } } }
-  const migrated = parsePaneLayout(legacy)!
-  expect(migrated.version).toBe(4)
-  expect(migrated.active).toBe("pane-1")
-  expect(paneLeaves(migrated.root).map((pane) => [pane.id, pane.kind])).toEqual([["pane-3", "conversation"], ["pane-4", "activity"], ["pane-1", "composer"], ["pane-2", "status"]])
-  expect(migrated.root.type === "split" && migrated.root.children[0]?.size).toEqual({ mode: "weight", value: 0.6 })
-  expect(parsePaneLayout(JSON.parse(JSON.stringify(migrated)))).toEqual(migrated)
+  expect(parsePaneLayout(legacy)).toBeUndefined()
 })
 
 test("v3 requires one viewer and editor; persisted passive focus repairs to editor", () => {

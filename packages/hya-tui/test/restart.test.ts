@@ -105,7 +105,6 @@ function harness() {
     listInteractions: async (): Promise<Interaction[]> => (restarted ? [ask] : []),
     listModels: async () => [restarted ? { id: "hya/next", providerId: "hya", modelId: "next" } : { id: "hya/echo", providerId: "hya", modelId: "echo" }],
     listAgents: async () => [{ name: "hya-main" }],
-    listWorkflows: async () => [],
     listProviders: async () => [],
     listCommands: async () => [],
     listPermissionModes: async () => [],
@@ -195,36 +194,35 @@ function harness() {
   return { store, controller, statuses, calls, sessions, sessionStreams, globalStreams, restart, nextStream, statusWhere }
 }
 
-test("a nested parent's archival refreshes on root lifecycle frames, resync, and global reconnection without mixing cursors", async () => {
+test("a nested parent's extension state refreshes on root extensionEvent frames, resync, and global reconnection without mixing cursors", async () => {
   const h = harness()
   try {
     await h.controller.start()
     await h.nextStream()
-    const member = { member: "m", child: "helper", handle: "main/lead/helper", status: "MEMBER_STATUS_DONE", archived: true, archiveReason: "reported" }
-    const lead: SessionInfo = { id: "lead", parent: "s1", agent: "hya-main", workdir: "/work", lastSeq: "10", members: [member] }
+    const lead: SessionInfo = { id: "lead", parent: "s1", agent: "hya-main", workdir: "/work", lastSeq: "10", extensions: { "hya/multi-agent": { archived: { "main/lead/helper": "reported" } } } }
     h.sessions.push(lead, { id: "helper", parent: "lead", agent: "hya-task", workdir: "/work" })
     h.store.setSessions([...h.sessions])
     await h.controller.openSession("lead")
     await h.nextStream()
-    expect(h.store.state.members[0]?.archived).toBe(true)
+    expect((h.store.state.selected?.extensions?.["hya/multi-agent"] as { archived?: Record<string, string> })?.archived?.["main/lead/helper"]).toBe("reported")
     const refreshed = Promise.withResolvers<void>()
-    const setMembers = h.store.setMembers.bind(h.store)
-    h.store.setMembers = (rows) => {
-      setMembers(rows)
-      if (rows[0]?.archived === false) refreshed.resolve()
+    const setSelected = h.store.setSelected.bind(h.store)
+    h.store.setSelected = (row) => {
+      setSelected(row)
+      if ((row?.extensions?.["hya/multi-agent"] as { archived?: Record<string, string> } | undefined)?.archived?.["main/lead/helper"] === undefined) refreshed.resolve()
     }
-    lead.members = [{ ...member, archived: false, archiveReason: "" }]
+    lead.extensions = { "hya/multi-agent": { archived: {} } }
     const global = h.globalStreams.at(-1)!
-    await global.push({ event: { session: "s1", seq: "999", memberLifecycleChanged: { child: "helper", handle: member.handle } } })
+    await global.push({ event: { session: "s1", seq: "999", extensionEvent: { bundle: "hya/multi-agent", kind: "member_unarchived", payload: {} } } })
     await refreshed.promise
-    expect(h.store.state.members[0]?.archiveReason).toBe("")
+    expect((h.store.state.selected?.extensions?.["hya/multi-agent"] as { archived?: Record<string, string> })?.archived).toEqual({})
     expect(h.store.state.cursor).toBe("10")
-    lead.members = [{ ...member, archiveReason: "shutdown" }]
+    lead.extensions = { "hya/multi-agent": { archived: { "main/lead/helper": "shutdown" } } }
     await global.push({ resync: { lastSeq: "999" } })
-    expect(h.store.state.members[0]).toMatchObject({ archived: true, archiveReason: "shutdown" })
-    lead.members = [{ ...member, archived: false, archiveReason: "" }]
+    expect((h.store.state.selected?.extensions?.["hya/multi-agent"] as { archived?: Record<string, string> })?.archived?.["main/lead/helper"]).toBe("shutdown")
+    lead.extensions = { "hya/multi-agent": { archived: {} } }
     await global.open()
-    expect(h.store.state.members[0]).toMatchObject({ archived: false, archiveReason: "" })
+    expect((h.store.state.selected?.extensions?.["hya/multi-agent"] as { archived?: Record<string, string> })?.archived).toEqual({})
     expect(h.store.state.cursor).toBe("10")
   } finally { h.controller.close() }
 })

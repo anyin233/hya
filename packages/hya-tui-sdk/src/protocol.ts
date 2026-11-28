@@ -1,16 +1,20 @@
 import { JSONRPC_VERSION, MAX_FRAME_BYTES, type HostCommand, type JsonValue, type RpcEnvelope, type RpcId, type TuiFrame } from "./wire";
 
 export {
-  JSONRPC_VERSION, MAX_FRAME_BYTES, REPLACEABLE_PANES, REPLACEABLE_SURFACES,
-  TUI_EXTENSION_API_VERSION, TUI_EXTENSION_PERMISSIONS, TUI_EXTENSION_SDK_VERSION, VM_STOPPED_ERROR_CODE,
-  type CommandResult, type Contributions, type ExtensionAction, type ExtensionContext, type FormatInput,
-  type HostCommand, type InterceptDecision, type JsonValue, type KeyEvent, type PanelPlacement,
-  type ReplaceablePane, type ReplaceableSurface, type RpcEnvelope, type RpcError, type RpcId,
-  type SurfaceRef, type ToolCallInput, type TuiExtensionPermission, type TuiFrame, type TuiMethod,
-  type TuiMethodMap, type TuiRequest, type TuiResponse,
+  BUNDLE_API_METHODS, JSONRPC_VERSION, MAX_FRAME_BYTES, PANE_SLOTS, REPLACEABLE_PANES, REPLACEABLE_SURFACES,
+  TUI_EXTENSION_API_VERSION, TUI_EXTENSION_PERMISSIONS, TUI_EXTENSION_SDK_MAJOR, TUI_EXTENSION_SDK_VERSION,
+  VM_STOPPED_ERROR_CODE,
+  buildBundleApiUrlPath, checkBundleConfinement, isValidSessionId, validateBundleApiPath,
+  type BundleApiCommand, type BundleApiMethod, type BundleScopedCapability, type CommandResult,
+  type Contributions, type ExtensionAction, type ExtensionContext, type FormatInput, type HostCommand,
+  type InterceptDecision, type JsonValue, type KeyEvent, type PaneDescriptor, type PaneHostCommand,
+  type PaneSize, type PaneSlot, type PanelPlacement, type ReplaceablePane, type ReplaceableSurface,
+  type RpcEnvelope, type RpcError, type RpcId, type SlashCommandDescriptor, type SurfaceRef,
+  type ToolCallInput, type TuiExtensionPermission, type TuiFrame, type TuiMethod, type TuiMethodMap,
+  type TuiRequest, type TuiResponse,
 } from "./wire";
 
-/** Longest an extension may execute for one request (waiting for `api.fs` does not count). */
+/** Longest an extension may execute for one request (waiting for host calls does not count). */
 export const VM_DEADLINE_MS = 2_000;
 
 /** Strings show a notice; void and objects invalidate by default. */
@@ -35,7 +39,7 @@ function isJson(value: unknown): value is JsonValue {
   return isRecord(value) && Object.values(value).every(isJson);
 }
 
-/** Decode one LF-delimited JSON-RPC frame (no batches or notifications in v1). */
+/** Decode one LF-delimited JSON-RPC frame (no batches or notifications). */
 export function parseFrame(line: string): ParseFrameResult {
   if (new TextEncoder().encode(line).byteLength > MAX_FRAME_BYTES) {
     return { ok: false, message: `frame exceeds ${MAX_FRAME_BYTES} bytes` };

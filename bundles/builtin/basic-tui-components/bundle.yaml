@@ -12,15 +12,17 @@ assets:
   - { id: projects, path: tui/projects.ts }
   - { id: project-view, path: tui/projectView.ts }
   - { id: context, path: tui/context.ts }
+  - { id: jobs, path: tui/jobs.ts }
   - { id: text, path: tui/text.ts }
 tui:
-  api_version: 1
+  api_version: 2
   entry: tui/main.ts
-  sdk: "1.0"
+  sdk: "2.0.0"
   permissions:
     - tui.panel
     - tui.action
     - tui.keys
+    - tui.session.read
     - tui.sessions.read
     - tui.projects.read
     - tui.todos.read
