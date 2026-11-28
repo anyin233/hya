@@ -52,13 +52,13 @@ permission:
 
 ---
 
-### `bundles.builtin` (Composing `hya-bare` + 14 Built-in Bundles)
+### `bundles.builtin` (Composing `hya-bare` + 15 Built-in Bundles)
 
 ```yaml
 schema_version: 2
 bundles:
   builtin:
-    profile: full          # "full" (all 14 enabled by default) | "bare" (zero enabled by default)
+    profile: full          # "full" (all 15 enabled by default) | "bare" (zero enabled by default)
     enable: []             # Extra built-in IDs to enable on top of `profile: bare`
     disable:               # Built-in IDs to disable when `profile: full`
       - hya/network        # Air-gapped operation (removes webfetch/websearch)
@@ -71,7 +71,7 @@ bundles:
 | `bundles.builtin.enable` | `string[]` | `[]` | Built-in bundle IDs to enable selectively (for example `profile: bare` with `enable: [hya/loop]`). |
 | `bundles.builtin.disable` | `string[]` | `[]` | Built-in bundle IDs to disable selectively (for example `[hya/network]` for air-gapped environments or `[hya/hashline]` to use standard core file tools). |
 
-**Valid built-in bundle IDs (14):** `hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/compaction`, `hya/plan`, `hya/goal`, `hya/loop`, `hya/workflow`, `hya/core-agents`, `hya/core-skills`, `hya/core-commands`, `hya/basic-tui-components`.
+**Valid built-in bundle IDs (15):** `hya/hashline`, `hya/coding-extras`, `hya/multi-agent`, `hya/network`, `hya/agent-channels`, `hya/compaction`, `hya/plan`, `hya/goal`, `hya/loop`, `hya/workflow`, `hya/workspace-files`, `hya/core-agents`, `hya/core-skills`, `hya/core-commands`, `hya/basic-tui-components`.
 
 ---
 
