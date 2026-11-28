@@ -85,7 +85,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     std::fs::create_dir_all(dir.join("hya")).unwrap();
     std::fs::write(
         &cfg_path,
-        "schema_version: 2\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/coding-extras, hya/network, hya/compaction, hya/goal-loop, hya/multi-agent]\n    disable: [hya/agent-channels]\n",
+        "schema_version: 2\ncontext:\n  token_accounting: estimate\nbundles:\n  builtin:\n    profile: bare\n    enable: [hya/coding-extras, hya/network, hya/compaction, hya/goal-loop, hya/multi-agent]\n    disable: [hya/agent-channels]\n",
     )
     .unwrap();
 
@@ -106,7 +106,7 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
     );
     write_bundle_cfg(
         "hya/compaction",
-        "compaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+        "compaction:\n  keep_recent: 12\n  summary_max_tokens: 8192\n",
     );
     write_bundle_cfg(
         "hya/network",
@@ -156,28 +156,40 @@ fn per_bundle_configs_and_builtin_profile_resolve_cleanly_with_env_overrides() {
         (64, 5, 700)
     );
 
-    let ctx = settings.context();
+    let ctx = settings.context().unwrap();
     assert_eq!(
         (ctx.summary_max_tokens, ctx.token_accounting),
         (8_192, TokenAccountingMode::Estimate)
     );
     assert_eq!(
-        resolve_context_settings(None).token_accounting,
+        resolve_context_settings(None, None).token_accounting,
         TokenAccountingMode::Auto
     );
 
     env.set("HYA_COMPACTION_SUMMARY_MAX_TOKENS", "2048");
     env.set("HYA_TOKEN_ACCOUNTING", "provider");
-    let ctx_over = settings.context();
+    let ctx_over = settings.context().unwrap();
     assert_eq!(
         (ctx_over.summary_max_tokens, ctx_over.token_accounting),
         (2_048, TokenAccountingMode::Provider)
     );
     env.set("HYA_TOKEN_ACCOUNTING", "banana");
     assert_eq!(
-        settings.context().token_accounting,
+        settings.context().unwrap().token_accounting,
         TokenAccountingMode::Estimate
     );
+
+    // The key moved out of the compaction bundle's file; leaving it there fails startup.
+    write_bundle_cfg(
+        "hya/compaction",
+        "compaction:\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+    );
+    let moved = settings.context().unwrap_err().to_string();
+    assert!(
+        moved.contains("config.yaml `context.token_accounting`"),
+        "{moved}"
+    );
+    assert!(parse_config("schema_version: 2\ncontext:\n  token_accounting: banana\n").is_err());
 
     // Bare without hya/network disables the network bundle cleanly.
     let bare_settings = EngineSettings {

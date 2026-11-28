@@ -135,13 +135,13 @@ flowchart LR
 - **`remote` (`ContextCompacted { strategy: native }`):** Calls upstream `/responses/compact` on routes that support native window folding (falling back to `HostModelCaller::compact_window` on `Arc<dyn HostRuntime>`), persisting `HYA_COMPACTED_CONTEXT` plus the active `todo` list.
 - **Manual `/compact` & `/summarize`:** Acquires the session turn lease, tries `remote` first, and falls back to Kernel `Rewrite` (`threshold: 0`, marked `manual: true`).
 - **Configuration & ABI v2 Interfaces (`hya/compaction`):**
-  - Per-bundle config file: `~/.config/hya/bundles/hya%2Fcompaction/config.yml`. The rewriter reads `keep_recent` itself on first use (`HostCatalogReader::bundle_config("hya/compaction")`, then `HYA_COMPACTION_KEEP_RECENT`); hya-app reads `summary_max_tokens` (env `HYA_COMPACTION_SUMMARY_MAX_TOKENS`) for the terminal handoff and `token_accounting` (env `HYA_TOKEN_ACCOUNTING`), which reaches rewriters as `RewriteCtx::token_accounting`.
+  - Per-bundle config file: `~/.config/hya/bundles/hya%2Fcompaction/config.yml`. The rewriter reads `keep_recent` itself on first use (`HostCatalogReader::bundle_config("hya/compaction")`, then `HYA_COMPACTION_KEEP_RECENT`); hya-app reads `summary_max_tokens` (env `HYA_COMPACTION_SUMMARY_MAX_TOKENS`) for the terminal handoff. A `token_accounting` key in this file fails startup: it moved to the core.
     ```yaml
     compaction:
       keep_recent: 6
       summary_max_tokens: 4096
-      token_accounting: auto   # auto | provider | estimate
     ```
+  - Token accounting is a core setting, read whatever bundles are enabled: `config.yaml` `context.token_accounting: auto | provider | estimate` (env `HYA_TOKEN_ACCOUNTING` wins). It drives the request overhead estimate, the pre-send check, and reaches rewriters as `RewriteCtx::token_accounting`.
   - Native ABI v2 exports (`export_native_bundle_v2!` / `hya_native_register_v2`): registers `CompactionRewriter` (`hya_context::rewrite::Rewriter`) and `CompactionProjectionReducer` (`hya_runtime_abi::ProjectionReducer` for `bundle_id: "hya/compaction"`).
   - Extension event schemas (`Event::Extension`, `bundle: "hya/compaction"`):
     - `kind: "context_status"`: `{ "tokens": u64, "source": "provider" | "estimate", "mode": "auto" | "provider" | "estimate", "threshold": u64 }` → folds into `projection.extensions["hya/compaction"].context_status`.

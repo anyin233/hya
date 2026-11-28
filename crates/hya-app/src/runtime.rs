@@ -1182,7 +1182,7 @@ async fn build_session_engine_with_mcp_defer(
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production(
         lifecycle.io_tasks.clone(),
     ));
-    let context_settings = settings.context();
+    let context_settings = settings.context()?;
     let engine = SessionEngine::new(store.clone(), router, runtime, permission, bus)
         .with_rewriters(std::mem::take(&mut native.registrations.rewriters));
     let summarizer: Arc<dyn Summarizer> =

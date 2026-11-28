@@ -48,6 +48,7 @@ permission:
 | `plugins` | `map<id, PluginSpec>` | `{}` | Process-wide JSON-RPC stdio plugins. |
 | `tools` | `{code?: {mode: normal \| with_tools \| only}}` | `{code: {mode: normal}}` | Core Code Mode (`packages/hya-code-mode`) mode setting. *(Web fetch/search settings now live in `bundles/hya%2Fnetwork/config.yml`.)* |
 | `catalog_scopes` | `{max: usize, idle_ttl_secs: u64}` | `{max: 32, idle_ttl_secs: 1800}` | Cache size and idle timeout for per-Project bundle/plugin overlays. |
+| `context` | `{token_accounting: auto \| provider \| estimate}` | `{token_accounting: auto}` | How the kernel measures context-window occupancy: `auto` trusts a route's reported usage while it stays plausible, `provider` always trusts it, `estimate` always counts locally. Applies whatever bundles are enabled; `HYA_TOKEN_ACCOUNTING` wins. An unknown value or key fails startup. |
 
 ---
 
@@ -170,7 +171,7 @@ In Hya v2, every built-in and installed bundle reads its own domain configuratio
 | --- | --- | --- |
 | `hya/network` | `~/.config/hya/bundles/hya%2Fnetwork/config.yml` | `webfetch: { enabled: true, max_response_bytes: 5242880, default_timeout_secs: 30, max_timeout_secs: 120 }`, `websearch: { enabled: true, provider: exa \| parallel, endpoint?, key? }` |
 | `hya/coding-extras` | `~/.config/hya/bundles/hya%2Fcoding-extras/config.yml` | `formatter: false \| true \| map<name, { command, extensions, environment?, disabled? }>`, `lsp: true \| false \| map<name, { command, extensions, disabled?, env?, initialization? }>` |
-| `hya/compaction` | `~/.config/hya/bundles/hya%2Fcompaction/config.yml` | `compaction: { keep_recent: 6, summary_max_tokens: 4096, token_accounting: auto \| provider \| estimate }` |
+| `hya/compaction` | `~/.config/hya/bundles/hya%2Fcompaction/config.yml` | `compaction: { keep_recent: 6, summary_max_tokens: 4096 }` (`token_accounting` moved to `config.yaml` `context.token_accounting`; leaving it here fails startup) |
 | `hya/goal` | `~/.config/hya/bundles/hya%2Fgoal/config.yml` | `goal: { evaluator_model?: "provider/model" }` |
 | `hya/loop` | `~/.config/hya/bundles/hya%2Floop/config.yml` | `loop: { evaluator_model?: "provider/model" }` |
 | `hya/multi-agent` | `~/.config/hya/bundles/hya%2Fmulti-agent/config.yml` | `subagents: { max_concurrency: 100, per_run_budget: 1024, per_team_turn_budget: 1024, per_team_message_budget: 1024 }`, plus optional `agents:` pins |

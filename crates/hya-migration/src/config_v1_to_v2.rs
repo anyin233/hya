@@ -2,9 +2,10 @@
 //!
 //! Extracts v1 domain blocks (`websearch`, `webfetch`, `lsp`, `formatter`,
 //! `subagents`, `goal`, `compaction`) into
-//! `<config-dir>/bundles/<percent-encoded-id>/config.yml`, remaps legacy
-//! first-party bundle IDs in `bundles.builtin.{enable,disable}`, and writes a
-//! clean `schema_version: 2` `config.yaml`.
+//! `<config-dir>/bundles/<percent-encoded-id>/config.yml` (except
+//! `compaction.token_accounting`, which becomes `context.token_accounting`),
+//! remaps legacy first-party bundle IDs in `bundles.builtin.{enable,disable}`,
+//! and writes a clean `schema_version: 2` `config.yaml`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -256,6 +257,18 @@ pub fn plan_config_migration(config_path: &Path) -> Result<ConfigMigrationPlan> 
 
     // Bundle id -> mapping of extracted sections (`section_key -> Value`).
     let mut extracted_by_bundle: BTreeMap<&'static str, Mapping> = BTreeMap::new();
+
+    // `compaction.token_accounting` is a core setting: config.yaml `context.token_accounting`.
+    if let Some(accounting) = root
+        .get_mut(Value::String("compaction".to_owned()))
+        .and_then(Value::as_mapping_mut)
+        .and_then(|compaction| compaction.remove(Value::String("token_accounting".to_owned())))
+    {
+        let mut context = Mapping::new();
+        context.insert(Value::String("token_accounting".to_owned()), accounting);
+        root.insert(Value::String("context".to_owned()), Value::Mapping(context));
+        notes.push("moved `compaction.token_accounting` -> `context.token_accounting`".to_owned());
+    }
 
     for (top_key, bundle_id, section_key) in TOP_LEVEL_DOMAIN_SECTIONS {
         if let Some(val) = root.remove(Value::String(top_key.to_owned())) {

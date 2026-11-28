@@ -69,6 +69,9 @@ pub(super) struct FileConfig {
     /// Absent → [`hya_engine::CatalogScopeCacheConfig`] defaults.
     #[serde(default)]
     catalog_scopes: Option<CatalogScopesFile>,
+    /// Context-window settings (`context:` block).
+    #[serde(default)]
+    context: Option<ContextFile>,
 }
 
 /// Immutable on-disk startup settings shared with the engine builder.
@@ -126,14 +129,30 @@ impl EngineSettings {
         resolve_subagent_limits(block.as_ref())
     }
 
-    pub(crate) fn context(&self) -> ContextSettings {
+    /// The terminal handoff cap and the token-accounting mode.
+    ///
+    /// # Errors
+    /// Fails when `hya/compaction`'s `config.yml` still sets `token_accounting`,
+    /// which moved to `config.yaml` `context.token_accounting`.
+    pub(crate) fn context(&self) -> anyhow::Result<ContextSettings> {
         let block = if self.file.bundles.builtin.is_enabled("hya/compaction") {
             self.read_bundle_config_value(&["hya/compaction"])
                 .and_then(|val| decode_bundle_section::<CompactionFile>(&val, Some("compaction")))
         } else {
             None
         };
-        resolve_context_settings(block.as_ref())
+        if block
+            .as_ref()
+            .is_some_and(|block| block.token_accounting.is_some())
+        {
+            anyhow::bail!(
+                "`token_accounting` in the `hya/compaction` bundle config.yml moved to config.yaml `context.token_accounting`; move the value there"
+            );
+        }
+        Ok(resolve_context_settings(
+            self.file.context.as_ref(),
+            block.as_ref(),
+        ))
     }
 
     pub(crate) fn reasoning(&self) -> Option<ReasoningEffort> {
@@ -356,15 +375,24 @@ struct SubagentLimitsFile {
 /// The keys hya-app reads from the `compaction:` block of `hya/compaction`'s
 /// `config.yml` (the bundle reads `keep_recent` itself).
 ///
-/// Absent fields keep the engine default; `HYA_COMPACTION_SUMMARY_MAX_TOKENS`
-/// and `HYA_TOKEN_ACCOUNTING` win over these.
+/// An absent `summary_max_tokens` keeps the engine default;
+/// `HYA_COMPACTION_SUMMARY_MAX_TOKENS` wins over it.
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompactionFile {
     #[serde(default)]
     summary_max_tokens: Option<u32>,
-    /// `auto`, `provider`, or `estimate`; anything else is ignored.
+    /// Moved to `config.yaml` `context.token_accounting`; read only to say so.
     #[serde(default)]
-    token_accounting: Option<String>,
+    token_accounting: Option<serde_norway::Value>,
+}
+
+/// `context:` block of `config.yaml`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextFile {
+    /// How window occupancy is measured; `HYA_TOKEN_ACCOUNTING` wins over it.
+    #[serde(default)]
+    token_accounting: Option<TokenAccountingMode>,
 }
 
 pub(super) const DEFAULT_CONFIG_YAML: &str = "schema_version: 2\ndefault_model: hya/offline\nproviders: {}\nmcp: {}\nplugins: {}\nbundles:\n  builtin:\n    profile: full\n    enable: []\n    disable: []\npermission:\n  model: default\n  rules: []\n";
@@ -668,21 +696,22 @@ pub struct ContextSettings {
     pub token_accounting: TokenAccountingMode,
 }
 
-/// Resolve context settings from an optional file block, then apply
-/// `HYA_COMPACTION_SUMMARY_MAX_TOKENS` and `HYA_TOKEN_ACCOUNTING` (env wins).
+/// Resolve context settings from `config.yaml`'s `context:` block and the
+/// compaction bundle's file, then apply `HYA_COMPACTION_SUMMARY_MAX_TOKENS` and
+/// `HYA_TOKEN_ACCOUNTING` (env wins).
 ///
-/// Unset file fields and unparseable values fall back to the engine default
-/// rather than to a guess: an unrecognized accounting mode keeps whatever the
-/// file asked for, and an unparseable number keeps the default.
-fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
+/// Unset fields and unparseable env values fall back rather than guess: an
+/// unrecognized accounting mode keeps whatever the file asked for, and an
+/// unparseable number keeps the default.
+fn resolve_context_settings(
+    context: Option<&ContextFile>,
+    compaction: Option<&CompactionFile>,
+) -> ContextSettings {
     let mut settings = ContextSettings {
-        summary_max_tokens: file
+        summary_max_tokens: compaction
             .and_then(|f| f.summary_max_tokens)
             .unwrap_or(TerminalHandoffOptions::default().max_output_tokens),
-        token_accounting: file
-            .and_then(|f| f.token_accounting.as_deref())
-            .and_then(TokenAccountingMode::parse)
-            .unwrap_or_default(),
+        token_accounting: context.and_then(|f| f.token_accounting).unwrap_or_default(),
     };
     if let Ok(v) = std::env::var("HYA_COMPACTION_SUMMARY_MAX_TOKENS")
         && let Ok(parsed) = v.trim().parse()

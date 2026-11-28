@@ -1223,6 +1223,13 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         )
         .unwrap();
         assert_eq!(comp_cfg["compaction"]["keep_recent"].as_u64(), Some(8));
+        assert!(comp_cfg["compaction"].get("token_accounting").is_none());
+        let migrated: serde_norway::Value =
+            serde_norway::from_str(&fs::read_to_string(&seeded.targets.config).unwrap()).unwrap();
+        assert_eq!(
+            migrated["context"]["token_accounting"].as_str(),
+            Some("estimate")
+        );
 
         let ma_cfg: serde_norway::Value = serde_norway::from_str(
             &fs::read_to_string(user_bundle_config_path(
