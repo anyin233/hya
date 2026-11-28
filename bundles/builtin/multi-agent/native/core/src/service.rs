@@ -66,6 +66,23 @@ pub struct MembersSnapshot {
     pub archived: Vec<ArchivedEntry>,
 }
 
+/// One row of `search_agent`: an archived direct child's handoff digest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchivedAgentRow {
+    /// Canonical handle the agent had while live.
+    pub handle: String,
+    /// Agent type / stable id.
+    pub agent_type: String,
+    /// Session id string.
+    pub session: String,
+    /// `Goal` section digest of the latest handoff.
+    pub goal: String,
+    /// `Pending tasks` section digest.
+    pub pending: String,
+    /// Whether the handoff was degraded (or is missing).
+    pub degraded: bool,
+}
+
 struct WaitStallRecord {
     last_answer: Option<MessageId>,
 }
@@ -208,6 +225,63 @@ impl MultiAgentService {
             roster: team.roster.into_values().collect(),
             archived: team.archived.into_values().collect(),
         })
+    }
+
+    /// `search_agent` rows (ADR-0015 §7): `session`'s own archived DIRECT
+    /// children, digested from each child's latest handoff and filtered by a
+    /// case-insensitive `query` over goal, pending tasks, and agent type (empty
+    /// lists all). Sorted by handle.
+    pub async fn search_archived(
+        runtime: &dyn HostRuntime,
+        session: SessionId,
+        query: &str,
+    ) -> Result<Vec<ArchivedAgentRow>, HostError> {
+        let store = runtime.session_store();
+        let root = Self::team_root(runtime, session).await?;
+        let team = team_projection(&*store.read_projection(root).await?);
+        let handle = match team.roster.values().find(|entry| entry.session == session) {
+            Some(entry) => entry.handle.as_str(),
+            None if session == root => scope::ROOT_HANDLE,
+            None => {
+                return Err(HostError::InvalidInput(
+                    "this agent has no team handle yet; it must be spawned as a team member to search archived agents"
+                        .to_string(),
+                ));
+            }
+        };
+        let needle = query.trim().to_ascii_lowercase();
+        let mut rows = Vec::new();
+        for (path, entry) in &team.archived {
+            if scope::parent_path(path) != Some(handle) {
+                continue;
+            }
+            let child = store.read_projection(entry.session).await?;
+            let (goal, pending, degraded) = match handoff_projection(&child) {
+                Some(handoff) => (
+                    handoff_section(&handoff.doc, "Goal"),
+                    handoff_section(&handoff.doc, "Pending tasks"),
+                    handoff.degraded,
+                ),
+                None => ("(no handoff)".to_string(), String::new(), true),
+            };
+            if !needle.is_empty()
+                && !format!("{goal} {pending} {}", entry.agent_type)
+                    .to_ascii_lowercase()
+                    .contains(&needle)
+            {
+                continue;
+            }
+            rows.push(ArchivedAgentRow {
+                handle: path.clone(),
+                agent_type: entry.agent_type.as_str().to_string(),
+                session: entry.session.to_string(),
+                goal,
+                pending,
+                degraded,
+            });
+        }
+        // `archived` is a BTreeMap keyed by handle, so rows are already sorted.
+        Ok(rows)
     }
 
     /// Archive `child` on the user's behalf via [`HostTurnRunner::archive_subagent`].
@@ -699,6 +773,32 @@ impl NativeService for MultiAgentService {
             ServiceHealth::unhealthy("stopped")
         }
     }
+}
+
+/// One numbered section's text (heading name first) from a six-section
+/// handoff document, capped at 200 chars.
+fn handoff_section(doc: &str, heading: &str) -> String {
+    let mut take = false;
+    let mut out = String::new();
+    for line in doc.lines() {
+        let trimmed = line.trim_start();
+        let numbered = trimmed
+            .split_once(". ")
+            .filter(|(num, rest)| num.len() <= 2 && rest.starts_with(|c: char| c.is_uppercase()));
+        if let Some((_, rest)) = numbered {
+            take = trimmed.contains(heading);
+            if take {
+                out.push_str(rest);
+                out.push(' ');
+            }
+            continue;
+        }
+        if take {
+            out.push_str(trimmed);
+            out.push(' ');
+        }
+    }
+    out.trim().chars().take(200).collect()
 }
 
 /// Resolve a handle path, leaf, or session id against the team projection.

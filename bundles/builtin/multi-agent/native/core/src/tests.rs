@@ -1199,3 +1199,132 @@ async fn native_tools_validate_schemas_and_execute() {
         .unwrap_err();
     assert!(bad_task.to_string().contains("`name` was removed"));
 }
+
+#[tokio::test]
+async fn search_archived_lists_own_archived_direct_children_by_query() {
+    use crate::service::ArchivedAgentRow;
+
+    let host = MockHost::new();
+    let root = SessionId::new();
+    let worker = SessionId::new();
+    let scout = SessionId::new();
+    let lead = SessionId::new();
+    let grandchild = SessionId::new();
+    let stray = SessionId::new();
+    host.seed_session(root, None, "hya-main");
+    for (session, parent, agent) in [
+        (worker, root, "hya-task"),
+        (scout, root, "hya-scout"),
+        (lead, root, "hya-task"),
+        (grandchild, lead, "hya-task"),
+        (stray, root, "hya-task"),
+    ] {
+        host.seed_session(session, Some(parent), agent);
+    }
+    for (agent_session, handle, parent, agent) in [
+        (worker, "hya-task-amiya", "main", "hya-task"),
+        (scout, "hya-scout-kaltsit", "main", "hya-scout"),
+        (lead, "hya-task-lead", "main", "hya-task"),
+        (grandchild, "hya-task-w", "main/hya-task-lead", "hya-task"),
+    ] {
+        host.push_event(
+            root,
+            ExtensionEvent::AgentRegistered {
+                session: root,
+                agent_session,
+                handle: handle.into(),
+                parent: Some(parent.into()),
+                agent_type: AgentName::new(agent),
+                mode: SubagentMode::Resident,
+            }
+            .into_event(),
+        );
+    }
+    for (child, handle) in [
+        (worker, "main/hya-task-amiya"),
+        (scout, "main/hya-scout-kaltsit"),
+        (grandchild, "main/hya-task-lead/hya-task-w"),
+    ] {
+        host.push_event(
+            root,
+            ExtensionEvent::AgentArchived {
+                session: root,
+                handle: handle.into(),
+                child,
+                reason: ArchiveReason::Reported,
+            }
+            .into_event(),
+        );
+    }
+    host.push_event(
+        worker,
+        ExtensionEvent::HandoffCommitted {
+            session: worker,
+            handle: "main/hya-task-amiya".into(),
+            generation: 1,
+            doc: "1. Goal\nFix the quartz parser\n2. Current state\nhalf done\n3. Pending tasks\nwire tests\n"
+                .into(),
+            degraded: false,
+        }
+        .into_event(),
+    );
+
+    let worker_row = ArchivedAgentRow {
+        handle: "main/hya-task-amiya".into(),
+        agent_type: "hya-task".into(),
+        session: worker.to_string(),
+        goal: "Goal Fix the quartz parser".into(),
+        pending: "Pending tasks wire tests".into(),
+        degraded: false,
+    };
+    let scout_row = ArchivedAgentRow {
+        handle: "main/hya-scout-kaltsit".into(),
+        agent_type: "hya-scout".into(),
+        session: scout.to_string(),
+        goal: "(no handoff)".into(),
+        pending: String::new(),
+        degraded: true,
+    };
+
+    // The root (unregistered, so `main`) sees only its own archived children,
+    // sorted by handle; the live lead and the grandchild are excluded.
+    let all = MultiAgentService::search_archived(&host, root, "  ")
+        .await
+        .unwrap();
+    assert_eq!(all, vec![scout_row.clone(), worker_row.clone()]);
+    // The query matches goal/pending digests and the agent type, case-insensitively.
+    assert_eq!(
+        MultiAgentService::search_archived(&host, root, "QUARTZ")
+            .await
+            .unwrap(),
+        vec![worker_row]
+    );
+    assert_eq!(
+        MultiAgentService::search_archived(&host, root, "scout")
+            .await
+            .unwrap(),
+        vec![scout_row]
+    );
+    assert!(
+        MultiAgentService::search_archived(&host, root, "nothing")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // A live member sees its own archived children only.
+    let lead_rows = MultiAgentService::search_archived(&host, lead, "")
+        .await
+        .unwrap();
+    assert_eq!(
+        lead_rows
+            .iter()
+            .map(|row| row.handle.as_str())
+            .collect::<Vec<_>>(),
+        ["main/hya-task-lead/hya-task-w"]
+    );
+    // A session with no team handle is rejected.
+    assert!(matches!(
+        MultiAgentService::search_archived(&host, stray, "").await,
+        Err(HostError::InvalidInput(_))
+    ));
+}
