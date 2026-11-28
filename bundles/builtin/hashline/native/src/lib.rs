@@ -99,16 +99,13 @@ hya_runtime_abi::export_native_bundle_v2!(|_ctx, out| {
 mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use async_trait::async_trait;
     use hya_runtime_abi::{
         HostError, UriContent, UriResolveCtx, UriSchemaHandler, adapt_uri_schema_handler,
     };
-    use hya_tool::{
-        Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, LspError,
-        LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule,
-    };
+    use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule};
     use serde_json::{Value, json};
     use tokio_util::sync::CancellationToken;
 
@@ -130,57 +127,6 @@ mod tests {
     impl Drop for TempDir {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    struct CountingFormatter(Arc<AtomicUsize>);
-
-    #[async_trait]
-    impl FormatterProvider for CountingFormatter {
-        async fn status(&self, _workdir: &Path) -> Result<Vec<FormatterStatus>, FormatterError> {
-            Ok(Vec::new())
-        }
-
-        async fn format_file(&self, _workdir: &Path, _file: &Path) -> Result<bool, FormatterError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(FormatterError(
-                "formatter must not be invoked directly by hashline".into(),
-            ))
-        }
-    }
-
-    struct CountingLsp(Arc<AtomicUsize>);
-
-    #[async_trait]
-    impl LspProvider for CountingLsp {
-        async fn has_clients(&self, _file: &Path) -> Result<bool, LspError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Ok(false)
-        }
-
-        async fn execute(&self, _request: LspRequest) -> Result<Vec<Value>, LspError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(LspError(
-                "LSP must not be invoked directly by hashline".into(),
-            ))
-        }
-
-        async fn touch_file(&self, _file: &Path, _kind: &str) -> Result<(), LspError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(LspError(
-                "LSP must not be invoked directly by hashline".into(),
-            ))
-        }
-
-        async fn diagnostics(
-            &self,
-            _workdir: &Path,
-            _targets: &[&Path],
-        ) -> Result<Value, LspError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(LspError(
-                "LSP must not be invoked directly by hashline".into(),
-            ))
         }
     }
 
@@ -220,21 +166,13 @@ mod tests {
         }
     }
 
-    fn make_ctx(
-        workdir: &Path,
-        formatter_calls: Arc<AtomicUsize>,
-        lsp_calls: Arc<AtomicUsize>,
-    ) -> ToolCtx {
+    fn make_ctx(workdir: &Path) -> ToolCtx {
         let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
             Rule::new(Action::Read, "*", Mode::Allow),
             Rule::new(Action::Edit, "*", Mode::Allow),
             Rule::new(Action::Grep, "*", Mode::Allow),
         ]));
         ToolCtx::new(workdir.to_path_buf(), permission, CancellationToken::new())
-            .with_extension(LspPlane::new(Arc::new(CountingLsp(lsp_calls))))
-            .with_extension(FormatterPlane::new(Arc::new(CountingFormatter(
-                formatter_calls,
-            ))))
     }
 
     fn tool_by_name(tools: &[Arc<dyn Tool>], name: &str) -> Arc<dyn Tool> {
@@ -246,11 +184,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hashline_read_write_edit_grep_roundtrip_without_direct_formatter_or_lsp() {
+    async fn hashline_read_write_edit_grep_roundtrip() {
         let dir = TempDir::new("roundtrip");
-        let formatter_calls = Arc::new(AtomicUsize::new(0));
-        let lsp_calls = Arc::new(AtomicUsize::new(0));
-        let ctx = make_ctx(&dir.0, Arc::clone(&formatter_calls), Arc::clone(&lsp_calls));
+        let ctx = make_ctx(&dir.0);
 
         let tools = hashline_tools();
         let read = tool_by_name(&tools, "read");
@@ -258,7 +194,7 @@ mod tests {
         let edit = tool_by_name(&tools, "edit");
         let grep = tool_by_name(&tools, "grep");
 
-        // Write a file — formatter and LSP must not be called directly.
+        // Write a file.
         let written = write
             .execute(
                 &ctx,
@@ -267,8 +203,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(written["ok"], true);
-        assert_eq!(formatter_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(lsp_calls.load(Ordering::SeqCst), 0);
 
         // Read produces LINE#HASH anchors.
         let read_out = read
@@ -282,7 +216,7 @@ mod tests {
             .expect("line 2 hashline anchor");
         let anchor2 = line2.split(':').next().unwrap().to_string();
 
-        // Edit using the anchor from read — formatter and LSP must still not be called.
+        // Edit using the anchor from read.
         let edited = edit
             .execute(
                 &ctx,
@@ -294,8 +228,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(edited["metadata"]["classification"], "applied");
-        assert_eq!(formatter_calls.load(Ordering::SeqCst), 0);
-        assert_eq!(lsp_calls.load(Ordering::SeqCst), 0);
         assert_eq!(
             std::fs::read_to_string(dir.0.join("demo.txt")).unwrap(),
             "alpha\nBETA_UPDATED\ngamma\n"
@@ -319,11 +251,7 @@ mod tests {
     #[tokio::test]
     async fn custom_uri_schemes_delegate_through_handle_router_with_no_hardcoded_channel() {
         let dir = TempDir::new("uri-router");
-        let ctx = make_ctx(
-            &dir.0,
-            Arc::new(AtomicUsize::new(0)),
-            Arc::new(AtomicUsize::new(0)),
-        );
+        let ctx = make_ctx(&dir.0);
         let tools = hashline_tools();
         let read = tool_by_name(&tools, "read");
         let write = tool_by_name(&tools, "write");

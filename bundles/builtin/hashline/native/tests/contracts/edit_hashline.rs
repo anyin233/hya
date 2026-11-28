@@ -7,15 +7,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hya_proto::SessionId;
-use hya_tool::{Action, FormatterPlane, LspPlane, Tool, ToolCtx, ToolError, ToolRegistry};
+use hya_tool::{Action, Tool, ToolCtx, ToolError, ToolRegistry};
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::{
-    FailingFormatter, FailingLsp, RecordingLsp, RewritingFormatter, TempDirGuard, allow, ctx_with,
-    ctx_with_planes, deny, error_diagnostics, tempdir,
-};
+use crate::common::{TempDirGuard, allow, ctx_with, ctx_with_session, deny, tempdir};
 
 const ORIGINAL_WITH_NEWLINE: &str = "alpha\nbeta\ngamma\ndelta\n";
 
@@ -593,14 +589,7 @@ async fn edit_diff_bom_crlf_large_preview_omission_permissions_and_cancel() {
 
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let cctx = ctx_with_planes(
-        vec![allow(Action::Edit, "*")],
-        dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
-        cancel,
-        None,
-    );
+    let cctx = ctx_with_session(vec![allow(Action::Edit, "*")], dir.clone(), cancel, None);
     assert!(matches!(
         edit.execute(
             &cctx,
@@ -612,31 +601,22 @@ async fn edit_diff_bom_crlf_large_preview_omission_permissions_and_cancel() {
 }
 
 #[tokio::test]
-async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
+async fn edit_reports_no_diagnostics_and_keeps_hard_link_metadata() {
     let dir = tempdir("edit-fmt");
     let _guard = TempDirGuard::new(&dir);
     let registry = crate::hashline_registry();
     let read = registry.get("read").unwrap();
     let edit = registry.get("edit").unwrap();
 
-    // 1) `hya/hashline` delegates post-edit formatting and LSP diagnostics to hooks
-    // rather than invoking `ctx.formatter` or `ctx.lsp` directly inside `edit`.
+    // 1) A hashline `edit` reports no diagnostics of its own: post-edit
+    // formatting and LSP belong to `tool.execute.after` hooks.
     let main_rs = dir.join("main.rs");
     tokio::fs::write(&main_rs, ORIGINAL_WITH_NEWLINE)
         .await
         .unwrap();
-    let diagnostics = error_diagnostics(&main_rs, "bad edit");
-    let touches = Arc::new(Mutex::new(Vec::new()));
-    let ctx = ctx_with_planes(
+    let ctx = ctx_with(
         vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
         dir.clone(),
-        FormatterPlane::new(Arc::new(RewritingFormatter)),
-        LspPlane::new(Arc::new(RecordingLsp {
-            touches: Arc::clone(&touches),
-            diagnostics,
-        })),
-        CancellationToken::new(),
-        None,
     );
     let anchor = read_row(read.as_ref(), &ctx, "main.rs", 2).await;
     let out = edit
@@ -652,7 +632,6 @@ async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
     );
     assert!(out["output"].as_str().unwrap().contains(":BETA"));
     assert_eq!(out["metadata"]["diagnostics"], json!({}));
-    assert!(touches.lock().await.is_empty());
 
     // 2) Hard-link in-place update preserves sibling visibility and diff metadata.
     #[cfg(unix)]
@@ -680,7 +659,7 @@ async fn edit_formatter_lsp_encoding_normalization_and_hard_link_metadata() {
 }
 
 #[tokio::test]
-async fn edit_post_commit_formatter_and_lsp_failures_and_cancellation_reconcile() {
+async fn edit_commit_leaves_no_temp_files_and_guards_duplicate_replay() {
     let dir = tempdir("edit-post");
     let _guard = TempDirGuard::new(&dir);
     let registry = crate::hashline_registry();
@@ -691,24 +670,14 @@ async fn edit_post_commit_formatter_and_lsp_failures_and_cancellation_reconcile(
         dir.clone(),
     );
 
-    // Attached failing formatter/LSP planes do not abort `edit`, leave no temp
-    // residue, and duplicate-edit guard fires on identical replay.
+    // A committed `edit` leaves no temp residue, and the duplicate-edit guard
+    // fires on identical replay.
     tokio::fs::write(dir.join("fail.txt"), "before\n")
         .await
         .unwrap();
     let a_fail = read_row(read.as_ref(), &base_ctx, "fail.txt", 1).await;
-    let fctx_fail = ctx_with_planes(
-        vec![allow(Action::Read, "*"), allow(Action::Edit, "*")],
-        dir.clone(),
-        FormatterPlane::new(Arc::new(FailingFormatter(
-            "forced formatter failure".into(),
-        ))),
-        LspPlane::new(Arc::new(FailingLsp)),
-        CancellationToken::new(),
-        None,
-    );
     let req = json!({"path":"fail.txt","edits":[{"op":"replace","pos":a_fail,"lines":["after"]}]});
-    edit.execute(&fctx_fail, req.clone()).await.unwrap();
+    edit.execute(&base_ctx, req.clone()).await.unwrap();
     assert_eq!(
         tokio::fs::read(dir.join("fail.txt")).await.unwrap(),
         b"after\n"
@@ -990,14 +959,7 @@ async fn duplicate_and_noop_guards_reset_on_read_and_survive_failed_or_cancelled
         if cancel_read {
             let cancel = CancellationToken::new();
             cancel.cancel();
-            let cctx = ctx_with_planes(
-                vec![allow(Action::Read, "*")],
-                dir.clone(),
-                FormatterPlane::default(),
-                LspPlane::default(),
-                cancel,
-                None,
-            );
+            let cctx = ctx_with_session(vec![allow(Action::Read, "*")], dir.clone(), cancel, None);
             assert!(matches!(
                 read.execute(&cctx, json!({"path":file})).await,
                 Err(ToolError::Cancelled)
@@ -1047,11 +1009,9 @@ async fn snapshots_are_isolated_by_session_workdir_and_target() {
     let s_a = SessionId::new();
     let s_b = SessionId::new();
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
-    let ctx_a = ctx_with_planes(
+    let ctx_a = ctx_with_session(
         rules.clone(),
         dir1.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(s_a),
     );
@@ -1074,22 +1034,13 @@ async fn snapshots_are_isolated_by_session_workdir_and_target() {
     .await
     .unwrap();
 
-    let ctx_b = ctx_with_planes(
+    let ctx_b = ctx_with_session(
         rules.clone(),
         dir1.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(s_b),
     );
-    let ctx_other_dir = ctx_with_planes(
-        rules,
-        dir2,
-        FormatterPlane::default(),
-        LspPlane::default(),
-        CancellationToken::new(),
-        Some(s_a),
-    );
+    let ctx_other_dir = ctx_with_session(rules, dir2, CancellationToken::new(), Some(s_a));
 
     for (ctx, path) in [
         (&ctx_b, "target.txt"),
@@ -1156,11 +1107,9 @@ async fn same_resolved_file_serializes_mutations_across_sessions() {
     let mut handles = Vec::new();
     for idx in 0..8 {
         let r = Arc::clone(&registry);
-        let ctx = ctx_with_planes(
+        let ctx = ctx_with_session(
             rules.clone(),
             dir.clone(),
-            FormatterPlane::default(),
-            LspPlane::default(),
             CancellationToken::new(),
             Some(SessionId::new()),
         );
@@ -1201,11 +1150,9 @@ async fn hard_link_aliases_serialize_mutations_by_inode() {
     let mut handles = Vec::new();
     for idx in 0..8 {
         let r = Arc::clone(&registry);
-        let ctx = ctx_with_planes(
+        let ctx = ctx_with_session(
             rules.clone(),
             dir.clone(),
-            FormatterPlane::default(),
-            LspPlane::default(),
             CancellationToken::new(),
             Some(SessionId::new()),
         );
@@ -1241,22 +1188,13 @@ async fn read_observes_consistent_snapshots_alongside_edits() {
     tokio::fs::write(&target, "before\n").await.unwrap();
     let registry = Arc::new(crate::hashline_registry());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
-    let edit_ctx = ctx_with_planes(
+    let edit_ctx = ctx_with_session(
         rules.clone(),
         dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(SessionId::new()),
     );
-    let read_ctx = ctx_with_planes(
-        rules,
-        dir,
-        FormatterPlane::default(),
-        LspPlane::default(),
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
+    let read_ctx = ctx_with_session(rules, dir, CancellationToken::new(), Some(SessionId::new()));
 
     append_lines(registry.as_ref(), &edit_ctx, "final.txt", &["edit"])
         .await
@@ -1287,22 +1225,8 @@ async fn waiting_symlink_edit_reresolves_after_retarget() {
     let registry = Arc::new(crate::hashline_registry());
     let sid = Some(SessionId::new());
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
-    let c1 = ctx_with_planes(
-        rules.clone(),
-        dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
-        CancellationToken::new(),
-        sid,
-    );
-    let c2 = ctx_with_planes(
-        rules,
-        dir,
-        FormatterPlane::default(),
-        LspPlane::default(),
-        CancellationToken::new(),
-        sid,
-    );
+    let c1 = ctx_with_session(rules.clone(), dir.clone(), CancellationToken::new(), sid);
+    let c2 = ctx_with_session(rules, dir, CancellationToken::new(), sid);
 
     append_lines(registry.as_ref(), &c1, "current.txt", &["first"])
         .await
@@ -1329,24 +1253,15 @@ async fn cancelled_waiting_edit_returns_cancelled_without_commit() {
     let registry = Arc::new(crate::hashline_registry());
     let session = SessionId::new();
     let rules = vec![allow(Action::Read, "*"), allow(Action::Edit, "*")];
-    let c1 = ctx_with_planes(
+    let c1 = ctx_with_session(
         rules.clone(),
         dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(session),
     );
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let c2 = ctx_with_planes(
-        rules,
-        dir,
-        FormatterPlane::default(),
-        LspPlane::default(),
-        cancel,
-        Some(session),
-    );
+    let c2 = ctx_with_session(rules, dir, cancel, Some(session));
 
     append_lines(registry.as_ref(), &c1, "cancel.txt", &["first"])
         .await

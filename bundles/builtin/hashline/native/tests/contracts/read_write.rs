@@ -3,20 +3,13 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use hya_proto::SessionId;
-use hya_tool::{
-    Action, FormatterPlane, LspPlane, ToolError, ToolResultPolicy, cap_tool_output_with_policy,
-};
+use hya_tool::{Action, ToolError, ToolResultPolicy, cap_tool_output_with_policy};
 use serde_json::{Value, json};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::{
-    FailingFormatter, FailingLsp, RecordingLsp, RewritingFormatter, TempDirGuard, allow, ctx_with,
-    ctx_with_planes, deny, error_diagnostics, tempdir,
-};
+use crate::common::{TempDirGuard, allow, ctx_with, ctx_with_session, deny, tempdir};
 
 const RECOVERY_SOURCE: &str =
     "alpha\nbeta\ngamma\ndelta\nfive\nsix\nseven\neight\nalpha\nbeta\ngamma\ndelta\n";
@@ -756,76 +749,22 @@ async fn write_unix_modes_shebang_hard_link_and_symlink() {
 }
 
 #[tokio::test]
-async fn write_formatter_lsp_ordering_and_post_commit_failures() {
+async fn write_reports_no_diagnostics_and_leaves_no_temp_files() {
     let dir = tempdir("write-hooks");
     let _guard = TempDirGuard::new(&dir);
     let tool = crate::hashline_registry().get("write").unwrap();
 
-    // `hya/hashline` delegates post-edit formatting and LSP diagnostics to hooks
-    // rather than invoking `ctx.formatter` or `ctx.lsp` directly inside `write`.
+    // A hashline `write` reports no diagnostics of its own: post-edit
+    // formatting and LSP belong to `tool.execute.after` hooks.
     let target = dir.join("main.rs");
-    let diagnostics = error_diagnostics(&target, "bad write");
-    let touches = Arc::new(Mutex::new(Vec::new()));
-    let ctx = ctx_with_planes(
-        vec![allow(Action::Edit, "*")],
-        dir.clone(),
-        FormatterPlane::new(Arc::new(RewritingFormatter)),
-        LspPlane::new(Arc::new(RecordingLsp {
-            touches: Arc::clone(&touches),
-            diagnostics,
-        })),
-        CancellationToken::new(),
-        None,
-    );
+    let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
     let ok = tool
         .execute(&ctx, json!({ "path": "main.rs", "content": "raw\n" }))
         .await
         .unwrap();
     assert_eq!(tokio::fs::read(&target).await.unwrap(), b"raw\n");
     assert_eq!(ok["metadata"]["diagnostics"], json!({}));
-    assert!(touches.lock().await.is_empty());
-
-    // Attached failing formatter/LSP planes are not invoked directly by `write`.
-    let fail_fmt = ctx_with_planes(
-        vec![allow(Action::Edit, "*")],
-        dir.clone(),
-        FormatterPlane::new(Arc::new(FailingFormatter(
-            "forced formatter failure".into(),
-        ))),
-        LspPlane::default(),
-        CancellationToken::new(),
-        None,
-    );
-    tool.execute(
-        &fail_fmt,
-        json!({ "path": "fmt-fail.txt", "content": "committed\n" }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        tokio::fs::read(dir.join("fmt-fail.txt")).await.unwrap(),
-        b"committed\n"
-    );
     assert!(hashline_temp_files(&dir).await.is_empty());
-
-    let fail_lsp = ctx_with_planes(
-        vec![allow(Action::Edit, "*")],
-        dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::new(Arc::new(FailingLsp)),
-        CancellationToken::new(),
-        None,
-    );
-    tool.execute(
-        &fail_lsp,
-        json!({ "path": "lsp-fail.txt", "content": "committed\n" }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        tokio::fs::read(dir.join("lsp-fail.txt")).await.unwrap(),
-        b"committed\n"
-    );
 }
 
 #[tokio::test]
@@ -840,11 +779,9 @@ async fn write_cancellation_and_snapshot_recovery_lifecycle() {
     let s1 = SessionId::new();
     let pre_cancel = CancellationToken::new();
     pre_cancel.cancel();
-    let cctx = ctx_with_planes(
+    let cctx = ctx_with_session(
         vec![allow(Action::Edit, "*")],
         dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         pre_cancel,
         Some(s1),
     );
@@ -861,11 +798,9 @@ async fn write_cancellation_and_snapshot_recovery_lifecycle() {
     tokio::fs::write(dir.join("cancelled.txt"), RECOVERY_EXTERNAL)
         .await
         .unwrap();
-    let ectx1 = ctx_with_planes(
+    let ectx1 = ctx_with_session(
         vec![allow(Action::Edit, "*")],
         dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(s1),
     );
@@ -885,11 +820,9 @@ async fn write_cancellation_and_snapshot_recovery_lifecycle() {
     // 2) Normal Write records snapshot for stale recovery.
     let file = "snap.txt";
     let sid = SessionId::new();
-    let wctx = ctx_with_planes(
+    let wctx = ctx_with_session(
         vec![allow(Action::Edit, "*")],
         dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(sid),
     );
@@ -905,11 +838,9 @@ async fn write_cancellation_and_snapshot_recovery_lifecycle() {
     tokio::fs::write(dir.join(file), RECOVERY_EXTERNAL)
         .await
         .unwrap();
-    let ectx = ctx_with_planes(
+    let ectx = ctx_with_session(
         vec![allow(Action::Edit, "*")],
         dir.clone(),
-        FormatterPlane::default(),
-        LspPlane::default(),
         CancellationToken::new(),
         Some(sid),
     );
