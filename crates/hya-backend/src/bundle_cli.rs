@@ -1,6 +1,6 @@
 //! `hya` commands contributed by enabled bundles (`cli:` in `bundle.yaml`,
 //! ADR-0040): built into the command line at startup and routed to the
-//! bundle's driver or BundleApi endpoint.
+//! bundle's driver or BundleApi endpoint (on `--db` with `database: true`).
 
 use std::ffi::OsString;
 
@@ -9,7 +9,7 @@ use clap::{
     Arg, ArgAction, ArgMatches, Command as ClapCommand, CommandFactory, FromArgMatches, Parser as _,
 };
 use hya_app::CliContribution;
-use hya_bundle::{CliArg, CliCommand, CliCommandKind, CliValue};
+use hya_bundle::{CliArg, CliCommand, CliCommandKind, CliGlobalFlag, CliRoutedRefusal, CliValue};
 use serde_json::{Map, Value};
 
 use crate::cli_args::Cli;
@@ -19,8 +19,49 @@ use crate::cli_args::Cli;
 pub(crate) enum Route {
     /// The driver `<bundle-id>:<driver>`.
     Driver(String),
-    /// The BundleApi endpoint `api` of `bundle`.
-    Api { bundle: String, api: String },
+    /// The BundleApi endpoint `api` of `bundle`; on `--db` with `database`.
+    Api {
+        bundle: String,
+        api: String,
+        database: Option<Database>,
+    },
+}
+
+/// A `database: true` api route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Database {
+    /// Top-level command name, for messages (`hya <command>: …`).
+    pub(crate) command: String,
+    /// Id of the `value: session` argument.
+    session_arg: Option<String>,
+    refuse: Vec<CliRoutedRefusal>,
+}
+
+impl Database {
+    /// The Session id the arguments name, as typed.
+    pub(crate) fn session<'a>(&self, args: &'a Value) -> Option<&'a str> {
+        self.session_arg
+            .as_ref()
+            .and_then(|id| args[id.as_str()].as_str())
+    }
+
+    /// The reason of the first `routed_refuse` entry that is set.
+    pub(crate) fn refusal(&self, args: &Value, cli: &Cli) -> Option<&str> {
+        self.refuse
+            .iter()
+            .find(|refusal| match (&refusal.arg, refusal.flag) {
+                (Some(arg), _) => match &args[arg.as_str()] {
+                    Value::Null | Value::Bool(false) => false,
+                    Value::Array(list) => !list.is_empty(),
+                    _ => true,
+                },
+                (None, Some(CliGlobalFlag::Bare)) => cli.bare,
+                (None, Some(CliGlobalFlag::Pure)) => cli.pure,
+                (None, Some(CliGlobalFlag::Yolo)) => cli.yolo,
+                (None, None) => false,
+            })
+            .map(|refusal| refusal.reason.as_str())
+    }
 }
 
 impl Route {
@@ -127,7 +168,9 @@ fn parse_with(argv: Vec<OsString>, contributions: &[CliContribution]) -> anyhow:
         && let Some((_, sub)) = matches.remove_subcommand()
     {
         let cli = Cli::from_arg_matches(&matches)?;
-        let (route, args) = resolve(&contribution.bundle, &contribution.command, &sub)?;
+        let command = &contribution.command;
+        let name = command.name.as_deref().unwrap_or_default();
+        let (route, args) = resolve(&contribution.bundle, name, command, &sub)?;
         return Ok(Parsed::Bundle { cli, route, args });
     }
     finish_core(matches, prompt)
@@ -148,7 +191,7 @@ fn finish_core(matches: ArgMatches, prompt: Option<&CliContribution>) -> anyhow:
                 );
             }
             (
-                Some(route_of(&contribution.bundle, &contribution.command)?),
+                Some(route_of(&contribution.bundle, "-p", &contribution.command)?),
                 args,
             )
         }
@@ -157,9 +200,11 @@ fn finish_core(matches: ArgMatches, prompt: Option<&CliContribution>) -> anyhow:
     Ok(Parsed::Prompt { cli, route, args })
 }
 
-/// Follow subcommands down to the leaf and collect its arguments.
+/// Follow subcommands down to the leaf and collect its arguments; `top` is
+/// the top-level command name.
 fn resolve(
     bundle: &str,
+    top: &str,
     command: &CliCommand,
     matches: &ArgMatches,
 ) -> anyhow::Result<(Route, Value)> {
@@ -169,20 +214,29 @@ fn resolve(
             .iter()
             .find(|child| child.name.as_deref() == Some(name))
     {
-        return resolve(bundle, child, sub);
+        return resolve(bundle, top, child, sub);
     }
     Ok((
-        route_of(bundle, command)?,
+        route_of(bundle, top, command)?,
         collect_args(&command.args, matches),
     ))
 }
 
-fn route_of(bundle: &str, command: &CliCommand) -> anyhow::Result<Route> {
+fn route_of(bundle: &str, top: &str, command: &CliCommand) -> anyhow::Result<Route> {
     match (&command.driver, &command.api) {
         (Some(driver), None) => Ok(Route::Driver(format!("{bundle}:{driver}"))),
         (None, Some(api)) => Ok(Route::Api {
             bundle: bundle.to_string(),
             api: api.clone(),
+            database: command.database.then(|| Database {
+                command: top.to_string(),
+                session_arg: command
+                    .args
+                    .iter()
+                    .find(|arg| arg.value == CliValue::Session)
+                    .map(|arg| arg.id.clone()),
+                refuse: command.routed_refuse.clone(),
+            }),
         }),
         _ => anyhow::bail!("bundle `{bundle}` declares a cli command without one route"),
     }
@@ -229,7 +283,7 @@ fn clap_arg(arg: &CliArg) -> Arg {
         CliValue::Flag => clap.action(ArgAction::SetTrue),
         CliValue::List => clap.action(ArgAction::Append),
         CliValue::Integer => clap.value_parser(clap::value_parser!(u64)),
-        CliValue::String => clap,
+        CliValue::String | CliValue::Session => clap,
     };
     clap.required(arg.required)
 }
@@ -242,7 +296,7 @@ fn collect_args(args: &[CliArg], matches: &ArgMatches) -> Value {
             CliValue::Integer => matches
                 .get_one::<u64>(&arg.id)
                 .map_or(Value::Null, |value| Value::from(*value)),
-            CliValue::String => matches
+            CliValue::String | CliValue::Session => matches
                 .get_one::<String>(&arg.id)
                 .map_or(Value::Null, |value| Value::String(value.clone())),
             CliValue::List => Value::Array(
@@ -322,10 +376,61 @@ mod tests {
             route,
             Route::Api {
                 bundle: "acme/demo".into(),
-                api: "list".into()
+                api: "list".into(),
+                database: None,
             }
         );
         assert_eq!(args, serde_json::json!({ "name": "docs" }));
+    }
+
+    #[test]
+    fn database_routes_carry_the_command_name_session_and_refusals() {
+        let contributions = contributions(
+            r#"
+- name: flow
+  subcommands:
+    - name: run
+      api: run
+      database: true
+      args:
+        - { id: name }
+        - { id: session, long: session, value: session }
+        - { id: revision, long: revision }
+        - { id: input, long: input, value: list }
+      routed_refuse:
+        - { arg: revision, reason: "revision" }
+        - { arg: input, reason: "input" }
+        - { flag: yolo, reason: "yolo" }
+"#,
+        );
+        let parse = |line: &str| {
+            let Parsed::Bundle { cli, route, args } =
+                parse_with(argv(line), &contributions).unwrap()
+            else {
+                panic!("expected a bundle command");
+            };
+            let Route::Api {
+                database: Some(database),
+                ..
+            } = route
+            else {
+                panic!("expected a database route");
+            };
+            (cli, database, args)
+        };
+        let (cli, database, args) = parse("hya flow run demo --session ses_1");
+        assert_eq!(database.command, "flow");
+        assert_eq!(database.session(&args), Some("ses_1"));
+        assert_eq!(database.refusal(&args, &cli), None);
+        for (line, reason) in [
+            ("hya flow run --revision r --input a=b", "revision"),
+            ("hya flow run --input a=b --yolo", "input"),
+            ("hya --yolo flow run", "yolo"),
+        ] {
+            let (cli, database, args) = parse(line);
+            assert_eq!(database.session(&args), None, "{line}");
+            assert_eq!(database.refusal(&args, &cli), Some(reason), "{line}");
+        }
     }
 
     #[test]

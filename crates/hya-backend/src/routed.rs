@@ -278,6 +278,80 @@ impl Asks {
     }
 }
 
+/// A `database: true` bundle CLI call to run on a server.
+pub(crate) struct BundleApiRequest<'a> {
+    pub(crate) bundle: &'a str,
+    pub(crate) api: &'a str,
+    /// The `value: session` argument, for a Session-scope endpoint.
+    pub(crate) session: Option<SessionId>,
+    /// `--model`: the model of a new session.
+    pub(crate) model: Option<String>,
+    pub(crate) args: serde_json::Value,
+}
+
+/// Call a bundle's BundleApi endpoint on the server with `{"args": …,
+/// "cwd": …}` and return the reply body. A Session-scope endpoint runs for
+/// `session`, else for a new root session in the current directory, and the
+/// asks of that session tree are rejected while the call runs; a Global one
+/// gets no session. The call has no request timeout.
+pub(crate) async fn bundle_api(
+    url: &str,
+    request: BundleApiRequest<'_>,
+) -> anyhow::Result<serde_json::Value> {
+    let BundleApiRequest {
+        bundle,
+        api: id,
+        session,
+        model,
+        args,
+    } = request;
+    let failed = |error: SdkError| anyhow::anyhow!("{bundle} {id}: {}", api(error));
+    let (sdk, workdir) = client(url)?;
+    let session = session.map(|session| session.to_string());
+    let endpoint = sdk
+        .list_bundle_apis(session.as_deref())
+        .await
+        .map_err(failed)?
+        .apis
+        .into_iter()
+        .find(|endpoint| endpoint.bundle == bundle && endpoint.api == id)
+        .with_context(|| format!("bundle `{bundle}` serves no API endpoint `{id}`"))?;
+    let method = reqwest::Method::from_bytes(endpoint.method.as_bytes())
+        .with_context(|| format!("{bundle} {id}: method `{}`", endpoint.method))?;
+    let body = serde_json::json!({ "args": args, "cwd": workdir });
+    if endpoint.scope != hya_engine::ApiScope::Session.as_str() {
+        return sdk
+            .invoke_global_bundle_api_unbounded(bundle, method, &endpoint.path, None, Some(&body))
+            .await
+            .map_err(failed);
+    }
+    let session = match session {
+        Some(session) => session,
+        None => create_session(&sdk, &workdir, model).await?,
+    };
+    let call = sdk.invoke_session_bundle_api_unbounded(
+        &session,
+        bundle,
+        method,
+        &endpoint.path,
+        None,
+        Some(&body),
+    );
+    let mut asks = Asks::new(session.clone());
+    tokio::select! {
+        reply = call => reply.map_err(failed),
+        never = reject_asks_until_cancelled(&sdk, &mut asks) => match never {},
+    }
+}
+
+/// Reject the tree's pending asks every [`POLL`]; ends only when dropped.
+async fn reject_asks_until_cancelled(sdk: &Sdk, asks: &mut Asks) -> std::convert::Infallible {
+    loop {
+        asks.reject_pending(sdk).await;
+        tokio::time::sleep(POLL).await;
+    }
+}
+
 /// A `hya workflow use|run|state` command to run on a server.
 pub(crate) enum WorkflowRoute {
     Select {

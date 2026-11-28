@@ -25,3 +25,20 @@ cli:
     api: status
     args:
       - { id: name, long: name, help: Name shown in the status line. }
+  - name: example-db-status
+    about: Ask the example bundle's BundleApi for its status, on `--db`.
+    api: status
+    database: true
+    args:
+      - { id: name, long: name, help: Name shown in the status line. }
+  - name: example-session
+    about: Report the Session the example bundle's Session-scope endpoint runs for.
+    api: session
+    database: true
+    args:
+      - { id: session, long: session, value: session, help: An existing Session (default a new one). }
+      - { id: delay_ms, long: delay-ms, value: integer, help: Block the endpoint this long first. }
+      - { id: slow, long: slow, value: flag, help: Refused when routed to a server. }
+    routed_refuse:
+      - { arg: slow, reason: "`example-session --slow` cannot be sent to it" }
+      - { flag: yolo, reason: "--yolo cannot apply to it" }

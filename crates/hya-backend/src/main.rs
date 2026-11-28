@@ -391,34 +391,87 @@ async fn cmd_driver(
     Ok(())
 }
 
-/// Call a bundle's BundleApi endpoint `api` headlessly with `{"args": …}`
-/// and print the reply's `{stdout, stderr, exit_code}`.
+/// A `database: true` api route: on `--db` through the server that owns it
+/// (after its `routed_refuse` checks), else in process on the claimed store.
+async fn cmd_database_api(
+    cli: &Cli,
+    bundle: &str,
+    api: &str,
+    database: &bundle_cli::Database,
+    args: serde_json::Value,
+    model: Option<String>,
+) -> anyhow::Result<()> {
+    hya_store::validate_database_arg(&cli.db)?;
+    let command = database.command.as_str();
+    let session = database
+        .session(&args)
+        .map(|id| {
+            id.parse::<SessionId>()
+                .with_context(|| format!("parse {command} Session id"))
+        })
+        .transpose()?;
+    let claimed = if session.is_some() {
+        db_writer::claim(&cli.db, command).await?
+    } else {
+        db_writer::claim_or_memory(&cli.db, command).await?
+    };
+    match claimed {
+        db_writer::Writer::Server(server) => {
+            if let Some(reason) = database.refusal(&args, cli) {
+                db_writer::exit_unroutable(command, &cli.db, &server, reason);
+            }
+            let reply = routed::bundle_api(
+                &server.url,
+                routed::BundleApiRequest {
+                    bundle,
+                    api,
+                    session,
+                    model,
+                    args,
+                },
+            )
+            .await?;
+            print_api_report(bundle, api, reply)
+        }
+        db_writer::Writer::Direct(store) => {
+            cmd_bundle_api(
+                bundle, api, args, store, session, command, model, cli.yolo, cli.bare, cli.pure,
+            )
+            .await
+        }
+    }
+}
+
+/// Call a bundle's BundleApi endpoint `api` headlessly on `store` with
+/// `{"args": …, "cwd": …}` and print the reply's `{stdout, stderr,
+/// exit_code}`. A Session-scope endpoint gets `session` (`<command> Session …
+/// was not found` when missing) or a new session; a Global one none.
+#[allow(clippy::too_many_arguments)]
 async fn cmd_bundle_api(
     bundle: &str,
     api: &str,
     args: serde_json::Value,
+    store: SessionStore,
+    session: Option<SessionId>,
+    command: &str,
     model_override: Option<String>,
     yolo: bool,
     bare: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    let body = serde_json::json!({ "args": args, "cwd": cwd.to_string_lossy() });
+    let exit_store = store.clone();
     let mut signals = StopSignals::install()?;
-    let headless = start_headless_with_signals(
-        &mut signals,
-        open_store("").await?,
-        model_override,
-        yolo,
-        bare,
-        pure,
-        None,
-    )
-    .await?;
-    let (reply, stop) = headless
-        .run(async move |headless| {
-            let engine = headless.built.engine();
-            let endpoint = engine
-                .runtime_registry()
-                .published_bundle_apis()
+    let started = async {
+        let mut runtime =
+            startup::HeadlessRuntime::start(store, model_override, yolo, bare, pure).await?;
+        let prepared = async {
+            let endpoint = runtime
+                .built
+                .engine()
+                .bundle_apis()
+                .await
                 .into_iter()
                 .find(|published| published.bundle == bundle)
                 .and_then(|published| {
@@ -428,25 +481,60 @@ async fn cmd_bundle_api(
                         .find(|endpoint| endpoint.id == api)
                 })
                 .with_context(|| format!("bundle `{bundle}` serves no API endpoint `{api}`"))?;
-            let call = hya_engine::BundleApiCall {
+            let session = match endpoint.scope {
+                hya_engine::ApiScope::Session => {
+                    Some(runtime.open_session(session, command).await?)
+                }
+                hya_engine::ApiScope::Global => None,
+            };
+            Ok::<_, anyhow::Error>(hya_engine::BundleApiCall {
                 bundle: bundle.to_string(),
                 method: endpoint.method,
-                session: (endpoint.scope == hya_engine::ApiScope::Session)
-                    .then_some(headless.session),
+                session,
                 path: endpoint.path.as_str().to_string(),
                 query: Default::default(),
-                body: serde_json::json!({ "args": args }),
-            };
-            let cancel = CancellationToken::new();
-            let work = async move { engine.invoke_bundle_api(call).await };
-            let (reply, stop) =
-                run_until_stopped(&headless.built, &mut signals, &cancel, work).await;
-            Ok((reply, stop))
-        })
+                body,
+            })
+        }
+        .await;
+        match prepared {
+            Ok(call) => Ok((runtime, call)),
+            Err(error) => {
+                runtime.shutdown().await?;
+                Err(error)
+            }
+        }
+    };
+    let (mut runtime, call) = tokio::select! {
+        started = started => started?,
+        stop = signals.recv() => {
+            eprintln!("hya: stopping — draining store before exit");
+            signals.drain_store_on_exit(&exit_store, true).await;
+            hya_tool::deadline::shutdown_background_jobs().await;
+            stop_signals::exit_stopped(stop);
+        }
+    };
+    let engine = runtime.built.engine();
+    let cancel = CancellationToken::new();
+    let (reply, stop) = run_until_stopped(
+        &runtime.built,
+        &mut signals,
+        &cancel,
+        engine.invoke_bundle_api(call),
+    )
+    .await;
+    signals
+        .finish_with_store_report(&exit_store, stop.is_some(), runtime.shutdown())
         .await?;
     exit_if_stopped(stop);
     let reply = reply.map_err(|error| anyhow::anyhow!("{bundle} {api}: {error}"))?;
-    let report: hya_runtime_abi::DriverReport = serde_json::from_value(reply.body.clone())
+    print_api_report(bundle, api, reply.body)
+}
+
+/// Print a bundle CLI reply `{stdout, stderr, exit_code}` and exit with its
+/// code when nonzero.
+fn print_api_report(bundle: &str, api: &str, body: serde_json::Value) -> anyhow::Result<()> {
+    let report: hya_runtime_abi::DriverReport = serde_json::from_value(body)
         .with_context(|| format!("{bundle} {api} replied without stdout/stderr/exit_code"))?;
     print!("{}", report.stdout);
     eprint!("{}", report.stderr);
@@ -534,6 +622,14 @@ async fn run_bundle_command(
     args: serde_json::Value,
 ) -> anyhow::Result<()> {
     let model = cli_args::merge_model_effort(cli.model.clone(), cli.effort.clone())?;
+    if let bundle_cli::Route::Api {
+        bundle,
+        api,
+        database: Some(database),
+    } = &route
+    {
+        return cmd_database_api(&cli, bundle, api, database, args, model).await;
+    }
     run_route(route, args, model, cli.yolo, cli.bare, cli.pure).await
 }
 
@@ -549,8 +645,20 @@ async fn run_route(
         bundle_cli::Route::Driver(driver) => {
             cmd_driver(&driver, args, model, yolo, bare, pure).await
         }
-        bundle_cli::Route::Api { bundle, api } => {
-            cmd_bundle_api(&bundle, &api, args, model, yolo, bare, pure).await
+        bundle_cli::Route::Api { bundle, api, .. } => {
+            cmd_bundle_api(
+                &bundle,
+                &api,
+                args,
+                open_store("").await?,
+                None,
+                &api,
+                model,
+                yolo,
+                bare,
+                pure,
+            )
+            .await
         }
     }
 }

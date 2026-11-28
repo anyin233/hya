@@ -1,6 +1,8 @@
-//! `hya/cli-driver-example`: a minimal native bundle that adds two `hya`
+//! `hya/cli-driver-example`: a minimal native bundle that adds `hya`
 //! commands (ADR-0040). `hya example-echo` runs this bundle's `echo` driver;
-//! `hya example-status` calls its `status` BundleApi endpoint.
+//! `hya example-status` calls its Global `status` BundleApi endpoint on an
+//! in-memory store, `hya example-db-status` the same endpoint on `--db`, and
+//! `hya example-session` its Session-scope `session` endpoint on `--db`.
 
 use std::sync::Arc;
 
@@ -52,23 +54,34 @@ impl NativeDriver for EchoDriver {
     }
 }
 
-/// BundleApi endpoint `status` (`POST /status`): replies with a status line.
+/// BundleApi endpoints `status` (Global `POST /status`): a status line;
+/// `session` (Session `POST /session`): the bound session and the caller's
+/// `cwd`, after blocking for `args.delay_ms` (default 0).
 pub struct StatusApi {
     endpoints: Vec<NativeApiEndpoint>,
 }
 
 impl StatusApi {
-    /// The handler with its one endpoint.
+    /// The handler with its two endpoints.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            endpoints: vec![NativeApiEndpoint {
-                id: "status".into(),
-                method: hya_runtime_abi::ApiMethod::Post,
-                scope: hya_runtime_abi::ApiScope::Global,
-                path: "/status".into(),
-                description: "Report the example bundle's status.".into(),
-            }],
+            endpoints: vec![
+                NativeApiEndpoint {
+                    id: "status".into(),
+                    method: hya_runtime_abi::ApiMethod::Post,
+                    scope: hya_runtime_abi::ApiScope::Global,
+                    path: "/status".into(),
+                    description: "Report the example bundle's status.".into(),
+                },
+                NativeApiEndpoint {
+                    id: "session".into(),
+                    method: hya_runtime_abi::ApiMethod::Post,
+                    scope: hya_runtime_abi::ApiScope::Session,
+                    path: "/session".into(),
+                    description: "Report the session the call is bound to.".into(),
+                },
+            ],
         }
     }
 }
@@ -93,10 +106,24 @@ impl NativeBundleApiHandler for StatusApi {
         &self,
         request: NativeBundleApiRequest,
     ) -> Result<NativeBundleApiReply, HostError> {
-        let name = request.body["args"]["name"].as_str().unwrap_or("example");
+        let args = &request.body["args"];
+        let cwd = request.body["cwd"].as_str().unwrap_or_default();
+        let stdout = if request.api == "session" {
+            let delay = args["delay_ms"].as_u64().unwrap_or(0);
+            // No async runtime dependency in this example: block the handler.
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            let session = request
+                .session
+                .map(|session| session.to_string())
+                .unwrap_or_default();
+            format!("session {session}\ncwd {cwd}\n")
+        } else {
+            let name = args["name"].as_str().unwrap_or("example");
+            format!("{name}: ok\n")
+        };
         Ok(NativeBundleApiReply {
             status: 200,
-            body: json!({ "stdout": format!("{name}: ok\n"), "stderr": "", "exit_code": 0 }),
+            body: json!({ "stdout": stdout, "stderr": "", "exit_code": 0 }),
         })
     }
 }
