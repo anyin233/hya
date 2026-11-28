@@ -1,6 +1,6 @@
 //! Lifecycle service loop (ADR-0015): drains `LifecycleRequest`s from the
 //! tool plane into the resident supervisor. Typed core errors are flattened
-//! to strings on the reply channel, mirroring the mailbox service.
+//! to strings on the reply channel.
 
 use std::sync::Arc;
 
