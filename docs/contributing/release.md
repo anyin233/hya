@@ -50,7 +50,7 @@ Releases are published exclusively by `.github/workflows/release.yml` when a can
    git tag -a v0.48.0 -m "release v0.48.0"
    git push origin v0.48.0
    ```
-3. **What CI publishes:** Target archives `hya-<version>-<target>.tar.gz` (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`) containing `bin/hya`, `bin/hya-migration`, the 14 first-party bundles, the Argus example bundle, pinned Bun, Bun & Claude adapters, `lib/hya/code-mode`, TUI, WebUI, and TUI SDK—plus standalone `.hyabundle` assets, `SHA256SUMS`, and provenance attestations. *(The installer script itself is never attached to releases; `https://hya.ed-aisys.com/install.sh` serves `scripts/hya-install.sh` from `main`.)*
+3. **What CI publishes:** Target archives `hya-<version>-<target>.tar.gz` (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`) containing `bin/hya`, `bin/hya-migration`, the 15 first-party bundles, the Argus example bundle, pinned Bun, Bun & Claude adapters, `lib/hya/code-mode`, TUI, WebUI, and TUI SDK—plus standalone `.hyabundle` assets, `SHA256SUMS`, and provenance attestations. *(The installer script itself is never attached to releases; `https://hya.ed-aisys.com/install.sh` serves `scripts/hya-install.sh` from `main`.)*
 
 ### Retracting a bad release tag cleanly
 

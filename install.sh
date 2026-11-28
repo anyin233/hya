@@ -81,7 +81,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-tool_libraries=(-p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle)
+tool_libraries=(-p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle -p hya-workspace-files)
 case "$profile" in
   release)
     profile_args=(--profile release)
