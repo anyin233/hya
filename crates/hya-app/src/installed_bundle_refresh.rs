@@ -21,9 +21,9 @@ use crate::bundle_runtime::source::{bundle_schema_claims, prepared_static_bundle
 
 /// First-party bundles published with the runtime catalog, including workflows,
 /// `hya/core-agents`, `hya/coding-extras`, `hya/multi-agent`,
-/// `hya/agent-channels`, `hya/plan`, `hya/goal`, `hya/loop`, and the TUI
-/// extension of the built-in panes.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 9] = [
+/// `hya/agent-channels`, `hya/plan`, `hya/goal`, `hya/loop`, the TUI extension
+/// of the built-in panes, and `hya/workspace-files`.
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 10] = [
     "hya/core-agents",
     "hya/coding-extras",
     "hya/multi-agent",
@@ -33,6 +33,7 @@ const FIRST_PARTY_CATALOG_BUNDLES: [&str; 9] = [
     "hya/loop",
     "hya/workflow",
     "hya/basic-tui-components",
+    "hya/workspace-files",
 ];
 
 /// Load every enabled, present first-party runtime bundle using the active

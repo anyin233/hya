@@ -36,6 +36,9 @@ impl NativeInstall {
             uri_schema_handlers,
             hook_points,
             drivers,
+            // Provider kinds register at config resolution; the engine never
+            // routes by kind.
+            providers: _,
         } = regs;
         self.registrations.rewriters.extend(rewriters);
         self.registrations.hooks.extend(hooks);

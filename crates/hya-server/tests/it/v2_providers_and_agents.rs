@@ -23,8 +23,8 @@ use hya_proto::{
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, ModelCatalogSource,
     Provider, ProviderAuthState, ProviderCatalogResult, ProviderCatalogSnapshot,
-    ProviderCatalogSource, ProviderCatalogState, ProviderError, ProviderKind, ProviderModel,
-    ProviderRouter, ReasoningEffort,
+    ProviderCatalogSource, ProviderCatalogState, ProviderError, ProviderModel, ProviderRouter,
+    ReasoningEffort,
 };
 use hya_server::{
     AGENT_MODEL_CONFIGURED, AGENT_MODEL_CONTROL_FAILURE, AGENT_MODEL_UNAVAILABLE,
@@ -237,14 +237,18 @@ async fn provider_state(control: Option<Arc<FakeProviderControl>>) -> AppState {
             vec![
                 ProviderCatalogState {
                     provider_id: "acme".into(),
-                    kind: ProviderKind::OpenAiCompatible,
+                    kind: "openai".into(),
+                    supports_oauth: false,
+                    min_output_tokens: 1,
                     source: ProviderCatalogSource::Discovered,
                     auth: ProviderAuthState::Unauthenticated,
                     result: ProviderCatalogResult::Models,
                 },
                 ProviderCatalogState {
                     provider_id: "empty".into(),
-                    kind: ProviderKind::Anthropic,
+                    kind: "anthropic".into(),
+                    supports_oauth: false,
+                    min_output_tokens: 1,
                     source: ProviderCatalogSource::None,
                     auth: ProviderAuthState::Unauthenticated,
                     result: ProviderCatalogResult::Unavailable,

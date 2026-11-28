@@ -1,42 +1,32 @@
 //! Fetch provider model catalogs after OAuth login.
 
-use crate::auth::OAuthType;
+use std::sync::Arc;
+
+use hya_provider::Protocol;
 
 use super::OAuthError;
 
-/// Fetch models for an OAuth provider using the just-obtained access token.
+/// Fetch the models of `protocol` at `base_url` with the just-obtained access
+/// token.
 ///
-/// The provider-owned adapter performs endpoint construction, authentication,
-/// bounded response/pagination handling, and normalization. Results are
-/// process-local preview data; callers must not persist fetched or guessed ids
-/// into empty provider lists.
+/// The protocol's catalog adapter performs endpoint construction,
+/// authentication headers, and normalization; the host bounds the response
+/// and pagination. Results are process-local preview data; callers must not
+/// persist fetched or guessed ids into empty provider lists.
 pub async fn fetch_oauth_models(
-    oauth_type: OAuthType,
+    protocol: Arc<dyn Protocol>,
     access_token: &str,
     account_id: Option<&str>,
     base_url: &str,
 ) -> Result<Vec<hya_provider::DiscoveredModel>, OAuthError> {
-    let (kind, endpoint, auth) = match oauth_type {
-        OAuthType::OpenaiCodex => (
-            hya_provider::ProviderKind::OpenAiCodex,
-            OAuthType::OpenaiCodex.default_base_url(),
-            hya_provider::CatalogAuth::bearer(access_token, account_id.map(str::to_owned)),
-        ),
-        OAuthType::GrokBuild => (
-            hya_provider::ProviderKind::GrokBuild,
-            base_url,
-            hya_provider::CatalogAuth::grok(
-                Some(access_token.to_owned()),
-                hya_version::BACKEND_VERSION,
-                "grok-cli",
-            ),
-        ),
-    };
     let outcome = hya_provider::discover_models(hya_provider::CatalogDiscoveryRequest::new(
         "oauth-preview",
-        kind,
-        endpoint,
-        auth,
+        protocol,
+        base_url,
+        Some(hya_provider::RouteCredential {
+            token: access_token.to_owned(),
+            account_id: account_id.map(str::to_owned),
+        }),
     ))
     .await;
     preview_models_from_outcome(outcome)
@@ -60,7 +50,7 @@ fn preview_models_from_outcome(
             Err(OAuthError::Protocol(error.to_string()))
         }
         hya_provider::ProviderDiscoveryOutcome::Unsupported { kind } => Err(OAuthError::Protocol(
-            format!("OAuth model catalog does not support {kind:?}"),
+            format!("OAuth model catalog does not support kind `{kind}`"),
         )),
     }
 }
@@ -87,7 +77,7 @@ mod tests {
             ]
         });
         let shared =
-            hya_provider::parse_catalog_payload(hya_provider::ProviderKind::OpenAiCodex, &payload)
+            hya_provider::parse_catalog_payload(&hya_provider::OpenAiCodexProtocol, &payload)
                 .unwrap();
         let models =
             preview_models_from_outcome(hya_provider::ProviderDiscoveryOutcome::Discovered {
@@ -121,7 +111,7 @@ mod tests {
             ]
         });
         let shared =
-            hya_provider::parse_catalog_payload(hya_provider::ProviderKind::GrokBuild, &payload)
+            hya_provider::parse_catalog_payload(&hya_provider::GrokBuildProtocol, &payload)
                 .unwrap();
         let models =
             preview_models_from_outcome(hya_provider::ProviderDiscoveryOutcome::Discovered {

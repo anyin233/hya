@@ -35,7 +35,7 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
 
-# Dedicated CI for the 14 first-party v2 bundles under `bundles/builtin/**`.
+# Dedicated CI for the 15 first-party v2 bundles under `bundles/builtin/**`.
 # Independent of `hya-e2e`, full workspace tests, and the full TUI suite.
 jobs:
   discover:
@@ -81,8 +81,8 @@ jobs:
 
           data = json.loads(os.environ["DISCOVERED"])
           bundles = data["all"]
-          if len(bundles) != 14:
-              print(f"ERROR: expected 14 builtin bundles, found {len(bundles)}", file=sys.stderr)
+          if len(bundles) != 15:
+              print(f"ERROR: expected 15 builtin bundles, found {len(bundles)}", file=sys.stderr)
               sys.exit(1)
 
           seen_ids = set()
@@ -310,7 +310,7 @@ jobs:
           echo "$bare_out"
           grep -q "bare-smoke-ok" <<< "$bare_out"
 
-          # 2. Full installed prefix: bin/hya + all 14 staged builtin .hyabundle archives.
+          # 2. Full installed prefix: bin/hya + all 15 staged builtin .hyabundle archives.
           full_prefix="${RUNNER_TEMP}/full-prefix"
           full_home="${RUNNER_TEMP}/full-home"
           rm -rf "$full_prefix" "$full_home"
@@ -320,7 +320,7 @@ jobs:
 
           pkg_count="$(find "$full_prefix/bundles" -maxdepth 1 -name 'hya-*.hyabundle' | wc -l)"
           echo "Staged builtin packages: ${pkg_count}"
-          test "$pkg_count" -eq 14
+          test "$pkg_count" -eq 15
 
           for pkg in "$full_prefix/bundles/"hya-*.hyabundle; do
             "$full_prefix/bin/hya" bundle info -f "$pkg" >/dev/null
@@ -378,7 +378,7 @@ jobs:
           )"
           echo "$trim_out"
           grep -q "selective-disable-ok" <<< "$trim_out"
-          echo "All 14 staged builtin bundles, pure --bare, and selective disable verified."
+          echo "All 15 staged builtin bundles, pure --bare, and selective disable verified."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate

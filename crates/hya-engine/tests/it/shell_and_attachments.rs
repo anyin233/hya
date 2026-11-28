@@ -18,7 +18,7 @@ use hya_proto::{
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, HttpProvider, Provider,
-    ProviderError, ProviderKind, ProviderRouter,
+    ProviderError, ProviderRouter, RouteCredential,
 };
 use hya_store::SessionStore;
 use hya_tool::{
@@ -544,9 +544,12 @@ async fn image_attachment_reaches_responses_and_replays_in_order() {
     let (base_url, requests) = start_responses_capture_server(2).await;
     let provider = HttpProvider::new(
         "openai",
-        ProviderKind::OpenAiResponse,
+        Arc::new(hya_provider::OpenAiResponsesProtocol),
         &base_url,
-        Some("test-token".into()),
+        Some(RouteCredential {
+            token: "test-token".into(),
+            account_id: None,
+        }),
         ["gpt-5.6-luna".to_string()],
     )
     .unwrap();

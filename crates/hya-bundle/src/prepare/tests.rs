@@ -285,6 +285,44 @@ runtime:
 }
 
 #[test]
+fn providers_capability_round_trips_through_prepare() -> Result<(), BundleError> {
+    let source = BundleSource::new(
+        "native-provider",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Bundle
+schema_version: 2
+identity:
+  id: acme/provider-demo
+  version: 1.0.0
+  publisher: acme
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities: [providers, services]
+"#
+                .as_slice(),
+            ),
+            SourceFile::new("native/Cargo.toml", b"[package]\nname = \"p\"\n".as_slice()),
+        ],
+    );
+    let prepared = prepare_package(source)?;
+    let expected = vec![
+        PreparedNativeCapability::Services,
+        PreparedNativeCapability::Providers,
+    ];
+    let runtime = prepared.bundles()[0].runtime().expect("native runtime");
+    assert_eq!(runtime.capabilities, expected);
+    assert_eq!(PreparedNativeCapability::Providers.as_str(), "providers");
+    let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest())?;
+    let decoded_runtime = decoded.bundles()[0].runtime().expect("decoded runtime");
+    assert_eq!(decoded_runtime.capabilities, expected);
+    Ok(())
+}
+
+#[test]
 fn rejects_legacy_extensions_missing_or_v1_schema_and_invalid_descriptors() {
     // 1. Removed `extensions:` block (process / libraries / files / js / rust) rejected with schema_version: 2
     let legacy_extensions = BundleSource::new(

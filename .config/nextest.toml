@@ -21,6 +21,7 @@ archive.include = [
   { path = "debug/build/hya-goal/ci-archive/out/libhya_goal.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-loop/ci-archive/out/libhya_loop.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-workflow-bundle/ci-archive/out/libhya_workflow_bundle.so", relative-to = "target", on-missing = "error" },
+  { path = "debug/build/hya-workspace-files/ci-archive/out/libhya_workspace_files.so", relative-to = "target", on-missing = "error" },
   { path = "debug/build/hya-cli-driver-example/ci-archive/out/libhya_cli_driver_example.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libreplacement_tools.so", relative-to = "target", on-missing = "error" },
   { path = "debug/examples/libwrong_abi_tools.so", relative-to = "target", on-missing = "error" },

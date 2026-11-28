@@ -18,10 +18,12 @@ use hya_proto::{
     PartProjection, Projection, Role, SessionId, SessionKind, TokenUsage, ToolCallId, ToolName,
     ToolPartState, ToolSchema,
 };
+use hya_provider::test_support::{captured_request, start_scripted_server, start_sse_server};
 use hya_provider::{
-    CatalogAuth, CatalogDiscoveryRequest, CompletionRequest, HttpProvider, OpenAiResponsesProtocol,
-    Protocol as _, Provider as _, ProviderError, ProviderKind, ReasoningEffort, RetryConfig,
-    discover_models,
+    AnthropicMessagesProtocol, CatalogDiscoveryRequest, CompletionRequest, GoogleProtocol,
+    GrokBuildProtocol, HttpProvider, OpenAiChatProtocol, OpenAiCodexProtocol,
+    OpenAiResponsesProtocol, Protocol, Provider as _, ProviderError, ReasoningEffort, RetryConfig,
+    RouteCredential, discover_models,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -29,11 +31,41 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 
-#[derive(Debug)]
-struct CapturedRequest {
-    raw: String,
-    headers: String,
-    body: String,
+/// Protocol of a builtin kind label.
+fn kind(label: &str) -> Arc<dyn Protocol> {
+    match label {
+        "openai" => Arc::new(OpenAiChatProtocol),
+        "openai-response" => Arc::new(OpenAiResponsesProtocol),
+        "openai-codex" => Arc::new(OpenAiCodexProtocol),
+        "grok-build" => Arc::new(GrokBuildProtocol),
+        "anthropic" => Arc::new(AnthropicMessagesProtocol),
+        "google" => Arc::new(GoogleProtocol),
+        other => panic!("no builtin kind {other}"),
+    }
+}
+
+fn credential(token: &str, account_id: Option<&str>) -> Option<RouteCredential> {
+    Some(RouteCredential {
+        token: token.to_string(),
+        account_id: account_id.map(str::to_string),
+    })
+}
+
+/// An [`HttpProvider`] for kind `label` with an optional bearer/API key.
+fn route(
+    id: &str,
+    label: &str,
+    base_url: &str,
+    key: Option<String>,
+    models: impl IntoIterator<Item = String>,
+) -> Result<HttpProvider, ProviderError> {
+    HttpProvider::new(
+        id,
+        kind(label),
+        base_url,
+        key.and_then(|key| credential(&key, None)),
+        models,
+    )
 }
 
 fn req(model: &str) -> CompletionRequest {
@@ -64,21 +96,22 @@ fn sse_ok(frames: &[&str]) -> String {
 
 #[tokio::test]
 async fn catalog_auth_headers_match_provider_contracts() {
-    let cases: [(ProviderKind, CatalogAuth, &[&str]); 8] = [
+    let version = format!("x-grok-client-version: {}", hya_version::BACKEND_VERSION);
+    let cases: [(&str, Option<RouteCredential>, Vec<&str>); 8] = [
         (
-            ProviderKind::OpenAiCompatible,
-            CatalogAuth::bearer("ChatToken", None),
-            &["authorization: Bearer ChatToken"],
+            "openai",
+            credential("ChatToken", None),
+            vec!["authorization: Bearer ChatToken"],
         ),
         (
-            ProviderKind::OpenAiResponse,
-            CatalogAuth::bearer("ResponseToken", None),
-            &["authorization: Bearer ResponseToken"],
+            "openai-response",
+            credential("ResponseToken", None),
+            vec!["authorization: Bearer ResponseToken"],
         ),
         (
-            ProviderKind::OpenAiCodex,
-            CatalogAuth::bearer("CodexToken", Some("Account".into())),
-            &[
+            "openai-codex",
+            credential("CodexToken", Some("Account")),
+            vec![
                 "authorization: Bearer CodexToken",
                 "chatgpt-account-id: Account",
                 "openai-beta: responses=experimental",
@@ -86,49 +119,49 @@ async fn catalog_auth_headers_match_provider_contracts() {
             ],
         ),
         (
-            ProviderKind::OpenAiCodex,
-            CatalogAuth::Bearer {
-                token: None,
-                account_id: Some("Account".into()),
-            },
-            &[
+            "openai-codex",
+            credential("", Some("Account")),
+            vec![
                 "openai-beta: responses=experimental",
                 "user-agent: codex_cli_rs",
             ],
         ),
         (
-            ProviderKind::GrokBuild,
-            CatalogAuth::grok(Some("GrokToken".into()), "1.2.3", "TestClient"),
-            &[
+            "grok-build",
+            credential("GrokToken", None),
+            vec![
                 "authorization: Bearer GrokToken",
                 "x-xai-token-auth: xai-grok-cli",
-                "x-grok-client-version: 1.2.3",
-                "x-grok-client-identifier: TestClient",
+                &version,
+                "x-grok-client-identifier: grok-cli",
             ],
         ),
         (
-            ProviderKind::GrokBuild,
-            CatalogAuth::grok(None, "1.2.3", "TestClient"),
-            &[
-                "x-grok-client-version: 1.2.3",
-                "x-grok-client-identifier: TestClient",
-            ],
+            "grok-build",
+            None,
+            vec![&version, "x-grok-client-identifier: grok-cli"],
         ),
         (
-            ProviderKind::Anthropic,
-            CatalogAuth::api_key("AnthropicKey"),
-            &["x-api-key: AnthropicKey", "anthropic-version: 2023-06-01"],
+            "anthropic",
+            credential("AnthropicKey", None),
+            vec!["x-api-key: AnthropicKey", "anthropic-version: 2023-06-01"],
         ),
         (
-            ProviderKind::Google,
-            CatalogAuth::api_key("GoogleKey"),
-            &["x-goog-api-key: GoogleKey"],
+            "google",
+            credential("GoogleKey", None),
+            vec!["x-goog-api-key: GoogleKey"],
         ),
     ];
     let response = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
     let (base_url, _, requests) = start_scripted_server(vec![response.into(); cases.len()]).await;
-    for (kind, auth, expected) in cases {
-        discover_models(CatalogDiscoveryRequest::new("test", kind, &base_url, auth)).await;
+    for (label, auth, expected) in cases {
+        discover_models(CatalogDiscoveryRequest::new(
+            "test",
+            self::kind(label),
+            &base_url,
+            auth,
+        ))
+        .await;
         let requests = requests.lock().unwrap();
         let actual: Vec<_> = requests
             .last()
@@ -142,7 +175,7 @@ async fn catalog_auth_headers_match_provider_contracts() {
                     && !line.is_empty()
             })
             .collect();
-        assert_eq!(actual, expected, "{kind:?}");
+        assert_eq!(actual, expected, "{label}");
         assert!(requests.last().unwrap().body.is_empty());
     }
 }
@@ -155,9 +188,9 @@ async fn http_retry_status_header_timeout_and_budget_contracts() {
 
     // 1. Retries transient 503 before stream establishment.
     let (url1, conns1, _) = start_scripted_server(vec![busy.into(), ok.clone()]).await;
-    let p1 = HttpProvider::new(
+    let p1 = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &url1,
         Some("t".into()),
         ["gpt-5".into()],
@@ -175,9 +208,9 @@ async fn http_retry_status_header_timeout_and_budget_contracts() {
 
     // 2. Stalled response headers hit response_header_timeout and retry onto attempt 2.
     let (url2, conns2) = start_stalled_header_server().await;
-    let p2 = HttpProvider::new(
+    let p2 = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &url2,
         Some("t".into()),
         ["gpt-5".into()],
@@ -199,9 +232,9 @@ async fn http_retry_status_header_timeout_and_budget_contracts() {
 
     // 3. max_attempts=1 fails fast without a second request.
     let (url3, conns3, _) = start_scripted_server(vec![busy.into(), ok]).await;
-    let p3 = HttpProvider::new(
+    let p3 = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &url3,
         Some("t".into()),
         ["gpt-5".into()],
@@ -223,9 +256,9 @@ async fn http_retry_status_header_timeout_and_budget_contracts() {
     let busy_no_ra =
         "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nconnection: close\r\n\r\nbusy";
     let (url4, conns4, _) = start_scripted_server(vec![busy_no_ra.into(); 3]).await;
-    let p4 = HttpProvider::new(
+    let p4 = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &url4,
         Some("t".into()),
         ["gpt-5".into()],
@@ -250,9 +283,9 @@ async fn http_retry_status_header_timeout_and_budget_contracts() {
 async fn http_stream_interruption_idle_stall_body_truncation_and_drop_abort() {
     // 1. Post-header idle stall surfaces once without replay.
     let (idle_url, idle_conns) = start_stalled_mid_stream_server().await;
-    let p_idle = HttpProvider::new(
+    let p_idle = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &idle_url,
         Some("t".into()),
         ["gpt-5".into()],
@@ -279,9 +312,9 @@ async fn http_stream_interruption_idle_stall_body_truncation_and_drop_abort() {
     let truncated = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 500\r\nconnection: close\r\n\r\n";
     let (z_url, z_conns, _) =
         start_scripted_server(vec![truncated.into(), sse_ok(&["data: [DONE]"])]).await;
-    let p_z = HttpProvider::new(
+    let p_z = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &z_url,
         Some("t".into()),
         ["gpt-5".into()],
@@ -305,9 +338,9 @@ async fn http_stream_interruption_idle_stall_body_truncation_and_drop_abort() {
         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 900\r\nconnection: close\r\n\r\n{chunk}\n\n"
     );
     let (p_url, p_conns, _) = start_scripted_server(vec![partial]).await;
-    let p_part = HttpProvider::new(
+    let p_part = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &p_url,
         Some("t".into()),
         ["gpt-5".into()],
@@ -326,9 +359,9 @@ async fn http_stream_interruption_idle_stall_body_truncation_and_drop_abort() {
 
     // 4. Dropping EventStream aborts the HTTP body immediately.
     let (ka_url, disconnected) = start_keepalive_sse_server().await;
-    let p_ka = HttpProvider::new(
+    let p_ka = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &ka_url,
         Some("t".into()),
         ["gpt-5".into()],
@@ -364,14 +397,14 @@ async fn in_stream_error_frames_surface_once_without_replay() {
 
     // Zero-event in-stream errors never replay (rate limit, untyped gateway, overloaded, invalid_request, Responses failed).
     for (label, kind, model, frame, expected_status) in [
-        ("rate_limit", ProviderKind::Anthropic, "claude-sonnet-4", anth_err("rate_limit_error", CONCURRENCY), Some(429)),
-        ("untyped_gateway", ProviderKind::Anthropic, "claude-sonnet-4", format!("data: {{\"error\":{{\"message\":\"{CONCURRENCY}\"}}}}"), None),
-        ("overloaded", ProviderKind::Anthropic, "claude-sonnet-4", anth_err("overloaded_error", "Overloaded"), None),
-        ("invalid_request", ProviderKind::Anthropic, "claude-sonnet-4", anth_err("invalid_request_error", "messages: field required"), Some(400)),
-        ("responses_server_error", ProviderKind::OpenAiResponse, "gpt-5", r#"data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"The server had an error"}}}"#.to_string(), None),
+        ("rate_limit", "anthropic", "claude-sonnet-4", anth_err("rate_limit_error", CONCURRENCY), Some(429)),
+        ("untyped_gateway", "anthropic", "claude-sonnet-4", format!("data: {{\"error\":{{\"message\":\"{CONCURRENCY}\"}}}}"), None),
+        ("overloaded", "anthropic", "claude-sonnet-4", anth_err("overloaded_error", "Overloaded"), None),
+        ("invalid_request", "anthropic", "claude-sonnet-4", anth_err("invalid_request_error", "messages: field required"), Some(400)),
+        ("responses_server_error", "openai-response", "gpt-5", r#"data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"The server had an error"}}}"#.to_string(), None),
     ] {
         let (url, conns, _) = start_scripted_server(vec![sse_ok(&[&frame]), anth_ok.clone()]).await;
-        let provider = HttpProvider::new("p", kind, &url, Some("t".into()), [model.into()])
+        let provider = route("p", kind, &url, Some("t".into()), [model.into()])
             .unwrap()
             .with_retry(fast_retry(5));
         let events: Vec<_> = provider
@@ -402,9 +435,9 @@ async fn in_stream_error_frames_surface_once_without_replay() {
     ];
     let refs: Vec<&str> = partial_frames.iter().map(String::as_str).collect();
     let (url, conns, _) = start_scripted_server(vec![sse_ok(&refs), anth_ok]).await;
-    let provider = HttpProvider::new(
+    let provider = route(
         "p",
-        ProviderKind::Anthropic,
+        "anthropic",
         &url,
         Some("t".into()),
         ["claude-sonnet-4".into()],
@@ -448,9 +481,9 @@ async fn http_401_auth_refresh_single_concurrent_exhausted_and_unconfigured() {
             Arc::clone(&token),
             Arc::clone(&refreshes),
         );
-        let provider = HttpProvider::new(
+        let provider = route(
             "openai",
-            ProviderKind::OpenAiCompatible,
+            "openai",
             &url,
             Some("unused".into()),
             ["gpt-5".into()],
@@ -498,9 +531,9 @@ async fn http_401_auth_refresh_single_concurrent_exhausted_and_unconfigured() {
             Arc::clone(&refreshes),
         );
         let provider = Arc::new(
-            HttpProvider::new(
+            route(
                 "openai",
-                ProviderKind::OpenAiCompatible,
+                "openai",
                 &url,
                 Some("unused".into()),
                 ["gpt-5".into()],
@@ -565,9 +598,9 @@ async fn http_401_auth_refresh_single_concurrent_exhausted_and_unconfigured() {
             Arc::clone(&token),
             Arc::clone(&refreshes),
         );
-        let provider = HttpProvider::new(
+        let provider = route(
             "openai",
-            ProviderKind::OpenAiCompatible,
+            "openai",
             &url,
             Some("unused".into()),
             ["gpt-5".into()],
@@ -590,14 +623,7 @@ async fn http_401_auth_refresh_single_concurrent_exhausted_and_unconfigured() {
     }
     {
         let (url, conns, _) = start_scripted_server(vec![unauth.into()]).await;
-        let provider = HttpProvider::new(
-            "openai",
-            ProviderKind::OpenAiCompatible,
-            &url,
-            Some("t".into()),
-            ["gpt-5".into()],
-        )
-        .unwrap();
+        let provider = route("openai", "openai", &url, Some("t".into()), ["gpt-5".into()]).unwrap();
         assert!(matches!(
             provider
                 .stream(req("gpt-5"), SessionId::new(), MessageId::new())
@@ -615,9 +641,9 @@ async fn http_provider_routes_request_headers_and_protocol_bodies() {
         "data: {\"choices\":[{\"delta\":{\"content\":\"mock openai delta\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n".into(),
     )
     .await;
-    let provider = HttpProvider::new(
+    let provider = route(
         "openai",
-        ProviderKind::OpenAiCompatible,
+        "openai",
         &url,
         Some("test-token".into()),
         ["gpt-5".into()],
@@ -687,9 +713,9 @@ async fn http_provider_routes_request_headers_and_protocol_bodies() {
         Some(ReasoningEffort::Max),
     ];
     let (r_url, _, r_reqs) = start_scripted_server(vec![completed.clone(); efforts.len()]).await;
-    let r_prov = HttpProvider::new(
+    let r_prov = route(
         "openai",
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         &r_url,
         Some("t".into()),
         ["gpt-5.6-sol".into()],
@@ -736,30 +762,23 @@ async fn http_provider_routes_request_headers_and_protocol_bodies() {
     // 3. Codex & Grok Build encrypted reasoning matrix + session auth headers.
     let enc = Some(json!(["reasoning.encrypted_content"]));
     let matrix = [
-        (ProviderKind::OpenAiCodex, None, None),
-        (ProviderKind::OpenAiCodex, Some(ReasoningEffort::Off), None),
-        (
-            ProviderKind::OpenAiCodex,
-            Some(ReasoningEffort::High),
-            enc.clone(),
-        ),
-        (ProviderKind::GrokBuild, None, enc.clone()),
-        (
-            ProviderKind::GrokBuild,
-            Some(ReasoningEffort::Off),
-            enc.clone(),
-        ),
-        (ProviderKind::GrokBuild, Some(ReasoningEffort::High), enc),
+        ("openai-codex", None, None),
+        ("openai-codex", Some(ReasoningEffort::Off), None),
+        ("openai-codex", Some(ReasoningEffort::High), enc.clone()),
+        ("grok-build", None, enc.clone()),
+        ("grok-build", Some(ReasoningEffort::Off), enc.clone()),
+        ("grok-build", Some(ReasoningEffort::High), enc),
     ];
     let (m_url, _, m_reqs) = start_scripted_server(vec![completed; matrix.len()]).await;
     for (kind, effort, expected_include) in matrix {
-        let mut p =
-            HttpProvider::new("route", kind, &m_url, Some("tok".into()), ["model".into()]).unwrap();
-        if kind == ProviderKind::OpenAiCodex {
-            p = p.with_codex_session_auth(Some("acct-42".into()));
-        } else {
-            p = p.with_grok_session_auth("0.33.19", "grok-cli");
-        }
+        let p = HttpProvider::new(
+            "route",
+            self::kind(kind),
+            &m_url,
+            credential("tok", Some("acct-42")),
+            ["model".into()],
+        )
+        .unwrap();
         let mut r = req("route/model");
         r.reasoning = effort;
         let _ = p
@@ -777,11 +796,14 @@ async fn http_provider_routes_request_headers_and_protocol_bodies() {
             expected_include.as_ref(),
             "{kind:?} {effort:?}"
         );
-        if kind == ProviderKind::OpenAiCodex {
+        if kind == "openai-codex" {
             assert!(lc.contains("chatgpt-account-id: acct-42"));
         } else {
             assert!(lc.contains("x-xai-token-auth: xai-grok-cli"));
-            assert!(lc.contains("x-grok-client-version: 0.33.19"));
+            assert!(lc.contains(&format!(
+                "x-grok-client-version: {}",
+                hya_version::BACKEND_VERSION
+            )));
             assert!(lc.contains("x-grok-client-identifier: grok-cli"));
             assert!(lc.contains("x-grok-model-override: model"));
         }
@@ -792,7 +814,7 @@ async fn http_provider_routes_request_headers_and_protocol_bodies() {
 async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_replay() {
     // 1. Grok reasoning_text.delta + typed terminal.
     let grok_sse = "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"delta\":\"Need a file.\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
-    let grok_evs = response_events(ProviderKind::GrokBuild, grok_sse)
+    let grok_evs = response_events("grok-build", grok_sse)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -809,14 +831,14 @@ async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_repl
 
     // 2. Responses/Grok require typed terminal; Chat stays permissive; all OpenAI-family report malformed JSON.
     for empty_or_done in ["data: [DONE]\n\n", ""] {
-        for kind in [ProviderKind::OpenAiResponse, ProviderKind::GrokBuild] {
+        for kind in ["openai-response", "grok-build"] {
             let evs = response_events(kind, empty_or_done).await;
             assert!(matches!(
                 evs.as_slice(),
                 [Err(ProviderError::Decode(m))] if m == "Responses stream ended without response.completed or response.incomplete"
             ));
         }
-        let chat = response_events(ProviderKind::OpenAiCompatible, empty_or_done).await;
+        let chat = response_events("openai", empty_or_done).await;
         assert!(matches!(
             chat.last(),
             Some(Ok(Event::MessageFinished {
@@ -825,11 +847,7 @@ async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_repl
             }))
         ));
     }
-    for kind in [
-        ProviderKind::OpenAiCompatible,
-        ProviderKind::OpenAiResponse,
-        ProviderKind::GrokBuild,
-    ] {
+    for kind in ["openai", "openai-response", "grok-build"] {
         assert!(matches!(
             response_events(kind, "data: {not-json}\n\n")
                 .await
@@ -840,7 +858,7 @@ async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_repl
 
     // 3. Nested response.failed surfaces error message.
     let failed = response_events(
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"quota exhausted\"}}}\n\n",
     )
     .await;
@@ -864,9 +882,9 @@ async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_repl
     .join("\n\n")
         + "\n\n";
     let (url, _rx) = start_sse_server(sse).await;
-    let p = HttpProvider::new(
+    let p = route(
         "openai",
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         &url,
         Some("t".into()),
         ["gpt-5.6-sol".into()],
@@ -907,9 +925,9 @@ async fn http_provider_responses_stream_decoding_reasoning_tools_errors_and_repl
             .into(),
     )
     .await;
-    let rep_p = HttpProvider::new(
+    let rep_p = route(
         "openai",
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         &rep_url,
         Some("t".into()),
         ["gpt-5.6-sol".into()],
@@ -979,7 +997,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
         "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"Plan.\"}\n\n",
     ] {
         let evs = response_events(
-            ProviderKind::OpenAiResponse,
+            "openai-response",
             &format!("{streamed}data: {completed}\n\n"),
         )
         .await
@@ -1001,7 +1019,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"opaque\"}]}}\n\n",
     );
-    let closed_evs = response_events(ProviderKind::OpenAiResponse, already_closed)
+    let closed_evs = response_events("openai-response", already_closed)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -1030,9 +1048,9 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
     .collect::<String>();
     let (session, user, message) = (SessionId::new(), MessageId::new(), MessageId::new());
     let (u, _) = start_sse_server(announced_sse).await;
-    let p = HttpProvider::new(
+    let p = route(
         "openai",
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         &u,
         Some("t".into()),
         ["model".into()],
@@ -1186,7 +1204,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
     .iter()
     .map(|f| format!("data: {f}\n\n"))
     .collect::<String>();
-    let unannounced_evs = response_events(ProviderKind::OpenAiResponse, &unannounced_sse)
+    let unannounced_evs = response_events("openai-response", &unannounced_sse)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -1217,7 +1235,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
             json!({"type": "response.output_item.done", "output_index": 0, "item": summary}),
             term,
         ].iter().map(|f| format!("data: {f}\n\n")).collect::<String>();
-        let evs = response_events(ProviderKind::OpenAiResponse, &sse)
+        let evs = response_events("openai-response", &sse)
             .await
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
@@ -1233,7 +1251,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
         json!({"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "Reading"}),
         json!({"type": "response.completed", "response": {"status": "completed", "output": [{"type": "message", "content": [{"type": "output_text", "text": "Reading"}]}, reasoning]}}),
     ].iter().map(|f| format!("data: {f}\n\n")).collect::<String>();
-    let tr_evs = response_events(ProviderKind::OpenAiResponse, &text_then_r)
+    let tr_evs = response_events("openai-response", &text_then_r)
         .await
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
@@ -1254,7 +1272,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
     ));
 
     let inc_evs = response_events(
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         &format!("data: {}\n\n", json!({"type": "response.incomplete", "response": {"status": "incomplete", "output": [reasoning]}})),
     ).await.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
     assert!(matches!(
@@ -1284,7 +1302,7 @@ async fn http_provider_responses_terminal_output_and_summary_edge_cases() {
         let sse = format!(
             "data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"A\"}}\n\n{part_added}data: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,{idx}\"delta\":\"B\"}}\n\ndata: {{\"type\":\"response.completed\",\"response\":{{\"status\":\"completed\"}}}}\n\n"
         );
-        let text: String = response_events(ProviderKind::OpenAiResponse, &sse)
+        let text: String = response_events("openai-response", &sse)
             .await
             .into_iter()
             .map(Result::unwrap)
@@ -1310,9 +1328,9 @@ async fn http_provider_anthropic_body_cache_breakpoints_thinking_and_binding_bet
 
     // 1. Anthropic cache_control breakpoints + headers + body.
     let (url, _, reqs) = start_scripted_server(vec![sse.clone(); 5]).await;
-    let p_sonnet = HttpProvider::new(
+    let p_sonnet = route(
         "anthropic",
-        ProviderKind::Anthropic,
+        "anthropic",
         &url,
         Some("test-token".into()),
         ["claude-sonnet-4-20250514".into()],
@@ -1386,9 +1404,9 @@ async fn http_provider_anthropic_body_cache_breakpoints_thinking_and_binding_bet
     ];
 
     // 2..5. thinking-binding-controls-2026-08-01 beta header matrix + signed thinking replay.
-    let p_opus = HttpProvider::new(
+    let p_opus = route(
         "anthropic",
-        ProviderKind::Anthropic,
+        "anthropic",
         &url,
         Some("t".into()),
         [
@@ -1499,9 +1517,9 @@ async fn http_provider_google_route_thought_policy_media_and_gemini3_thinking_le
         "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"plan\",\"thoughtSignature\":\"s1\"},{\"text\":\"ok\"}],\"role\":\"model\"},\"finishReason\":\"STOP\"}]}\n\n".into(),
     )
     .await;
-    let provider = HttpProvider::new(
+    let provider = route(
         "google",
-        ProviderKind::Google,
+        "google",
         &url,
         Some("g-token".into()),
         ["gemini-3-pro-preview".into()],
@@ -1577,28 +1595,20 @@ async fn responses_compact_headers_body_multibyte_error_and_header_deadline() {
         body_429.len()
     );
     let (url, conns, reqs) = start_scripted_server(vec![ok_json.into(), err_429]).await;
-    let grok = HttpProvider::new(
+    let grok = route(
         "grok",
-        ProviderKind::GrokBuild,
+        "grok-build",
         &format!("{url}/v1/"),
         Some("GrokToken".into()),
         ["grok-4.5".into()],
     )
-    .unwrap()
-    .with_grok_session_auth("1.2.3", "TestClient");
+    .unwrap();
     grok.compact_responses(&ModelRef::new("grok/grok-4.5"), &[], Some("summary"))
         .await
         .unwrap();
 
     // 2. Multibyte 429 error bounds cleanly to 500 chars and parses retry-after.
-    let oai = HttpProvider::new(
-        "openai",
-        ProviderKind::OpenAiResponse,
-        &url,
-        None,
-        ["gpt-5".into()],
-    )
-    .unwrap();
+    let oai = route("openai", "openai-response", &url, None, ["gpt-5".into()]).unwrap();
     let error = oai
         .compact_responses(&ModelRef::new("gpt-5"), &[], None)
         .await
@@ -1623,11 +1633,12 @@ async fn responses_compact_headers_body_multibyte_error_and_header_deadline() {
                 .raw
                 .starts_with("POST /v1/responses/compact HTTP/1.1\r\n")
         );
+        let version = format!("x-grok-client-version: {}", hya_version::BACKEND_VERSION);
         for h in [
             "authorization: Bearer GrokToken",
             "x-xai-token-auth: xai-grok-cli",
-            "x-grok-client-version: 1.2.3",
-            "x-grok-client-identifier: TestClient",
+            &version,
+            "x-grok-client-identifier: grok-cli",
             "x-grok-model-override: grok-4.5",
         ] {
             assert!(cap[0].headers.lines().any(|l| l == h), "missing {h}");
@@ -1641,9 +1652,9 @@ async fn responses_compact_headers_body_multibyte_error_and_header_deadline() {
 
     // 3. Compaction honors route response_header_timeout without retry.
     let (stall_url, stall_conns) = start_stalled_header_server().await;
-    let stall_p = HttpProvider::new(
+    let stall_p = route(
         "openai",
-        ProviderKind::OpenAiResponse,
+        "openai-response",
         &stall_url,
         None,
         ["gpt-5".into()],
@@ -1657,29 +1668,182 @@ async fn responses_compact_headers_body_multibyte_error_and_header_deadline() {
     assert_eq!(stall_conns.load(Ordering::SeqCst), 1);
 }
 
-// ---- mock HTTP test servers ----
+/// A protocol with its own compaction wire and paginated model list.
+struct WireProtocol;
 
-fn content_length(headers: &str) -> usize {
-    headers
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse().unwrap())
-        })
-        .unwrap_or(0)
+struct TestCompactWire;
+
+impl hya_provider::CompactWire for TestCompactWire {
+    fn endpoint(&self, base: &str) -> String {
+        format!("{base}/compact-it")
+    }
+    fn encode(
+        &self,
+        messages: &[Message],
+        system: Option<&str>,
+        model_id: &str,
+        images: bool,
+    ) -> Result<Value, ProviderError> {
+        Ok(json!({"model": model_id, "count": messages.len(), "system": system, "images": images}))
+    }
+    fn parse(&self, payload: &Value) -> Result<Vec<Value>, ProviderError> {
+        payload["kept"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| ProviderError::Decode("no kept".into()))
+    }
 }
 
-async fn captured_request(request_rx: oneshot::Receiver<CapturedRequest>) -> CapturedRequest {
-    timeout(Duration::from_secs(3), request_rx)
+impl Protocol for WireProtocol {
+    fn kind(&self) -> &str {
+        "test-wire"
+    }
+    fn description(&self) -> &str {
+        "test protocol"
+    }
+    fn compaction(&self) -> Option<&dyn hya_provider::CompactWire> {
+        Some(&TestCompactWire)
+    }
+    fn models_page_url(
+        &self,
+        endpoint: &str,
+        cursor: Option<&str>,
+    ) -> Result<String, hya_provider::CatalogFailure> {
+        Ok(match cursor {
+            Some(cursor) => format!("{endpoint}?page={cursor}"),
+            None => endpoint.to_string(),
+        })
+    }
+    fn models_next_cursor(
+        &self,
+        payload: &Value,
+    ) -> Result<Option<String>, hya_provider::CatalogFailure> {
+        Ok(payload["next"].as_str().map(str::to_string))
+    }
+    fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+        OpenAiChatProtocol.encode(req)
+    }
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn hya_provider::Decoder> {
+        OpenAiChatProtocol.decoder(session, message, reasoning)
+    }
+}
+
+fn json_ok(body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+#[tokio::test]
+async fn compact_responses_uses_protocol_compact_wire() {
+    let (url, _, reqs) = start_scripted_server(vec![json_ok(r#"{"kept":[{"x":1}]}"#)]).await;
+    let provider = HttpProvider::new(
+        "wire",
+        Arc::new(WireProtocol),
+        &url,
+        credential("tok", None),
+        ["m".into()],
+    )
+    .unwrap();
+    let window = provider
+        .compact_responses(&ModelRef::new("wire/m"), &[], Some("sys"))
         .await
         .unwrap()
-        .unwrap()
+        .unwrap();
+    assert_eq!(window.items, [json!({"x": 1})]);
+    {
+        let cap = reqs.lock().unwrap();
+        assert!(cap[0].raw.starts_with("POST /compact-it HTTP/1.1\r\n"));
+        assert!(
+            cap[0]
+                .headers
+                .lines()
+                .any(|l| l == "authorization: Bearer tok")
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&cap[0].body).unwrap(),
+            json!({"model": "m", "count": 0, "system": "sys", "images": false})
+        );
+    }
+
+    // A protocol without a compaction wire has no native compaction.
+    let chat = route("chat", "openai", &url, None, ["m".into()]).unwrap();
+    assert!(
+        chat.compact_responses(&ModelRef::new("chat/m"), &[], None)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
-async fn response_events(kind: ProviderKind, response: &str) -> Vec<Result<Event, ProviderError>> {
+#[tokio::test]
+async fn discovery_loop_follows_protocol_pagination_within_bounds() {
+    let pages = vec![
+        json_ok(r#"{"data":[{"id":"a"}],"next":"2"}"#),
+        json_ok(r#"{"data":[{"id":"b"},{"id":"a"}],"next":"3"}"#),
+        json_ok(r#"{"data":[{"id":"c"}]}"#),
+    ];
+    let (url, _, reqs) = start_scripted_server(pages).await;
+    let outcome = discover_models(CatalogDiscoveryRequest::new(
+        "wire",
+        Arc::new(WireProtocol),
+        &url,
+        None,
+    ))
+    .await;
+    let hya_provider::ProviderDiscoveryOutcome::Discovered { models, auth } = outcome else {
+        panic!("expected models");
+    };
+    assert_eq!(auth, hya_provider::AuthPresence::Unauthenticated);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["a", "b", "c"]
+    );
+    let paths: Vec<_> = reqs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.raw.lines().next().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "GET /models HTTP/1.1",
+            "GET /models?page=2 HTTP/1.1",
+            "GET /models?page=3 HTTP/1.1"
+        ]
+    );
+
+    // A repeated cursor ends the loop instead of following it forever.
+    let looping = vec![json_ok(r#"{"data":[{"id":"a"}],"next":"1"}"#); 2];
+    let (url, conns, _) = start_scripted_server(looping).await;
+    let outcome = discover_models(CatalogDiscoveryRequest::new(
+        "wire",
+        Arc::new(WireProtocol),
+        &url,
+        None,
+    ))
+    .await;
+    assert!(matches!(
+        outcome,
+        hya_provider::ProviderDiscoveryOutcome::Failed {
+            error: hya_provider::CatalogFailure::PaginationLimit
+        }
+    ));
+    assert_eq!(conns.load(Ordering::SeqCst), 2);
+}
+
+// ---- mock HTTP test servers ----
+
+async fn response_events(kind: &str, response: &str) -> Vec<Result<Event, ProviderError>> {
     let (base_url, _rx) = start_sse_server(response.to_string()).await;
-    let provider = HttpProvider::new(
+    let provider = route(
         "test",
         kind,
         &base_url,
@@ -1705,32 +1869,6 @@ async fn read_request_head(socket: &mut TcpStream) {
         if buf.windows(4).any(|w| w == b"\r\n\r\n") {
             break;
         }
-    }
-}
-
-async fn read_full_request(socket: &mut TcpStream) -> CapturedRequest {
-    let mut buf = Vec::new();
-    let mut chunk = [0_u8; 1024];
-    let header_end = loop {
-        let n = socket.read(&mut chunk).await.unwrap();
-        assert!(n != 0, "socket closed before request headers");
-        buf.extend_from_slice(&chunk[..n]);
-        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break pos + 4;
-        }
-    };
-    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let body_len = content_length(&headers);
-    while buf.len() < header_end + body_len {
-        let n = socket.read(&mut chunk).await.unwrap();
-        assert!(n != 0, "socket closed before request body");
-        buf.extend_from_slice(&chunk[..n]);
-    }
-    let body_end = header_end + body_len;
-    CapturedRequest {
-        raw: String::from_utf8_lossy(&buf[..body_end]).to_string(),
-        headers,
-        body: String::from_utf8_lossy(&buf[header_end..body_end]).to_string(),
     }
 }
 
@@ -1815,34 +1953,6 @@ async fn start_stalled_mid_stream_server() -> (String, Arc<AtomicUsize>) {
     (format!("http://{addr}"), connections)
 }
 
-async fn start_scripted_server(
-    responses: Vec<String>,
-) -> (
-    String,
-    Arc<AtomicUsize>,
-    Arc<std::sync::Mutex<Vec<CapturedRequest>>>,
-) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let connections = Arc::new(AtomicUsize::new(0));
-    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let sc = Arc::clone(&connections);
-    let sr = Arc::clone(&requests);
-    tokio::spawn(async move {
-        for response in responses {
-            let Ok((mut socket, _)) = listener.accept().await else {
-                return;
-            };
-            sc.fetch_add(1, Ordering::SeqCst);
-            let captured = read_full_request(&mut socket).await;
-            sr.lock().unwrap().push(captured);
-            let _ = socket.write_all(response.as_bytes()).await;
-            let _ = socket.shutdown().await;
-        }
-    });
-    (format!("http://{addr}"), connections, requests)
-}
-
 async fn start_concurrent_unauthorized_server(
     first_rotation: Arc<Notify>,
 ) -> (String, Arc<AtomicUsize>) {
@@ -1872,22 +1982,4 @@ async fn start_concurrent_unauthorized_server(
         }
     });
     (format!("http://{addr}"), connections)
-}
-
-async fn start_sse_server(response: String) -> (String, oneshot::Receiver<CapturedRequest>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (tx, rx) = oneshot::channel();
-    tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let captured = read_full_request(&mut socket).await;
-        let _ = tx.send(captured);
-        let _ = socket
-            .write_all(
-                format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{response}")
-                    .as_bytes(),
-            )
-            .await;
-    });
-    (format!("http://{addr}"), rx)
 }

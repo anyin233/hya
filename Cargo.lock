@@ -1786,7 +1786,6 @@ dependencies = [
  "hya-provider",
  "hya-version",
  "reqwest",
- "secrecy",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
@@ -1836,6 +1835,7 @@ dependencies = [
  "hya-bundle",
  "hya-context",
  "hya-proto",
+ "hya-provider",
  "hya-tool",
  "hya-tool-error",
  "hya-version",
@@ -1899,7 +1899,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
- "mime_guess",
  "pbjson-types",
  "rand_core 0.9.5",
  "regex",
@@ -1985,6 +1984,7 @@ dependencies = [
  "hya-network",
  "hya-plan",
  "hya-proto",
+ "hya-provider",
  "hya-runtime-abi",
  "hya-tool",
  "hya-tool-error",
@@ -2051,6 +2051,22 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "hya-workspace-files"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "hya-runtime-abi",
+ "mime_guess",
+ "pbjson-types",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -3640,15 +3656,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "secrecy"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bd1c54ea06cfd2f6b63219704de0b9b4f72dcc2b8fdef820be6cd799780e91e"
-dependencies = [
- "zeroize",
-]
 
 [[package]]
 name = "security-framework"

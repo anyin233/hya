@@ -365,6 +365,36 @@ async fn router_and_fake_provider_routing_capabilities_preflight_and_no_failover
 }
 
 #[test]
+fn openai_chat_meets_the_canonical_decoding_contract() {
+    hya_provider::test_support::assert_canonical_text_tool_usage(
+        &OpenAiChatProtocol,
+        &[
+            r#"{"choices":[{"delta":{"content":"Hello "},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"world"},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            "[DONE]",
+        ],
+        &[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read","arguments":"{\"path\":\"/tmp/a\"}"}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+        ],
+        &[
+            r#"{"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":5},"completion_tokens_details":{"reasoning_tokens":2}}}"#,
+            "[DONE]",
+        ],
+        TokenUsage {
+            input: 6,
+            output: 3,
+            reasoning: 2,
+            cache_read: 5,
+            cache_write: 0,
+            reasoning_unknown: false,
+        },
+    );
+}
+
+#[test]
 fn all_protocols_agree_on_canonical_text_tool_and_usage_decoding() {
     // Canonical text shape agreement across OpenAI Chat, Anthropic, Google, and Fake.
     let openai_text = decode_with(

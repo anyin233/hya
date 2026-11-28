@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_provider::{
-    ModelCatalogSource, ProviderCatalogSource, ProviderKind, ProviderRouter, ReasoningEffort,
+    ModelCatalogSource, OpenAiChatProtocol, Protocol, ProviderCatalogSource, ProviderKinds,
+    ProviderRouter, ReasoningEffort,
 };
 
-use super::catalog::plan_for_provider;
+use super::catalog::{ProviderPlanResult, plan_for_provider};
 use super::file::parse_config;
 use super::provider::{
     ModelConfig, ParsedProvider, ProviderCredential, merge_provider_models,
@@ -65,11 +66,36 @@ fn cached(id: &str) -> crate::model_cache::CachedModel {
 fn no_key() -> ProviderCredential {
     ProviderCredential {
         token: None,
-        use_grok_session: false,
-        use_codex_session: false,
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     }
+}
+
+fn kinds() -> std::sync::Arc<ProviderKinds> {
+    crate::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::full()).unwrap()
+}
+
+fn plan(provider: &ParsedProvider) -> anyhow::Result<ProviderPlanResult> {
+    plan_for_provider(provider, &no_key(), &[], None, &kinds())
+}
+
+/// The effort menu a provider's catalog row publishes for `model_id`.
+fn row_variants(provider: &ParsedProvider, model_id: &str) -> Vec<String> {
+    plan(provider)
+        .unwrap()
+        .models
+        .into_iter()
+        .find(|row| row.model_id == model_id)
+        .unwrap()
+        .reasoning_variants
+}
+
+fn labels(protocol: &dyn Protocol) -> Vec<String> {
+    protocol
+        .reasoning_variant_labels()
+        .iter()
+        .map(|label| (*label).to_string())
+        .collect()
 }
 
 fn temp_config(label: &str, yaml: &str) -> PathBuf {
@@ -95,33 +121,39 @@ fn parses_provider_kinds_aliases_empty_and_no_apikey() {
 
     let parsed = parse_providers(FIXTURE).unwrap();
     assert_eq!(parsed.len(), 4);
-    assert_eq!(
-        parsed.iter().find(|p| p.id == "gw-oai").unwrap().kind,
-        ProviderKind::OpenAiCompatible
-    );
-    assert_eq!(
-        parsed.iter().find(|p| p.id == "gw-anth").unwrap().kind,
-        ProviderKind::Anthropic
-    );
-    assert_eq!(
-        parsed.iter().find(|p| p.id == "gw-google").unwrap().kind,
-        ProviderKind::Google
-    );
+    for (id, kind) in [
+        ("gw-oai", "openai"),
+        ("gw-anth", "anthropic"),
+        ("gw-google", "google"),
+    ] {
+        let provider = parsed.iter().find(|p| p.id == id).unwrap();
+        assert_eq!(plan(provider).unwrap().state.kind, kind);
+    }
 
     for kind in ["openai", "openai-compatible", "openai-completion"] {
         let yaml = format!(
             "providers:\n  gw:\n    kind: {kind}\n    base_url: https://gw.example/v1\n    models: [m1]\n"
         );
         let p = parse_providers(&yaml).unwrap();
-        assert_eq!(p[0].kind, ProviderKind::OpenAiCompatible);
+        let plan = plan(&p[0]).unwrap();
+        assert_eq!((plan.state.kind.as_str(), plan.routes.len()), ("openai", 1));
+        assert_eq!(plan.routes[0].kind(), "openai");
         assert_eq!(p[0].api_key, None);
         assert_eq!(p[0].models[0].reasoning_default, None);
     }
     let codex = parse_providers("providers:\n  c:\n    kind: openai-codex\n    base_url: https://chatgpt.com/backend-api/codex\n    models: [gpt-5.3-codex]\n").unwrap();
-    assert_eq!(codex[0].kind, ProviderKind::OpenAiCodex);
+    let codex_state = plan(&codex[0]).unwrap().state;
+    assert_eq!(
+        (
+            codex_state.kind.as_str(),
+            codex_state.supports_oauth,
+            codex_state.min_output_tokens
+        ),
+        ("openai-codex", true, 16)
+    );
     let grok = parse_providers("providers:\n  g:\n    kind: grok-build\n    base_url: https://grok.example/v1\n    models: [grok-4.5]\n").unwrap();
     assert_eq!(
-        grok[0].models[0].reasoning_variants,
+        row_variants(&grok[0], "grok-4.5"),
         vec!["low", "medium", "high"]
     );
     assert_eq!(grok[0].models[0].reasoning_default, None);
@@ -166,44 +198,14 @@ fn credentials_and_secret_templates_resolve_by_provider_kind() {
     assert_eq!(resolve_secret("literal-key").unwrap(), "literal-key");
 
     let cases = [
-        (
-            ProviderKind::GrokBuild,
-            Some("oauth"),
-            Some("inline"),
-            Some("oauth"),
-            true,
-            false,
-        ),
-        (
-            ProviderKind::GrokBuild,
-            None,
-            Some("inline"),
-            Some("inline"),
-            true,
-            false,
-        ),
-        (
-            ProviderKind::OpenAiCodex,
-            Some("jwt"),
-            None,
-            Some("jwt"),
-            false,
-            true,
-        ),
-        (
-            ProviderKind::OpenAiResponse,
-            Some("login"),
-            Some("inline"),
-            Some("login"),
-            false,
-            false,
-        ),
+        (Some("oauth"), Some("inline"), Some("oauth")),
+        (None, Some("inline"), Some("inline")),
+        (Some("jwt"), None, Some("jwt")),
+        (Some(" "), None, None),
     ];
-    for (kind, oauth, inline, tok, grok, codex) in cases {
-        let cred = resolve_provider_credential_with(kind, oauth, inline).unwrap();
-        assert_eq!(cred.token.as_deref(), tok);
-        assert_eq!(cred.use_grok_session, grok);
-        assert_eq!(cred.use_codex_session, codex);
+    for (login, inline, tok) in cases {
+        let cred = resolve_provider_credential_with(login, inline);
+        assert_eq!(cred.and_then(|cred| cred.token).as_deref(), tok);
     }
 }
 
@@ -211,16 +213,18 @@ fn credentials_and_secret_templates_resolve_by_provider_kind() {
 fn reasoning_variants_order_boolean_and_validation() {
     let _env = StableEnvGuard::new();
     let parsed = parse_providers(FIXTURE).unwrap();
+    let variants =
+        |id: &str, model: &str| row_variants(parsed.iter().find(|p| p.id == id).unwrap(), model);
     assert_eq!(
-        parsed.iter().find(|p| p.id == "gw-oai").unwrap().models[0].reasoning_variants,
+        variants("gw-oai", "gpt-5.5"),
         vec!["minimal", "low", "medium", "high", "xhigh"]
     );
     assert_eq!(
-        parsed.iter().find(|p| p.id == "gw-anth").unwrap().models[0].reasoning_variants,
+        variants("gw-anth", "claude-sonnet-4-6"),
         vec!["low", "medium", "high", "xhigh", "max"]
     );
     assert_eq!(
-        parsed.iter().find(|p| p.id == "gw-google").unwrap().models[0].reasoning_variants,
+        variants("gw-google", "gemini-2.0-flash"),
         vec!["minimal", "low", "medium", "high", "max"]
     );
 
@@ -243,9 +247,28 @@ fn reasoning_variants_order_boolean_and_validation() {
         detailed.models[2].reasoning_variants.is_empty() && detailed.models[2].variants_configured
     );
 
-    assert!(format!("{:#}", parse_config("schema_version: 2\nproviders:\n  g:\n    kind: openai-responses\n    base_url: https://x\n    models: [m]\n").unwrap_err()).contains("unknown variant"));
+    let unknown = parse_providers(
+        "providers:\n  g:\n    kind: openai-responses\n    base_url: https://x\n    models: [m]\n",
+    )
+    .unwrap()
+    .remove(0);
+    let unsupported = plan(&unknown).unwrap();
+    assert!(unsupported.routes.is_empty());
+    assert_eq!(unsupported.state.kind, "openai-responses");
+    assert_eq!(
+        unsupported.state.result,
+        hya_provider::ProviderCatalogResult::Unsupported
+    );
     assert!(parse_providers("providers:\n  g:\n    kind: openai-response\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          variants: [medium, extreme]\n").unwrap_err().to_string().contains("unknown reasoning variant extreme"));
     assert!(parse_providers("providers:\n  g:\n    kind: openai-response\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          default: high\n          variants: [low, medium]\n").unwrap_err().to_string().contains("reasoning default high is not advertised"));
+    let off_menu = parse_providers("providers:\n  g:\n    kind: grok-build\n    base_url: https://x\n    models:\n      - id: m\n        reasoning:\n          default: max\n").unwrap().remove(0);
+    assert!(
+        plan(&off_menu)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("reasoning default max is not advertised")
+    );
 }
 
 #[test]
@@ -253,7 +276,7 @@ fn model_limits_and_modalities_validate_and_reach_route_capabilities() {
     let _env = StableEnvGuard::new();
     let yaml = "providers:\n  12th:\n    kind: anthropic\n    base_url: https://api.12th.day/v1\n    models:\n      - glm-5.3\n      - id: glm-5.3-flash\n        limit: { context: 1048576, output: 131072 }\n        modalities: { input: [text, image] }\n      - id: glm-5.3-ctx\n        limit: { context: 262144 }\n        modalities: { input: [text] }\n";
     let provider = parse_providers(yaml).unwrap().remove(0);
-    let plan = plan_for_provider(&provider, &no_key(), &[], None).unwrap();
+    let plan = plan(&provider).unwrap();
     let caps = |id: &str| {
         plan.models
             .iter()
@@ -325,15 +348,15 @@ fn model_kind_override_partitions_routes_and_applies_to_cached_rows() {
     let yaml = "providers:\n  12th:\n    kind: openai-response\n    base_url: https://api.12th.day/v1\n    models:\n      - gpt-6-astra\n      - id: claude-opus-5\n        kind: anthropic\n      - id: glm-exp\n        kind: anthropic\n        reasoning: { variants: [low, high] }\n";
     let provider = parse_providers(yaml).unwrap().remove(0);
     assert_eq!(
-        provider.models[1].reasoning_variants,
-        ProviderKind::Anthropic.reasoning_variants()
+        row_variants(&provider, "claude-opus-5"),
+        labels(&hya_provider::AnthropicMessagesProtocol)
     );
-    assert_eq!(provider.models[2].reasoning_variants, vec!["low", "high"]);
+    assert_eq!(row_variants(&provider, "glm-exp"), vec!["low", "high"]);
 
-    let plan = plan_for_provider(&provider, &no_key(), &[], None).unwrap();
+    let plan = plan(&provider).unwrap();
     assert_eq!(plan.routes.len(), 2);
-    assert_eq!(plan.routes[0].kind(), ProviderKind::OpenAiResponse);
-    assert_eq!(plan.routes[1].kind(), ProviderKind::Anthropic);
+    assert_eq!(plan.routes[0].kind(), "openai-response");
+    assert_eq!(plan.routes[1].kind(), "anthropic");
     let mut router = ProviderRouter::new();
     for route in plan.routes {
         router = router.with(std::sync::Arc::new(route));
@@ -356,17 +379,26 @@ fn model_kind_override_partitions_routes_and_applies_to_cached_rows() {
 
     // Cached row follows the model's effective kind, not the provider's.
     let overridden = parse_providers("providers:\n  12th:\n    kind: anthropic\n    base_url: https://x\n    models:\n      - id: gpt-6\n        kind: openai\n").unwrap().remove(0);
-    let plan = plan_for_provider(&overridden, &no_key(), &[cached("gpt-6")], None).unwrap();
-    assert_eq!(plan.routes[0].kind(), ProviderKind::OpenAiCompatible);
+    let plan =
+        plan_for_provider(&overridden, &no_key(), &[cached("gpt-6")], None, &kinds()).unwrap();
+    assert_eq!(plan.routes[0].kind(), "openai");
     assert_eq!(
         plan.models[0].reasoning_variants,
-        ProviderKind::OpenAiCompatible.reasoning_variants()
+        labels(&OpenAiChatProtocol)
     );
 
-    // Unknown kind rejected; all documented labels accepted.
-    assert!(format!("{:#}", parse_providers("providers:\n  12th:\n    kind: openai\n    base_url: https://x\n    models:\n      - id: m\n        kind: anthropic-msgs\n").unwrap_err()).contains("unknown kind anthropic-msgs"));
-    for label in PROVIDER_KIND_LABELS {
-        parse_providers(&format!("providers:\n  12th:\n    kind: openai\n    base_url: https://x\n    models:\n      - id: m\n        kind: {label}\n")).unwrap();
+    // An unregistered entry kind makes the whole provider unsupported;
+    // every registered label routes.
+    let unknown = parse_providers("providers:\n  12th:\n    kind: openai\n    base_url: https://x\n    models:\n      - id: m\n        kind: anthropic-msgs\n").unwrap().remove(0);
+    let plan = plan_for_provider(&unknown, &no_key(), &[], None, &kinds()).unwrap();
+    assert!(plan.routes.is_empty() && plan.models.is_empty());
+    assert_eq!(
+        plan.state.result,
+        hya_provider::ProviderCatalogResult::Unsupported
+    );
+    for label in kinds().labels() {
+        let provider = parse_providers(&format!("providers:\n  12th:\n    kind: openai\n    base_url: https://x\n    models:\n      - id: m\n        kind: {label}\n")).unwrap().remove(0);
+        plan_for_provider(&provider, &no_key(), &[], None, &kinds()).unwrap();
     }
 }
 
@@ -389,7 +421,12 @@ fn cache_and_config_merge_preserves_overrides_unknowns_and_constraints() {
     remote.context_limit = 32_000;
     let bare = cached("remote-bare");
 
-    let merged = merge_provider_models(&provider, &[shared.clone(), remote.clone(), bare.clone()]);
+    let merged = merge_provider_models(
+        &provider,
+        &[shared.clone(), remote.clone(), bare.clone()],
+        &kinds(),
+    )
+    .unwrap();
     let by_id = |id: &str| merged.iter().find(|m| m.id == id).unwrap();
     assert_eq!(by_id("shared").source, ModelCatalogSource::Overridden);
     assert_eq!(
@@ -409,9 +446,16 @@ fn cache_and_config_merge_preserves_overrides_unknowns_and_constraints() {
     assert_eq!(by_id("pinned-only").source, ModelCatalogSource::Configured);
     assert!(by_id("pinned-only").reasoning_variants.is_empty());
 
-    let cfg_plan = plan_for_provider(&provider, &no_key(), &[], None).unwrap();
+    let cfg_plan = plan(&provider).unwrap();
     assert_eq!(cfg_plan.state.source, ProviderCatalogSource::Configured);
-    let plan = plan_for_provider(&provider, &no_key(), &[shared, remote, bare], None).unwrap();
+    let plan = plan_for_provider(
+        &provider,
+        &no_key(),
+        &[shared, remote, bare],
+        None,
+        &kinds(),
+    )
+    .unwrap();
     for id in ["plain", "remote-bare"] {
         let row = plan.models.iter().find(|r| r.model_id == id).unwrap();
         assert_eq!((row.capabilities.max_context, row.reasoning), (0, None));
@@ -435,24 +479,19 @@ fn upsert_provider_and_oauth_entries_preserve_other_keys_and_models() {
     );
     assert!(!upsert_provider_entry(&path, "gw", "anthropic", "https://new.example/v1").unwrap());
     assert!(upsert_provider_entry(&path, "fresh", "google", "https://g.example").unwrap());
-    assert!(matches!(
-        upsert_provider_entry(&path, "x", "bogus", "https://x"),
-        Err(ConfigEditError::Invalid(_))
-    ));
+    // The edit writes any label: callers check it against the registered kinds.
+    assert!(upsert_provider_entry(&path, "x", "bogus", "https://x").unwrap());
     let file = parse_config(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let gw = file.providers.get("gw").unwrap();
     assert_eq!(
         (
-            ProviderKind::from(gw.kind),
+            gw.kind.as_str(),
             gw.base_url.as_str(),
             gw.api_key.as_deref()
         ),
-        (
-            ProviderKind::Anthropic,
-            "https://new.example/v1",
-            Some("{env:GW_KEY}")
-        )
+        ("anthropic", "https://new.example/v1", Some("{env:GW_KEY}"))
     );
+    assert_eq!(file.providers["x"].kind, "bogus");
     assert!(file.providers.get("fresh").unwrap().models.is_empty());
 
     // OAuth upsert creates with empty models and preserves explicit user models on re-upsert.
@@ -512,11 +551,11 @@ fn set_and_remove_model_entries_patch_preserve_kind_and_validate() {
     let m = entry("typed");
     assert_eq!(
         (
-            m.kind,
+            m.kind.as_str(),
             m.display_name.as_deref(),
             m.limit.as_ref().map(|l| (l.context, l.output))
         ),
-        (ProviderKind::Anthropic, Some("Mine"), Some((1000, 200)))
+        ("anthropic", Some("Mine"), Some((1000, 200)))
     );
     assert_eq!(m.reasoning_variants, vec!["low", "high"]);
 
@@ -587,4 +626,151 @@ fn set_and_remove_model_entries_patch_preserve_kind_and_validate() {
         set_model_entry(&path, "missing", "m", &Default::default()),
         Err(ConfigEditError::NotFound(_))
     ));
+}
+
+fn bare_kinds() -> std::sync::Arc<ProviderKinds> {
+    crate::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::bare()).unwrap()
+}
+
+const MIXED_KINDS: &str = "schema_version: 2\ndefault_model: local/qwen\nproviders:\n  claude:\n    kind: anthropic\n    base_url: https://anthropic.example.test/v1\n    api_key: k\n    models: [sonnet]\n  codex:\n    kind: openai\n    base_url: https://codex.example.test/v1\n    models: [m]\n  local:\n    kind: openai\n    base_url: https://local.example.test/v1\n    api_key: k\n    models: [qwen]\n";
+
+#[tokio::test]
+async fn unregistered_kind_is_unsupported_and_other_providers_route() {
+    let home =
+        std::env::temp_dir().join(format!("hya-unsupported-{}", hya_proto::SessionId::new()));
+    let mut env = EnvGuard::with_home(&home, &home);
+    env.set("XDG_CACHE_HOME", home.join("cache"));
+    std::fs::create_dir_all(home.join("hya")).unwrap();
+    std::fs::write(home.join("hya/config.yaml"), MIXED_KINDS).unwrap();
+    // `codex` holds an OAuth credential whose type no registered kind provides.
+    crate::auth::save_credential_in(
+        &home.join("hya/auth"),
+        "codex",
+        &crate::auth::AuthCredential::OAuth(crate::auth::OAuthCredential {
+            oauth_type: "other-oauth".into(),
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: "2099-01-01T00:00:00Z".into(),
+            account_id: None,
+            id_token: None,
+        }),
+    )
+    .unwrap();
+
+    let claude = parse_providers(MIXED_KINDS).unwrap().remove(0);
+    let reason = super::provider::provider_support(&claude, &no_key(), &bare_kinds())
+        .err()
+        .unwrap();
+    assert_eq!(
+        reason,
+        "provider claude: kind `anthropic` is not provided by any enabled bundle (enabled kinds: openai, openai-compatible, openai-completion)"
+    );
+
+    let resolved = resolve(parse().unwrap().unwrap(), &bare_kinds())
+        .await
+        .unwrap();
+    let state = |id: &str| {
+        resolved
+            .catalog
+            .providers()
+            .iter()
+            .find(|state| state.provider_id == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        (state("claude").result, state("claude").kind.as_str()),
+        (
+            hya_provider::ProviderCatalogResult::Unsupported,
+            "anthropic"
+        )
+    );
+    assert_eq!(
+        state("codex").result,
+        hya_provider::ProviderCatalogResult::Unsupported
+    );
+    assert_eq!(
+        state("local").result,
+        hya_provider::ProviderCatalogResult::Models
+    );
+    let routed = |model: &str| {
+        resolved
+            .router
+            .resolve(&hya_proto::ModelRef::new(model))
+            .is_some()
+    };
+    assert!(routed("local/qwen") && !routed("claude/sonnet") && !routed("codex/m"));
+    assert_eq!(resolved.default_model, "local/qwen");
+    assert!(
+        resolved
+            .pending_discovery
+            .iter()
+            .all(|entry| entry.provider_id == "local")
+    );
+
+    // With the kinds registered, the same file routes every provider except
+    // the one whose OAuth type is still unknown.
+    let full = resolve(parse().unwrap().unwrap(), &kinds()).await.unwrap();
+    assert!(
+        full.router
+            .resolve(&hya_proto::ModelRef::new("claude/sonnet"))
+            .is_some()
+    );
+    assert!(
+        full.router
+            .resolve(&hya_proto::ModelRef::new("codex/m"))
+            .is_none()
+    );
+    drop(env);
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[tokio::test]
+async fn edit_succeeds_while_another_providers_kind_is_unregistered() {
+    let _env = StableEnvGuard::new();
+    let path = temp_config("edit-unregistered", MIXED_KINDS);
+    let kinds = bare_kinds();
+    crate::provider_control::persist_provider_upsert(
+        &path,
+        "gw",
+        "openai",
+        "https://gw.example.test/v1",
+        crate::provider_control::SavedProviderKey::Keep,
+        None,
+        &kinds,
+    )
+    .await
+    .unwrap();
+    set_model_entry(
+        &path,
+        "claude",
+        "opus",
+        &ModelEntryOverride {
+            display_name: Some("Opus".into()),
+            context_limit: None,
+            output_limit: None,
+            reasoning: None,
+        },
+    )
+    .unwrap();
+    // Only the written kind is checked.
+    let refused = crate::provider_control::persist_provider_upsert(
+        &path,
+        "other",
+        "anthropic",
+        "https://other.example.test/v1",
+        crate::provider_control::SavedProviderKey::Keep,
+        None,
+        &kinds,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(refused, ConfigEditError::Invalid(ref message) if message.contains("unknown provider kind `anthropic`")),
+        "{refused:?}"
+    );
+    let file = parse_config(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(file.providers["gw"].kind, "openai");
+    assert_eq!(file.providers["claude"].kind, "anthropic");
+    assert!(!file.providers.contains_key("other"));
 }

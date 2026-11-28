@@ -1,27 +1,25 @@
 //! Bounded startup model-catalog discovery for declared provider routes.
 //!
-//! This module owns provider list endpoint construction, optional authentication,
-//! response parsing, pagination, and failure classification. Runtime composition
-//! supplies only Hya-owned provider declarations and credentials.
+//! This module owns the bounded request loop, URL checks, response limits, and
+//! failure classification. Each [`Protocol`] supplies its model-list URL,
+//! pagination, headers, and row parsing.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt as _;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use secrecy::SecretString;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::ProviderKind;
-use crate::auth::{ANTHROPIC_VERSION, AuthStyle};
+use crate::{Protocol, RequestPurpose, RouteCredential};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_PAGES: usize = 8;
 const MAX_MODELS: usize = 2_000;
-const CODEX_MODELS_CLIENT_VERSION: &str = "0.144.0";
 
 /// Presence of authentication material on a discovery request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,133 +30,33 @@ pub enum AuthPresence {
     Unauthenticated,
 }
 
-/// Optional Hya-owned authentication and protocol session metadata.
-///
-/// The enum deliberately does not implement [`Debug`] so secret token values
-/// cannot appear in diagnostics. Empty token strings are treated as absent.
-pub enum CatalogAuth {
-    /// Send no credential-derived headers.
-    None,
-    /// Send an API key for Anthropic or Google.
-    ApiKey(String),
-    /// Send an optional bearer and optional Codex account id.
-    Bearer {
-        /// Bearer token, when present.
-        token: Option<String>,
-        /// ChatGPT account identity, sent only with a bearer token.
-        account_id: Option<String>,
-    },
-    /// Send Grok Build client identity and an optional bearer session.
-    Grok {
-        /// Bearer token, when present.
-        token: Option<String>,
-        /// Non-secret client version header.
-        client_version: String,
-        /// Non-secret client identifier header.
-        client_identifier: String,
-    },
-}
-
-impl CatalogAuth {
-    /// Construct an unauthenticated discovery request.
-    #[must_use]
-    pub fn unauthenticated() -> Self {
-        Self::None
-    }
-
-    /// Construct an API-key-authenticated discovery request.
-    #[must_use]
-    pub fn api_key(key: impl Into<String>) -> Self {
-        let key = key.into();
-        if key.is_empty() {
-            Self::None
-        } else {
-            Self::ApiKey(key)
-        }
-    }
-
-    /// Construct a bearer-authenticated discovery request.
-    #[must_use]
-    pub fn bearer(token: impl Into<String>, account_id: Option<String>) -> Self {
-        let token = token.into();
-        if token.is_empty() {
-            Self::None
-        } else {
-            Self::Bearer {
-                token: Some(token),
-                account_id,
-            }
-        }
-    }
-
-    /// Construct a Grok Build session request with optional auth.
-    #[must_use]
-    pub fn grok(
-        token: Option<String>,
-        client_version: impl Into<String>,
-        client_identifier: impl Into<String>,
-    ) -> Self {
-        Self::Grok {
-            token: token.filter(|token| !token.is_empty()),
-            client_version: client_version.into(),
-            client_identifier: client_identifier.into(),
-        }
-    }
-
-    fn into_style(self, kind: ProviderKind) -> AuthStyle {
-        match self {
-            Self::None if kind == ProviderKind::Anthropic => AuthStyle::Anthropic(None),
-            Self::None => AuthStyle::Bearer(None),
-            Self::ApiKey(key) if kind == ProviderKind::Anthropic => {
-                AuthStyle::Anthropic(Some(SecretString::new(key)))
-            }
-            Self::ApiKey(key) => AuthStyle::Google(Some(SecretString::new(key))),
-            Self::Bearer { token, account_id } if kind == ProviderKind::OpenAiCodex => {
-                AuthStyle::CodexSession {
-                    token: token.map(SecretString::new),
-                    account_id,
-                }
-            }
-            Self::Bearer { token, .. } => AuthStyle::Bearer(token.map(SecretString::new)),
-            Self::Grok {
-                token,
-                client_version,
-                client_identifier,
-            } => AuthStyle::GrokSession {
-                token: token.map(SecretString::new),
-                client_version,
-                client_identifier,
-            },
-        }
-    }
-}
-
 /// Input to one provider-local catalog discovery operation.
 pub struct CatalogDiscoveryRequest {
     /// Hya provider id used for diagnostics only.
     pub provider_id: String,
-    /// Declared provider protocol kind.
-    pub kind: ProviderKind,
+    /// Protocol of the provider's kind.
+    pub protocol: Arc<dyn Protocol>,
     /// Hya-configured provider API root.
     pub base_url: String,
-    /// Optional Hya credential/session material.
-    pub auth: CatalogAuth,
+    /// Hya credential, when the provider has one.
+    pub credential: Option<RouteCredential>,
 }
 
 impl CatalogDiscoveryRequest {
-    /// Construct a discovery request from a provider declaration.
+    /// Construct a discovery request from a provider declaration. A
+    /// credential with an empty token counts as none.
     #[must_use]
     pub fn new(
         provider_id: impl Into<String>,
-        kind: ProviderKind,
+        protocol: Arc<dyn Protocol>,
         base_url: impl Into<String>,
-        auth: CatalogAuth,
+        credential: Option<RouteCredential>,
     ) -> Self {
         Self {
             provider_id: provider_id.into(),
-            kind,
+            protocol,
             base_url: base_url.into(),
-            auth,
+            credential: credential.filter(|credential| !credential.token.is_empty()),
         }
     }
 }
@@ -210,18 +108,16 @@ fn first_limit(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option
     })
 }
 
+/// Display-name keys of a model row: `name` included (OpenAI-style lists).
+pub(crate) const NAME_KEYS: &[&str] = &["display_name", "displayName", "name"];
+/// Display-name keys where `name` is an id or resource name, not a label.
+pub(crate) const LABEL_KEYS: &[&str] = &["display_name", "displayName"];
+
 /// Display name and token limits published next to one catalog row.
-fn row_metadata(
+pub(crate) fn row_metadata(
     object: &serde_json::Map<String, Value>,
-    kind: ProviderKind,
+    name_keys: &[&str],
 ) -> (Option<String>, Option<u32>, Option<u32>) {
-    // Grok Build uses `name` as an id fallback and Google as the
-    // `models/<id>` resource name; neither is a display label.
-    let name_keys: &[&str] = if matches!(kind, ProviderKind::GrokBuild | ProviderKind::Google) {
-        &["display_name", "displayName"]
-    } else {
-        &["display_name", "displayName", "name"]
-    };
     let display_name = first_string(object, name_keys);
     let context = first_limit(
         object,
@@ -246,56 +142,54 @@ fn row_metadata(
     (display_name, context, output)
 }
 
-/// Parse a provider catalog payload and normalize its model ids and metadata.
-///
-/// This parser is public for deterministic fixture tests; network requests and
-/// pagination remain owned by [`discover_models`].
-pub fn parse_catalog_payload(
-    kind: ProviderKind,
+/// Reasoning default and variants a model row publishes.
+pub(crate) type RowReasoning = fn(&serde_json::Map<String, Value>) -> (Option<String>, Vec<String>);
+
+/// Shape of an id-keyed model list (`{"data": [{"id": …}, …]}` and kin).
+pub(crate) struct RowShape {
+    /// Keys that may hold the row array; the first present one is used.
+    pub(crate) arrays: &'static [&'static str],
+    /// Keys that may hold the row id; the first present one is used.
+    pub(crate) ids: &'static [&'static str],
+    /// Display-name keys ([`NAME_KEYS`] or [`LABEL_KEYS`]).
+    pub(crate) names: &'static [&'static str],
+    /// Whether a bare string row is a model id.
+    pub(crate) string_rows: bool,
+    /// Reasoning default and variants published on a row.
+    pub(crate) reasoning: RowReasoning,
+}
+
+impl RowShape {
+    /// OpenAI-compatible `{"data": [{"id": …}]}` without reasoning metadata.
+    pub(crate) const DATA: Self = Self {
+        arrays: &["data"],
+        ids: &["id"],
+        names: NAME_KEYS,
+        string_rows: false,
+        reasoning: |_| (None, Vec::new()),
+    };
+}
+
+fn first_present<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<&'a Value> {
+    keys.iter().find_map(|key| object.get(*key))
+}
+
+/// Parse the rows of an id-keyed model list.
+pub(crate) fn parse_rows(
     payload: &Value,
+    shape: &RowShape,
 ) -> Result<Vec<DiscoveredModel>, CatalogFailure> {
-    let mut models = Vec::new();
-    match kind {
-        ProviderKind::Google => parse_google(payload, &mut models)?,
-        ProviderKind::OpenAiCompatible | ProviderKind::OpenAiResponse | ProviderKind::Anthropic => {
-            parse_data_models(payload, kind, &mut models, false)?
-        }
-        ProviderKind::OpenAiCodex | ProviderKind::GrokBuild => {
-            parse_data_models(payload, kind, &mut models, payload.get("data").is_none())?;
-        }
-    }
-    let models = normalize_models(models);
-    if kind == ProviderKind::GrokBuild {
-        return Ok(models
-            .into_iter()
-            .filter(|model| is_grok_executable_model_id(&model.id))
-            .collect());
-    }
-    Ok(models)
-}
-
-/// Return whether a Grok Build catalog row names an executable text model.
-///
-/// This matches the established OAuth catalog adapter and rejects the media-only
-/// rows that Hya's completion protocol cannot execute.
-#[must_use]
-pub fn is_grok_executable_model_id(id: &str) -> bool {
-    !id.contains("imagine") && !id.contains("image") && !id.contains("video")
-}
-
-fn parse_data_models(
-    payload: &Value,
-    kind: ProviderKind,
-    models: &mut Vec<DiscoveredModel>,
-    allow_models_field: bool,
-) -> Result<(), CatalogFailure> {
     let array = payload
-        .get("data")
-        .or_else(|| allow_models_field.then(|| payload.get("models")).flatten())
+        .as_object()
+        .and_then(|object| first_present(object, shape.arrays))
         .and_then(Value::as_array)
         .ok_or(CatalogFailure::Schema)?;
+    let mut models = Vec::new();
     for row in array {
-        if kind == ProviderKind::GrokBuild
+        if shape.string_rows
             && let Some(id) = row.as_str()
         {
             models.push(DiscoveredModel {
@@ -305,28 +199,11 @@ fn parse_data_models(
             continue;
         }
         let object = row.as_object().ok_or(CatalogFailure::Schema)?;
-        let id = match kind {
-            ProviderKind::OpenAiCodex => object.get("slug").or_else(|| object.get("id")),
-            ProviderKind::GrokBuild => object
-                .get("id")
-                .or_else(|| object.get("model"))
-                .or_else(|| object.get("name")),
-            ProviderKind::OpenAiCompatible
-            | ProviderKind::OpenAiResponse
-            | ProviderKind::Anthropic
-            | ProviderKind::Google => object.get("id"),
-        }
-        .and_then(Value::as_str)
-        .ok_or(CatalogFailure::Schema)?;
-        let (reasoning_default, reasoning_variants) = match kind {
-            ProviderKind::OpenAiCodex => parse_codex_reasoning(object),
-            ProviderKind::GrokBuild => parse_grok_reasoning(object),
-            ProviderKind::OpenAiCompatible
-            | ProviderKind::OpenAiResponse
-            | ProviderKind::Anthropic
-            | ProviderKind::Google => (None, Vec::new()),
-        };
-        let (display_name, context_limit, output_limit) = row_metadata(object, kind);
+        let id = first_present(object, shape.ids)
+            .and_then(Value::as_str)
+            .ok_or(CatalogFailure::Schema)?;
+        let (reasoning_default, reasoning_variants) = (shape.reasoning)(object);
+        let (display_name, context_limit, output_limit) = row_metadata(object, shape.names);
         models.push(DiscoveredModel {
             id: id.to_string(),
             reasoning_default,
@@ -336,97 +213,18 @@ fn parse_data_models(
             output_limit,
         });
     }
-    Ok(())
+    Ok(models)
 }
 
-fn parse_google(payload: &Value, models: &mut Vec<DiscoveredModel>) -> Result<(), CatalogFailure> {
-    let array = payload
-        .get("models")
-        .and_then(Value::as_array)
-        .ok_or(CatalogFailure::Schema)?;
-    for row in array {
-        let object = row.as_object().ok_or(CatalogFailure::Schema)?;
-        let name = object
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or(CatalogFailure::Schema)?;
-        let Some(id) = name.strip_prefix("models/") else {
-            return Err(CatalogFailure::Schema);
-        };
-        let methods = object
-            .get("supportedGenerationMethods")
-            .and_then(Value::as_array)
-            .ok_or(CatalogFailure::Schema)?;
-        if methods
-            .iter()
-            .any(|method| method.as_str() == Some("generateContent"))
-        {
-            let (display_name, context_limit, output_limit) =
-                row_metadata(object, ProviderKind::Google);
-            models.push(DiscoveredModel {
-                id: id.to_string(),
-                display_name: display_name.filter(|name| name != id),
-                context_limit,
-                output_limit,
-                ..DiscoveredModel::default()
-            });
-        }
-    }
-    Ok(())
-}
-
-fn parse_codex_reasoning(object: &serde_json::Map<String, Value>) -> (Option<String>, Vec<String>) {
-    let default = object
-        .get("default_reasoning_level")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|value| !value.is_empty());
-    let variants = object
-        .get("supported_reasoning_levels")
-        .and_then(Value::as_array)
-        .map(|levels| {
-            levels
-                .iter()
-                .filter_map(|level| {
-                    let level = level.as_object()?;
-                    level
-                        .get("effort")
-                        .or_else(|| level.get("id"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .filter(|value| !value.is_empty())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    (default, variants)
-}
-
-fn parse_grok_reasoning(object: &serde_json::Map<String, Value>) -> (Option<String>, Vec<String>) {
-    let default = object
-        .get("reasoning_effort")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|value| !value.is_empty());
-    let variants = object
-        .get("reasoning_efforts")
-        .and_then(Value::as_array)
-        .map(|levels| {
-            levels
-                .iter()
-                .filter_map(|level| {
-                    let level = level.as_object()?;
-                    level
-                        .get("value")
-                        .or_else(|| level.get("id"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .filter(|value| !value.is_empty())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    (default, variants)
+/// Parse one catalog page with `protocol` and normalize its model ids.
+///
+/// Public for deterministic fixture tests; network requests and pagination
+/// remain owned by [`discover_models`].
+pub fn parse_catalog_payload(
+    protocol: &dyn Protocol,
+    payload: &Value,
+) -> Result<Vec<DiscoveredModel>, CatalogFailure> {
+    protocol.parse_models(payload).map(normalize_models)
 }
 
 fn normalize_models(models: Vec<DiscoveredModel>) -> Vec<DiscoveredModel> {
@@ -511,22 +309,37 @@ pub enum ProviderDiscoveryOutcome {
     /// Hya has no safe adapter for this provider kind.
     Unsupported {
         /// Declared kind with no adapter.
-        kind: ProviderKind,
+        kind: String,
     },
 }
 
 /// Discover models from one declared provider using bounded HTTP semantics.
 pub async fn discover_models(request: CatalogDiscoveryRequest) -> ProviderDiscoveryOutcome {
-    let auth_style = request.auth.into_style(request.kind);
-    let auth = if auth_style.credential().is_some() {
+    let protocol = request.protocol.as_ref();
+    let auth = if request.credential.is_some() {
         AuthPresence::Credentialed
     } else {
         AuthPresence::Unauthenticated
     };
-    let endpoint = match models_endpoint(&request.base_url, request.kind) {
+    let endpoint = match protocol
+        .models_url(&request.base_url)
+        .and_then(|url| checked_url(&url).map(String::from))
+    {
         Ok(endpoint) => endpoint,
         Err(error) => return ProviderDiscoveryOutcome::Failed { error },
     };
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("accept"),
+        HeaderValue::from_static("application/json"),
+    );
+    let auth_headers =
+        protocol.auth_headers(request.credential.as_ref(), RequestPurpose::Catalog, None);
+    if crate::http::insert_headers(&mut headers, auth_headers).is_err() {
+        return ProviderDiscoveryOutcome::Failed {
+            error: CatalogFailure::UnsafeUrl,
+        };
+    }
     let client = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
@@ -545,11 +358,14 @@ pub async fn discover_models(request: CatalogDiscoveryRequest) -> ProviderDiscov
     let mut cursor = None;
     let mut cursors = HashSet::new();
     for page in 0..MAX_PAGES {
-        let url = match page_url(&endpoint, request.kind, cursor.as_deref()) {
+        let url = match protocol
+            .models_page_url(&endpoint, cursor.as_deref())
+            .and_then(|url| checked_url(&url))
+        {
             Ok(url) => url,
             Err(error) => return ProviderDiscoveryOutcome::Failed { error },
         };
-        let response = match send_page(&client, &url, request.kind, &auth_style).await {
+        let response = match send_page(&client, url, &headers).await {
             Ok(response) => response,
             Err(error) => {
                 return classify_failure(error, auth);
@@ -563,7 +379,7 @@ pub async fn discover_models(request: CatalogDiscoveryRequest) -> ProviderDiscov
                 };
             }
         };
-        let page_models = match parse_catalog_payload(request.kind, &payload) {
+        let page_models = match parse_catalog_payload(protocol, &payload) {
             Ok(models) => models,
             Err(error) => return ProviderDiscoveryOutcome::Failed { error },
         };
@@ -573,7 +389,7 @@ pub async fn discover_models(request: CatalogDiscoveryRequest) -> ProviderDiscov
                 error: CatalogFailure::PaginationLimit,
             };
         }
-        let next = match next_cursor(request.kind, &payload) {
+        let next = match protocol.models_next_cursor(&payload) {
             Ok(next) => next,
             Err(error) => return ProviderDiscoveryOutcome::Failed { error },
         };
@@ -607,17 +423,18 @@ fn classify_failure(error: CatalogFailure, auth: AuthPresence) -> ProviderDiscov
     }
 }
 
-fn models_endpoint(base_url: &str, kind: ProviderKind) -> Result<reqwest::Url, CatalogFailure> {
-    let mut url = reqwest::Url::parse(base_url).map_err(|_| CatalogFailure::InvalidUrl)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err(CatalogFailure::InvalidUrl);
-    }
-    if url.username() != "" || url.password().is_some() {
-        return Err(CatalogFailure::UnsafeUrl);
-    }
+/// `<base>/models` (unless the path already ends in `/models`), after
+/// dropping `strip_suffix` from the path; query and fragment are cleared.
+pub(crate) fn models_resource_url(
+    base: &str,
+    strip_suffix: Option<&str>,
+) -> Result<reqwest::Url, CatalogFailure> {
+    let mut url = reqwest::Url::parse(base).map_err(|_| CatalogFailure::InvalidUrl)?;
     let mut path = url.path().trim_end_matches('/').to_string();
-    if kind == ProviderKind::OpenAiResponse && path.ends_with("/responses") {
-        path.truncate(path.len() - "/responses".len());
+    if let Some(suffix) = strip_suffix
+        && path.ends_with(suffix)
+    {
+        path.truncate(path.len() - suffix.len());
     }
     if !path.ends_with("/models") {
         path = if path.is_empty() {
@@ -629,84 +446,36 @@ fn models_endpoint(base_url: &str, kind: ProviderKind) -> Result<reqwest::Url, C
     }
     url.set_query(None);
     url.set_fragment(None);
-    if kind == ProviderKind::OpenAiCodex {
-        url.query_pairs_mut()
-            .append_pair("client_version", CODEX_MODELS_CLIENT_VERSION);
-    }
     Ok(url)
 }
 
-fn page_url(
-    endpoint: &reqwest::Url,
-    kind: ProviderKind,
-    cursor: Option<&str>,
-) -> Result<reqwest::Url, CatalogFailure> {
-    let mut url = endpoint.clone();
-    if cursor.is_none() && kind == ProviderKind::Anthropic {
-        url.query_pairs_mut().append_pair("limit", "1000");
-    }
-    if let Some(cursor) = cursor {
-        let key = if kind == ProviderKind::Google {
-            "pageToken"
-        } else {
-            "after_id"
-        };
-        url.query_pairs_mut().append_pair(key, cursor);
-    }
-    Ok(url)
+/// `url` with `key=value` appended to its query.
+pub(crate) fn append_query(url: &str, key: &str, value: &str) -> Result<String, CatalogFailure> {
+    let mut url = reqwest::Url::parse(url).map_err(|_| CatalogFailure::InvalidUrl)?;
+    url.query_pairs_mut().append_pair(key, value);
+    Ok(url.into())
 }
 
-fn next_cursor(kind: ProviderKind, payload: &Value) -> Result<Option<String>, CatalogFailure> {
-    match kind {
-        ProviderKind::Anthropic => {
-            let has_more = payload
-                .get("has_more")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if !has_more {
-                return Ok(None);
-            }
-            payload
-                .get("last_id")
-                .or_else(|| payload.get("after_id"))
-                .and_then(Value::as_str)
-                .filter(|cursor| !cursor.is_empty())
-                .map(str::to_owned)
-                .ok_or(CatalogFailure::PaginationLimit)
-                .map(Some)
-        }
-        ProviderKind::Google => payload
-            .get("nextPageToken")
-            .map(|token| {
-                token
-                    .as_str()
-                    .filter(|cursor| !cursor.is_empty())
-                    .map(str::to_owned)
-                    .ok_or(CatalogFailure::PaginationLimit)
-            })
-            .transpose(),
-        ProviderKind::OpenAiCompatible
-        | ProviderKind::OpenAiResponse
-        | ProviderKind::OpenAiCodex
-        | ProviderKind::GrokBuild => Ok(None),
+/// Parse a protocol-built URL and reject non-HTTP schemes and userinfo.
+fn checked_url(url: &str) -> Result<reqwest::Url, CatalogFailure> {
+    let url = reqwest::Url::parse(url).map_err(|_| CatalogFailure::InvalidUrl)?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(CatalogFailure::InvalidUrl);
     }
+    if url.username() != "" || url.password().is_some() {
+        return Err(CatalogFailure::UnsafeUrl);
+    }
+    Ok(url)
 }
 
 async fn send_page(
     client: &reqwest::Client,
-    url: &reqwest::Url,
-    kind: ProviderKind,
-    auth: &AuthStyle,
+    url: reqwest::Url,
+    headers: &HeaderMap,
 ) -> Result<Vec<u8>, CatalogFailure> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        HeaderName::from_static("accept"),
-        HeaderValue::from_static("application/json"),
-    );
-    apply_auth_headers(&mut headers, kind, auth)?;
     let response = client
-        .get(url.clone())
-        .headers(headers)
+        .get(url)
+        .headers(headers.clone())
         .send()
         .await
         .map_err(|error| {
@@ -749,94 +518,62 @@ async fn send_page(
     Ok(body)
 }
 
-fn apply_auth_headers(
-    headers: &mut HeaderMap,
-    kind: ProviderKind,
-    auth: &AuthStyle,
-) -> Result<(), CatalogFailure> {
-    auth.apply_headers(headers, auth.credential(), false, None)
-        .map_err(|_| CatalogFailure::UnsafeUrl)?;
-    if kind == ProviderKind::Anthropic && !matches!(auth, AuthStyle::Anthropic(_)) {
-        headers.insert(
-            "anthropic-version",
-            HeaderValue::from_static(ANTHROPIC_VERSION),
-        );
-    }
-    if kind == ProviderKind::OpenAiCodex {
-        headers.insert(
-            HeaderName::from_static("openai-beta"),
-            HeaderValue::from_static("responses=experimental"),
-        );
-        headers.insert(
-            HeaderName::from_static("user-agent"),
-            HeaderValue::from_static("codex_cli_rs"),
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use crate::{
+        AnthropicMessagesProtocol, GrokBuildProtocol, OpenAiCodexProtocol, OpenAiResponsesProtocol,
+    };
 
     #[test]
     fn responses_and_codex_catalog_urls_use_model_resources() {
-        let responses = models_endpoint(
-            "https://gateway.example/v1/responses",
-            ProviderKind::OpenAiResponse,
-        )
-        .unwrap();
-        assert_eq!(responses.as_str(), "https://gateway.example/v1/models");
+        let responses = OpenAiResponsesProtocol
+            .models_url("https://gateway.example/v1/responses")
+            .unwrap();
+        assert_eq!(responses, "https://gateway.example/v1/models");
 
-        let codex = models_endpoint(
-            "https://chatgpt.com/backend-api/codex",
-            ProviderKind::OpenAiCodex,
-        )
-        .unwrap();
-        assert_eq!(codex.path(), "/backend-api/codex/models");
+        let codex = OpenAiCodexProtocol
+            .models_url("https://chatgpt.com/backend-api/codex")
+            .unwrap();
         assert_eq!(
-            codex
-                .query_pairs()
-                .find(|(key, _)| key == "client_version")
-                .map(|(_, value)| value),
-            Some(CODEX_MODELS_CLIENT_VERSION.into())
+            codex,
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.144.0"
         );
     }
 
     #[test]
     fn anthropic_pagination_keeps_limit_and_cursor() {
-        let endpoint =
-            models_endpoint("https://api.anthropic.com/v1", ProviderKind::Anthropic).unwrap();
-        let first = page_url(&endpoint, ProviderKind::Anthropic, None).unwrap();
-        assert!(
-            first
-                .query_pairs()
-                .any(|(key, value)| key == "limit" && value == "1000")
-        );
-        let next = page_url(&endpoint, ProviderKind::Anthropic, Some("cursor-1")).unwrap();
-        assert!(
-            next.query_pairs()
-                .any(|(key, value)| key == "after_id" && value == "cursor-1")
+        let endpoint = AnthropicMessagesProtocol
+            .models_url("https://api.anthropic.com/v1")
+            .unwrap();
+        let first = AnthropicMessagesProtocol
+            .models_page_url(&endpoint, None)
+            .unwrap();
+        assert_eq!(first, "https://api.anthropic.com/v1/models?limit=1000");
+        let next = AnthropicMessagesProtocol
+            .models_page_url(&endpoint, Some("cursor-1"))
+            .unwrap();
+        assert_eq!(
+            next,
+            "https://api.anthropic.com/v1/models?after_id=cursor-1"
         );
     }
 
     #[test]
     fn codex_headers_keep_protocol_metadata_and_omit_absent_auth() {
-        let mut headers = HeaderMap::new();
-        apply_auth_headers(
-            &mut headers,
-            ProviderKind::OpenAiCodex,
-            &AuthStyle::CodexSession {
-                token: None,
-                account_id: Some("must-not-leak".to_string()),
-            },
-        )
-        .unwrap();
-        assert!(!headers.contains_key("authorization"));
-        assert!(!headers.contains_key("chatgpt-account-id"));
-        assert_eq!(headers["openai-beta"], "responses=experimental");
-        assert_eq!(headers["user-agent"], "codex_cli_rs");
+        let headers = OpenAiCodexProtocol.auth_headers(None, RequestPurpose::Catalog, None);
+        let names: Vec<_> = headers
+            .iter()
+            .map(|header| (header.name.as_str(), header.value.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("openai-beta", "responses=experimental"),
+                ("user-agent", "codex_cli_rs")
+            ]
+        );
     }
 
     #[test]
@@ -856,7 +593,7 @@ mod tests {
             ProviderDiscoveryOutcome::AuthRejected
         ));
         let models = parse_catalog_payload(
-            ProviderKind::GrokBuild,
+            &GrokBuildProtocol,
             &serde_json::json!({
                 "models": [
                     { "id": "grok-4.5" },

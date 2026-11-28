@@ -7,8 +7,12 @@ use serde_json::{Map, Value, json};
 
 use crate::media::google_inline_data;
 
+use crate::catalog_discovery::{LABEL_KEYS, append_query, row_metadata};
 use crate::wire::{ToolImages, tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
+use crate::{
+    CatalogFailure, CompletionRequest, Decoder, DiscoveredModel, Protocol, ProviderError,
+    ReasoningEffort, RequestHeader, RequestPurpose, RouteCredential,
+};
 
 /// Gemini generateContent request encoder + stream decoder factory.
 pub struct GoogleProtocol;
@@ -209,8 +213,89 @@ fn user_parts(parts: &[Part]) -> Result<Vec<Value>, ProviderError> {
 }
 
 impl Protocol for GoogleProtocol {
+    fn kind(&self) -> &str {
+        "google"
+    }
+
+    fn description(&self) -> &str {
+        "Google Gemini generateContent (<base>/v1beta/models)"
+    }
+
     fn endpoint_url(&self, base: &str, model: &str) -> String {
         format!("{base}/v1beta/models/{model}:streamGenerateContent?alt=sse")
+    }
+
+    fn auth_headers(
+        &self,
+        credential: Option<&RouteCredential>,
+        _purpose: RequestPurpose,
+        _model: Option<&str>,
+    ) -> Vec<RequestHeader> {
+        credential
+            .map(|credential| RequestHeader::new("x-goog-api-key", &credential.token, true))
+            .into_iter()
+            .collect()
+    }
+
+    fn models_page_url(
+        &self,
+        endpoint: &str,
+        cursor: Option<&str>,
+    ) -> Result<String, CatalogFailure> {
+        match cursor {
+            Some(cursor) => append_query(endpoint, "pageToken", cursor),
+            None => Ok(endpoint.to_owned()),
+        }
+    }
+
+    fn models_next_cursor(&self, payload: &Value) -> Result<Option<String>, CatalogFailure> {
+        payload
+            .get("nextPageToken")
+            .map(|token| {
+                token
+                    .as_str()
+                    .filter(|cursor| !cursor.is_empty())
+                    .map(str::to_owned)
+                    .ok_or(CatalogFailure::PaginationLimit)
+            })
+            .transpose()
+    }
+
+    fn parse_models(&self, payload: &Value) -> Result<Vec<DiscoveredModel>, CatalogFailure> {
+        let array = payload
+            .get("models")
+            .and_then(Value::as_array)
+            .ok_or(CatalogFailure::Schema)?;
+        let mut models = Vec::new();
+        for row in array {
+            let object = row.as_object().ok_or(CatalogFailure::Schema)?;
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(CatalogFailure::Schema)?;
+            let Some(id) = name.strip_prefix("models/") else {
+                return Err(CatalogFailure::Schema);
+            };
+            let methods = object
+                .get("supportedGenerationMethods")
+                .and_then(Value::as_array)
+                .ok_or(CatalogFailure::Schema)?;
+            if methods
+                .iter()
+                .any(|method| method.as_str() == Some("generateContent"))
+            {
+                // `name` is the `models/<id>` resource name, not a label.
+                let (display_name, context_limit, output_limit) = row_metadata(object, LABEL_KEYS);
+                models.push(DiscoveredModel {
+                    id: id.to_string(),
+                    display_name: display_name.filter(|name| name != id),
+                    context_limit,
+                    output_limit,
+                    ..DiscoveredModel::default()
+                });
+            }
+        }
+        Ok(models)
     }
 
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {

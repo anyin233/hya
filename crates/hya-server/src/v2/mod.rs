@@ -12,7 +12,6 @@ pub(crate) mod bundle_api;
 mod catalog;
 mod convert;
 pub(crate) mod events;
-mod fs;
 mod grpc;
 mod interaction;
 mod logs;
@@ -26,7 +25,6 @@ mod pty;
 mod relay;
 mod session;
 mod turn;
-mod worktree;
 
 use std::collections::BTreeMap;
 
@@ -88,9 +86,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(message::router())
         .merge(events::router())
         .merge(interaction::router())
-        .merge(fs::router())
         .merge(project::router())
-        .merge(worktree::router())
         .merge(mcp::router())
         .merge(mcp_session::router())
         .merge(pty::router())

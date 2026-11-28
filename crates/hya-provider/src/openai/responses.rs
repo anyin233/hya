@@ -1,26 +1,137 @@
-use hya_proto::{Message, MessageId, Part, SessionId};
-use serde_json::{Value, json};
+use hya_proto::{Message, MessageId, ModelRef, Part, SessionId};
+use serde_json::{Map, Value, json};
 
 use super::OpenAiResponsesDecoder;
+use crate::catalog_discovery::{
+    LABEL_KEYS, NAME_KEYS, RowShape, append_query, models_resource_url, parse_rows,
+};
+use crate::compact::parse_responses_compact_items;
 use crate::media::image_url;
 use crate::wire::{ToolImages, tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
+use crate::{
+    CatalogFailure, CompactWire, CompletionRequest, Decoder, DiscoveredModel, Protocol,
+    ProviderError, ReasoningEffort, RequestHeader, RequestPurpose, RouteCredential, bearer_header,
+};
 
-use hya_proto::context::TODO_LIST_HEADER;
-pub use hya_proto::context::{COMPACT_CONTEXT_MARKER, RESPONSES_COMPACT_ITEMS_MARKER};
+/// Responses upstreams (OpenAI) reject `max_output_tokens` below 16.
+const RESPONSES_MIN_OUTPUT_TOKENS: u32 = 16;
+/// Codex CLI version the ChatGPT model list expects as `client_version`.
+const CODEX_MODELS_CLIENT_VERSION: &str = "0.144.0";
 
-/// OpenAI Responses API request encoder + stream decoder factory.
+/// OpenAI Responses API request encoder + stream decoder factory (`kind: openai-response`).
 pub struct OpenAiResponsesProtocol;
 
-pub(crate) struct GrokBuildProtocol;
+/// ChatGPT Codex subscription backend (`kind: openai-codex`): the Responses
+/// wire with Codex session headers and model list.
+pub struct OpenAiCodexProtocol;
+
+/// Grok Build CLI chat proxy (`kind: grok-build`): the Responses wire with
+/// encrypted reasoning and Grok session headers.
+pub struct GrokBuildProtocol;
+
+/// `/responses/compact` over the Responses input items.
+pub struct ResponsesCompactWire;
+
+impl CompactWire for ResponsesCompactWire {
+    fn endpoint(&self, base: &str) -> String {
+        format!("{base}/responses/compact")
+    }
+
+    fn encode(
+        &self,
+        messages: &[Message],
+        system: Option<&str>,
+        model_id: &str,
+        images: bool,
+    ) -> Result<Value, ProviderError> {
+        // Encode the same input window the create path would send.
+        let target = ModelRef::new(model_id);
+        let mut input = encode_input_items_for_model(messages, images, Some(&target))?;
+        if let Some(system) = system.filter(|s| !s.is_empty()) {
+            // Prefer instructions-equivalent as a system item at the front when
+            // the compact endpoint is given an explicit system prompt.
+            input.insert(0, json!({"role": "system", "content": system}));
+        }
+        Ok(json!({
+            "model": model_id,
+            "input": input,
+        }))
+    }
+
+    fn parse(&self, payload: &Value) -> Result<Vec<Value>, ProviderError> {
+        payload
+            .get("output")
+            .and_then(Value::as_array)
+            .cloned()
+            .ok_or_else(|| {
+                ProviderError::Decode("responses compact reply missing output array".to_string())
+            })
+    }
+}
 
 impl Protocol for GrokBuildProtocol {
+    fn kind(&self) -> &str {
+        "grok-build"
+    }
+
+    fn description(&self) -> &str {
+        "Grok Build CLI chat proxy (<base>/responses)"
+    }
+
     fn endpoint_url(&self, base: &str, model: &str) -> String {
         OpenAiResponsesProtocol.endpoint_url(base, model)
     }
 
-    fn compact_endpoint(&self, base: &str) -> Option<String> {
-        OpenAiResponsesProtocol.compact_endpoint(base)
+    fn auth_headers(
+        &self,
+        credential: Option<&RouteCredential>,
+        purpose: RequestPurpose,
+        model: Option<&str>,
+    ) -> Vec<RequestHeader> {
+        let completion = purpose == RequestPurpose::Completion;
+        let mut headers: Vec<_> = bearer_header(credential).into_iter().collect();
+        if credential.is_some() {
+            headers.push(RequestHeader::new(
+                "x-xai-token-auth",
+                "xai-grok-cli",
+                completion,
+            ));
+        }
+        headers.push(RequestHeader::new(
+            "x-grok-client-version",
+            hya_version::BACKEND_VERSION,
+            completion,
+        ));
+        headers.push(RequestHeader::new(
+            "x-grok-client-identifier",
+            "grok-cli",
+            completion,
+        ));
+        if let Some(model) = model {
+            headers.push(RequestHeader::new("x-grok-model-override", model, true));
+        }
+        headers
+    }
+
+    fn compaction(&self) -> Option<&dyn CompactWire> {
+        Some(&ResponsesCompactWire)
+    }
+
+    fn min_output_tokens(&self) -> u32 {
+        RESPONSES_MIN_OUTPUT_TOKENS
+    }
+
+    fn parse_models(&self, payload: &Value) -> Result<Vec<DiscoveredModel>, CatalogFailure> {
+        const GROK_ROWS: RowShape = RowShape {
+            arrays: &["data", "models"],
+            ids: &["id", "model", "name"],
+            names: LABEL_KEYS,
+            string_rows: true,
+            reasoning: grok_reasoning,
+        };
+        let mut models = parse_rows(payload, &GROK_ROWS)?;
+        models.retain(|model| is_grok_executable_model_id(&model.id));
+        Ok(models)
     }
 
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
@@ -31,9 +142,6 @@ impl Protocol for GrokBuildProtocol {
         &["low", "medium", "high"]
     }
 
-    fn session_model_override<'a>(&self, model: &'a str) -> Option<&'a str> {
-        Some(model)
-    }
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
         self.encode_for_model(req, None, false)
     }
@@ -59,15 +167,171 @@ impl Protocol for GrokBuildProtocol {
     }
 }
 
+impl Protocol for OpenAiCodexProtocol {
+    fn kind(&self) -> &str {
+        "openai-codex"
+    }
+
+    fn description(&self) -> &str {
+        "ChatGPT Codex subscription (<base>/responses)"
+    }
+
+    fn endpoint_url(&self, base: &str, model: &str) -> String {
+        OpenAiResponsesProtocol.endpoint_url(base, model)
+    }
+
+    fn auth_headers(
+        &self,
+        credential: Option<&RouteCredential>,
+        purpose: RequestPurpose,
+        _model: Option<&str>,
+    ) -> Vec<RequestHeader> {
+        let mut headers: Vec<_> = bearer_header(credential).into_iter().collect();
+        if let Some(account) = credential
+            .and_then(|credential| credential.account_id.as_deref())
+            .filter(|account| !account.is_empty())
+        {
+            headers.push(RequestHeader::new("chatgpt-account-id", account, true));
+        }
+        if purpose == RequestPurpose::Catalog {
+            headers.push(RequestHeader::new(
+                "openai-beta",
+                "responses=experimental",
+                false,
+            ));
+            headers.push(RequestHeader::new("user-agent", "codex_cli_rs", false));
+        }
+        headers
+    }
+
+    fn compaction(&self) -> Option<&dyn CompactWire> {
+        Some(&ResponsesCompactWire)
+    }
+
+    fn min_output_tokens(&self) -> u32 {
+        RESPONSES_MIN_OUTPUT_TOKENS
+    }
+
+    fn models_url(&self, base: &str) -> Result<String, CatalogFailure> {
+        let url = models_resource_url(base, None)?;
+        append_query(url.as_str(), "client_version", CODEX_MODELS_CLIENT_VERSION)
+    }
+
+    fn parse_models(&self, payload: &Value) -> Result<Vec<DiscoveredModel>, CatalogFailure> {
+        const CODEX_ROWS: RowShape = RowShape {
+            arrays: &["data", "models"],
+            ids: &["slug", "id"],
+            names: NAME_KEYS,
+            string_rows: false,
+            reasoning: codex_reasoning,
+        };
+        parse_rows(payload, &CODEX_ROWS)
+    }
+
+    fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
+        OpenAiResponsesProtocol.reasoning_replay_policy()
+    }
+
+    fn reasoning_variant_labels(&self) -> &'static [&'static str] {
+        OpenAiResponsesProtocol.reasoning_variant_labels()
+    }
+
+    fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+        OpenAiResponsesProtocol.encode(req)
+    }
+
+    fn encode_for_model(
+        &self,
+        req: &CompletionRequest,
+        output_limit: Option<u32>,
+        images: bool,
+    ) -> Result<Value, ProviderError> {
+        OpenAiResponsesProtocol.encode_for_model(req, output_limit, images)
+    }
+
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder> {
+        OpenAiResponsesProtocol.decoder(session, message, reasoning)
+    }
+}
+
+/// Whether a Grok Build catalog row names an executable text model: the
+/// media-only rows cannot run on the completion protocol.
+fn is_grok_executable_model_id(id: &str) -> bool {
+    !id.contains("imagine") && !id.contains("image") && !id.contains("video")
+}
+
+/// Reasoning labels of one row: the first non-empty string under one of
+/// `keys` of each object in `levels`.
+fn level_labels(levels: Option<&Value>, keys: [&str; 2]) -> Vec<String> {
+    levels
+        .and_then(Value::as_array)
+        .map(|levels| {
+            levels
+                .iter()
+                .filter_map(|level| {
+                    let level = level.as_object()?;
+                    level
+                        .get(keys[0])
+                        .or_else(|| level.get(keys[1]))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .filter(|value| !value.is_empty())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn non_empty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|value| !value.is_empty())
+}
+
+fn codex_reasoning(object: &Map<String, Value>) -> (Option<String>, Vec<String>) {
+    (
+        non_empty_string(object.get("default_reasoning_level")),
+        level_labels(object.get("supported_reasoning_levels"), ["effort", "id"]),
+    )
+}
+
+fn grok_reasoning(object: &Map<String, Value>) -> (Option<String>, Vec<String>) {
+    (
+        non_empty_string(object.get("reasoning_effort")),
+        level_labels(object.get("reasoning_efforts"), ["value", "id"]),
+    )
+}
+
 impl Protocol for OpenAiResponsesProtocol {
+    fn kind(&self) -> &str {
+        "openai-response"
+    }
+
+    fn description(&self) -> &str {
+        "OpenAI Responses (<base>/responses)"
+    }
+
     fn endpoint_url(&self, base: &str, _model: &str) -> String {
         format!("{base}/responses")
     }
 
-    fn compact_endpoint(&self, base: &str) -> Option<String> {
-        Some(format!("{base}/responses/compact"))
+    fn compaction(&self) -> Option<&dyn CompactWire> {
+        Some(&ResponsesCompactWire)
     }
 
+    fn min_output_tokens(&self) -> u32 {
+        RESPONSES_MIN_OUTPUT_TOKENS
+    }
+
+    fn models_url(&self, base: &str) -> Result<String, CatalogFailure> {
+        models_resource_url(base, Some("/responses")).map(String::from)
+    }
     fn reasoning_replay_policy(&self) -> crate::ReasoningReplayPolicy {
         crate::ReasoningReplayPolicy::ProviderData
     }
@@ -177,65 +441,6 @@ pub(crate) fn encode_input_items_for_model(
         }
     }
     Ok(input)
-}
-
-/// Format a system message body that carries a compact window for re-injection.
-#[must_use]
-pub fn format_responses_compact_system(items: &[Value]) -> String {
-    format!(
-        "{COMPACT_CONTEXT_MARKER}\n{RESPONSES_COMPACT_ITEMS_MARKER}\n{}",
-        Value::Array(items.to_vec())
-    )
-}
-
-/// Extract the compact-item array and append any carried todo list as a
-/// system item.
-pub fn parse_responses_compact_items(content: &str) -> Result<Option<Vec<Value>>, ProviderError> {
-    let Some(rest) = content
-        .strip_prefix(COMPACT_CONTEXT_MARKER)
-        .map(str::trim_start)
-    else {
-        return Ok(None);
-    };
-    let Some(json_text) = rest
-        .strip_prefix(RESPONSES_COMPACT_ITEMS_MARKER)
-        .map(str::trim_start)
-    else {
-        // Local-summarizer compact (text summary only) — not a Responses window.
-        return Ok(None);
-    };
-    // Native windows store compact JSON on one line. A fold can append
-    // the todo list verbatim after that array.
-    let (json_text, todos) = match json_text.split_once("\n\n") {
-        Some((json, todos)) if todos.starts_with(TODO_LIST_HEADER) => (json, Some(todos)),
-        _ => (json_text, None),
-    };
-    let value: Value = serde_json::from_str(json_text).map_err(|e| {
-        ProviderError::Decode(format!("invalid responses compact window payload: {e}"))
-    })?;
-    match value {
-        Value::Array(mut items) => {
-            if let Some(todos) = todos {
-                items.push(json!({"role": "system", "content": todos}));
-            }
-            Ok(Some(items))
-        }
-        other => Err(ProviderError::Decode(format!(
-            "responses compact window must be a JSON array, got {}",
-            other_kind(&other)
-        ))),
-    }
-}
-
-fn other_kind(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "bool",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
-    }
 }
 
 fn emit_assistant(
@@ -363,6 +568,7 @@ fn user_content(parts: &[Part]) -> Result<Option<Value>, ProviderError> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::compact::format_responses_compact_system;
     use hya_proto::{MessageId, PartId};
 
     #[test]

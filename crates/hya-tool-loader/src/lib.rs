@@ -230,6 +230,17 @@ pub fn load_native_bundles(
         }
         per_bundle.push(((*identity).to_string(), regs));
     }
+    for (identity, regs) in &per_bundle {
+        if regs.providers.is_empty() {
+            continue;
+        }
+        let catalog =
+            first_party_bundle(identity).map_err(|error| format!("{identity}: {error}"))?;
+        let [bundle] = catalog.bundles() else {
+            return Err(format!("{identity}: expected a single bundle"));
+        };
+        v2_tools::check_declared_providers(bundle, regs)?;
+    }
     Ok((registry, per_bundle))
 }
 

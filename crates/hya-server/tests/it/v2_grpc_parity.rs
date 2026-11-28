@@ -504,13 +504,11 @@ async fn every_list_rpc_has_http_grpc_page_parity() {
     use pb::bundle_api_client::BundleApiClient;
     use pb::catalog_client::CatalogClient;
     use pb::events_client::EventsClient;
-    use pb::files_client::FilesClient;
     use pb::interactions_client::InteractionsClient;
     use pb::messages_client::MessagesClient;
     use pb::project_client::ProjectClient;
     use pb::pty_client::PtyClient;
     use pb::session_client::SessionClient;
-    use pb::worktrees_client::WorktreesClient;
 
     let state = parity_state()
         .await
@@ -634,13 +632,6 @@ async fn every_list_rpc_has_http_grpc_page_parity() {
         dp.clone()
     );
     check!(
-        FilesClient::list_directory,
-        ListDirectoryRequest,
-        "Files.ListDirectory",
-        "/v2/fs/list",
-        d.clone()
-    );
-    check!(
         InteractionsClient::list_interactions,
         ListInteractionsRequest,
         "Interactions.ListInteractions",
@@ -737,13 +728,6 @@ async fn every_list_rpc_has_http_grpc_page_parity() {
         "Catalog.ListTuiExtensions",
         "/v2/tui-extensions",
         d.clone()
-    );
-    check!(
-        WorktreesClient::list_worktrees,
-        ListWorktreesRequest,
-        "Worktrees.ListWorktrees",
-        "/v2/worktrees",
-        d
     );
 
     let catalog: Vec<Value> = serde_json::from_str(include_str!(

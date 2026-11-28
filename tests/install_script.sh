@@ -75,7 +75,7 @@ dry_run=$(bash ./install.sh --dry-run --prefix /tmp/hya-install-test --profile d
 contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin /tmp/hya-install-test/bundles /tmp/hya-install-test/lib/hya"
 [[ "$dry_run" == *"Bun preflight: bun"*"cargo build --locked -p hya-backend -p hya-migration --bins"* ]] || fail "Bun preflight must run before cargo build"
 contains "$dry_run" "cargo build --locked -p hya-backend -p hya-migration --bins"
-contains "$dry_run" "cargo build --locked -p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle --lib"
+contains "$dry_run" "cargo build --locked -p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle -p hya-workspace-files --lib"
 contains "$dry_run" "stage-first-party-bundles --library-dir"
 contains "$dry_run" "stage-bun-programs --package-root"
 not_contains "$dry_run" "--profile debug"

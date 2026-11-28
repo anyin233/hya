@@ -361,6 +361,8 @@ pub enum PreparedNativeCapability {
     Schemas,
     /// Registers native HTTP/gRPC bundle API endpoints via ABI v2 (`NativeBundleApiHandler`).
     Apis,
+    /// Registers model provider kinds via ABI v2 (`ProviderKindEntry`).
+    Providers,
 }
 
 impl PreparedNativeCapability {
@@ -375,6 +377,7 @@ impl PreparedNativeCapability {
             Self::Drivers => "drivers",
             Self::Schemas => "schemas",
             Self::Apis => "apis",
+            Self::Providers => "providers",
         }
     }
 }

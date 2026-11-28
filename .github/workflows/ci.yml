@@ -132,7 +132,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked --no-run --workspace
-          for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle hya_cli_driver_example; do
+          for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle hya_workspace_files hya_cli_driver_example; do
             pkg="${stem//_/-}"
             if [[ -f "target/debug/deps/lib${stem}.so" ]]; then
               lib="target/debug/deps/lib${stem}.so"
@@ -175,7 +175,7 @@ jobs:
           rm -rf "$stage"
           mkdir -p "$stage/deps"
           cp target/debug/hya target/debug/hya-migration target/debug/xtask "$stage/"
-          for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle; do
+          for stem in hya_hashline hya_coding_extras hya_multi_agent hya_agent_channels hya_network hya_compaction hya_plan hya_goal hya_loop hya_workflow_bundle hya_workspace_files; do
             pkg="${stem//_/-}"
             if [[ -f "target/debug/deps/lib${stem}.so" ]]; then
               cp "target/debug/deps/lib${stem}.so" "$stage/deps/"

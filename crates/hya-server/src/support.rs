@@ -17,5 +17,3 @@ pub(crate) mod reference_cache;
 pub(crate) mod reference_entries;
 pub(crate) mod reference_repository;
 pub(crate) mod skill_catalog;
-pub(crate) mod worktree_git;
-pub(crate) mod worktree_git_info;

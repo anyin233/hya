@@ -14,7 +14,7 @@ use super::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use hya_api::v2 as pb;
 use hya_proto::{FinishReason, ModelRef};
-use hya_provider::{ProviderError, ProviderKind, valid_provider_id};
+use hya_provider::{ProviderError, valid_provider_id};
 
 use crate::ServerState;
 use crate::provider_control::{
@@ -186,17 +186,6 @@ pub(crate) async fn remove_provider_model(
     Ok(Json(update_response(&st, &provider_id, &change).await))
 }
 
-/// Max output tokens for a probe: 1, except Responses-protocol routes whose
-/// upstream (OpenAI) rejects `max_output_tokens` below 16.
-fn probe_output_tokens(kind: Option<ProviderKind>) -> u32 {
-    match kind {
-        Some(
-            ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex | ProviderKind::GrokBuild,
-        ) => 16,
-        _ => 1,
-    }
-}
-
 fn finish_label(finish: FinishReason) -> &'static str {
     match finish {
         FinishReason::Stop => "stop",
@@ -244,18 +233,16 @@ pub(crate) async fn test_provider_model(
             format!("model not found: {provider_id}/{model_id}"),
         ));
     }
-    let kind = snapshot
+    // The smallest output the kind's upstream accepts (16 on Responses routes).
+    let output_tokens = snapshot
         .providers()
         .iter()
         .find(|state| state.provider_id == provider_id)
-        .map(|state| state.kind);
+        .map_or(1, |state| state.min_output_tokens);
     let model = ModelRef::new(format!("{provider_id}/{model_id}"));
     let started = Instant::now();
-    let outcome = tokio::time::timeout(
-        PROBE_TIMEOUT,
-        st.engine.probe_model(&model, probe_output_tokens(kind)),
-    )
-    .await;
+    let outcome =
+        tokio::time::timeout(PROBE_TIMEOUT, st.engine.probe_model(&model, output_tokens)).await;
     let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
     let response = match outcome {
         Ok(Ok(reply)) => pb::TestProviderModelResponse {

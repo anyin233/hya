@@ -78,10 +78,6 @@ impl Provider for CountingDevProvider {
         self.inner.capabilities(model)
     }
 
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        self.inner.configured_identity_v1()
-    }
-
     async fn stream(
         &self,
         request: CompletionRequest,
@@ -108,9 +104,6 @@ impl Provider for SessionRecordingProvider {
     }
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
         DevProvider::new().capabilities(model)
-    }
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        DevProvider::new().configured_identity_v1()
     }
     async fn stream(
         &self,
@@ -1348,7 +1341,9 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     let config_path = dir.join("hya/config.yaml");
 
     // 1. Missing config -> offline fallback + offline notice data.
-    let missing = resolve_runtime(None).await;
+    let missing = resolve_runtime(None, RuntimeFlags::default())
+        .await
+        .unwrap();
     assert_eq!(missing.model, "hya/offline");
     let notice = missing.offline_notice.expect("offline notice");
     assert!(notice.config_path.ends_with("hya/config.yaml"));
@@ -1361,11 +1356,14 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         "schema_version: 2\nreasoning: high\npermission:\n  model: allow\n",
     )
     .unwrap();
-    let rt = resolve_runtime(None).await;
+    let rt = resolve_runtime(None, RuntimeFlags::default())
+        .await
+        .unwrap();
     assert_eq!(rt.permission.model(), PermissionModel::Allow);
     assert_eq!(
-        resolve_runtime(None)
+        resolve_runtime(None, RuntimeFlags::default())
             .await
+            .unwrap()
             .with_yolo(true)
             .permission
             .model(),
@@ -1400,7 +1398,11 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     )
     .unwrap();
     assert_eq!(
-        resolve_runtime(None).await.permission.model(),
+        resolve_runtime(None, RuntimeFlags::default())
+            .await
+            .unwrap()
+            .permission
+            .model(),
         PermissionModel::Strict
     );
 
@@ -1418,7 +1420,9 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         "webfetch:\n  enabled: false\nwebsearch:\n  provider: parallel\n  endpoint: https://search.example.test/mcp\n  key: secret\n  enabled: false\n",
     )
     .unwrap();
-    let ws_rt = resolve_runtime_strict(None).await.unwrap();
+    let ws_rt = resolve_runtime(None, RuntimeFlags::default())
+        .await
+        .unwrap();
     let ws_agent = agent_with_model(&ws_rt.model, None);
     let mut ws_built = build_session_engine(
         SessionStore::connect_memory().await.unwrap(),
@@ -1462,7 +1466,9 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
         "webfetch:\n  enabled: true\nwebsearch:\n  enabled: true\n",
     )
     .unwrap();
-    let airgap_rt = resolve_runtime_strict(None).await.unwrap();
+    let airgap_rt = resolve_runtime(None, RuntimeFlags::default())
+        .await
+        .unwrap();
     let airgap_agent = agent_with_model(&airgap_rt.model, None);
     let mut airgap_built = build_session_engine(
         SessionStore::connect_memory().await.unwrap(),
@@ -1490,10 +1496,12 @@ async fn resolve_runtime_config_permission_and_tool_exposure() {
     // 4. Selected model reasoning default stays in catalog, not baked into root Agent.
     std::fs::write(
         &config_path,
-        "schema_version: 2\ndefault_model: gateway/gpt-5.6-sol\nproviders:\n  gateway:\n    kind: openai-response\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          default: medium\n          variants: [low, medium]\n",
+        "schema_version: 2\ndefault_model: gateway/gpt-5.6-sol\nproviders:\n  gateway:\n    kind: openai\n    base_url: https://example.test/v1\n    api_key: test\n    models:\n      - id: gpt-5.6-sol\n        reasoning:\n          default: medium\n          variants: [low, medium]\n",
     )
     .unwrap();
-    let reasoning_rt = resolve_runtime(None).await;
+    let reasoning_rt = resolve_runtime(None, RuntimeFlags::default())
+        .await
+        .unwrap();
     assert_eq!(
         reasoning_rt.router.catalog()[0].reasoning_default,
         Some(ReasoningEffort::Medium)
@@ -1543,19 +1551,75 @@ fn agent_spec_catalog_and_pure_runtime_invariants() {
             std::fs::canonicalize(&workdir).unwrap()
         );
     }
+}
 
-    let mut runtime = offline_runtime(None, false);
-    runtime.mcp.insert(
-        "external".to_string(),
-        McpServerConfig {
-            command: vec!["echo".to_string()],
-            ..Default::default()
-        },
+#[tokio::test]
+async fn pure_and_bare_flags_shape_the_resolved_runtime() {
+    let home = tempdir();
+    let _env = EnvGuard::with_home(&home, &home);
+    std::fs::create_dir_all(home.join("hya")).unwrap();
+    std::fs::write(
+        home.join("hya/config.yaml"),
+        "schema_version: 2\ndefault_agent: hya-main\nmcp:\n  external: { command: [echo] }\nproviders:\n  claude:\n    kind: anthropic\n    base_url: https://anthropic.example.test/v1\n    api_key: test\n    models: [sonnet]\n  local:\n    kind: openai\n    base_url: https://local.example.test/v1\n    api_key: test\n    models: [qwen]\n",
+    )
+    .unwrap();
+
+    let full = resolve_runtime(None, RuntimeFlags::default())
+        .await
+        .unwrap();
+    assert!(!full.pure && full.mcp.contains_key("external"));
+    assert!(full.kinds.protocol("anthropic").is_some());
+    assert!(
+        full.router
+            .resolve(&ModelRef::new("claude/sonnet"))
+            .is_some()
     );
-    let pure = runtime.with_pure(true);
-    assert!(pure.pure);
-    assert!(pure.mcp.is_empty());
-    assert!(pure.plugins.is_empty());
+
+    let pure = resolve_runtime(
+        None,
+        RuntimeFlags {
+            bare: false,
+            pure: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(pure.pure && pure.mcp.is_empty() && pure.plugins.is_empty());
+
+    // Bare registers only the core kinds before the providers resolve: the
+    // anthropic provider is unsupported, the openai one still routes.
+    let bare = resolve_runtime(
+        None,
+        RuntimeFlags {
+            bare: true,
+            pure: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(bare.kinds.protocol("anthropic").is_none());
+    assert_eq!(bare.default_agent, None);
+    assert_eq!(
+        bare.settings.builtin_bundles(),
+        &hya_bundle::BuiltinBundleSelection::bare()
+    );
+    assert!(
+        bare.router
+            .resolve(&ModelRef::new("claude/sonnet"))
+            .is_none()
+    );
+    assert!(bare.router.resolve(&ModelRef::new("local/qwen")).is_some());
+    let claude = bare
+        .catalog
+        .providers()
+        .iter()
+        .find(|state| state.provider_id == "claude")
+        .unwrap();
+    assert_eq!(
+        claude.result,
+        hya_provider::ProviderCatalogResult::Unsupported
+    );
+    assert_eq!(claude.kind, "anthropic");
 }
 
 #[tokio::test]
@@ -3811,7 +3875,15 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
         settings
     };
 
-    let rt = resolve_runtime(None).await.with_bare(true);
+    let rt = resolve_runtime(
+        None,
+        RuntimeFlags {
+            bare: true,
+            pure: false,
+        },
+    )
+    .await
+    .unwrap();
     let resolved_agent = agent_base_for_runtime(&rt, None).unwrap();
     assert_eq!(resolved_agent.name.as_str(), hya_engine::BARE_AGENT_ID);
     assert!(!resolved_agent.system_prompt.is_empty());

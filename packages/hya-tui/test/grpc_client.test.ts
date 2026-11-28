@@ -9,16 +9,39 @@ import catalog from "../src/operations.json"
 import type { MessagePart } from "../src/client"
 import { TranscriptOverlay } from "../src/state/overlay"
 
-test("maps a frontend request to the v1 gRPC operation and protobuf fields", () => {
+test("maps a frontend request to the v2 gRPC operation and protobuf fields", () => {
   expect(resolveGrpcOperation("GET", "/v2/sessions/hysec_1/events?sinceSeq=12", undefined, "/work")).toEqual({
     service: "Events",
     method: "ListEvents",
     request: { directory: "/work", session: "hysec_1", sinceSeq: "12" },
     streaming: false,
   })
-  expect(resolveGrpcOperation("GET", "/v2/bundles/example/api/sub/route", undefined, "/work")).toMatchObject({
-    service: "BundleApi", method: "InvokeGlobalBundleApi", request: { bundle: "example", path: "sub/route" },
+  expect(resolveGrpcOperation("DELETE", "/v2/bundles/hya%2Fworkspace-files/api/worktrees/%2Ftmp%2Fw?directory=%2Fwork", undefined, "/unused")).toEqual({
+    service: "BundleApi", method: "InvokeGlobalBundleApi", streaming: false,
+    request: { bundle: "hya/workspace-files", method: "DELETE", path: "/worktrees/%2Ftmp%2Fw", query: { directory: "/work" } },
   })
+})
+
+test("reads workspace files through the gRPC BundleApi envelope", async () => {
+  const calls: unknown[] = []
+  const client = new GrpcHyaClient("backend:8080", "/work", {
+    unary: async (service, method, request) => {
+      calls.push([service, method, request])
+      if (calls.length > 1) throw { code: grpc.status.NOT_FOUND, details: "no such bundle API" }
+      return { status: 200, body: { structValue: { fields: {
+        paths: { listValue: { values: [{ stringValue: "src/main.ts" }] } },
+      } } } }
+    },
+    stream: async () => {},
+    close: () => {},
+  })
+  expect(await client.findFiles("**/*.ts", 5)).toEqual(["src/main.ts"])
+  expect(await client.findFiles("**/*.ts", 5)).toEqual([])
+  expect(await client.readFile("src/main.ts")).toBeUndefined()
+  expect(calls).toEqual(Array.from({ length: 2 }, () => ["BundleApi", "InvokeGlobalBundleApi", {
+    bundle: "hya/workspace-files", method: "GET", path: "/fs/find",
+    query: { directory: "/work", pattern: "**/*.ts", limit: "5" },
+  }]))
 })
 
 test("selects the gRPC listener without treating it as an HTTP URL", () => {

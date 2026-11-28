@@ -12,10 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context as _;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use hya_app::provider_control::{SavedProviderKey, persist_provider_upsert};
 use hya_app::{auth, config, model_cache};
-use hya_provider::ModelCatalogSource;
+use hya_provider::{ModelCatalogSource, ProviderKinds};
 
 use crate::prompt;
 
@@ -53,70 +53,16 @@ pub(crate) struct AddArgs {
     /// API base URL, e.g. `https://api.openai.com/v1` (models are listed at `<base>/models`).
     #[arg(long, value_name = "URL")]
     base_url: Option<String>,
-    /// Wire protocol the provider speaks.
-    #[arg(long, value_enum)]
-    protocol: Option<Protocol>,
+    /// Wire protocol the provider speaks: a registered `kind` label
+    /// (`openai`, `anthropic`, `google`, `openai-response`, …).
+    #[arg(long, value_name = "KIND")]
+    protocol: Option<String>,
     /// API key (visible in process listings; omit it to be asked with hidden input).
     #[arg(long, value_name = "KEY")]
     api_key: Option<String>,
     /// Replace an existing provider of the same id without asking.
     #[arg(short = 'y', long)]
     yes: bool,
-}
-
-/// Protocols a provider can be added with, and their `config.yaml` kinds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum Protocol {
-    /// OpenAI Chat Completions (`kind: openai`).
-    OpenaiChat,
-    /// OpenAI Responses (`kind: openai-response`).
-    OpenaiResponses,
-    /// Anthropic Messages (`kind: anthropic`).
-    #[value(alias = "anthropic-message")]
-    AnthropicMessages,
-}
-
-impl Protocol {
-    const ALL: [Self; 3] = [
-        Self::OpenaiChat,
-        Self::OpenaiResponses,
-        Self::AnthropicMessages,
-    ];
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::OpenaiChat => "openai-chat",
-            Self::OpenaiResponses => "openai-responses",
-            Self::AnthropicMessages => "anthropic-messages",
-        }
-    }
-
-    fn describe(self) -> &'static str {
-        match self {
-            Self::OpenaiChat => "OpenAI Chat Completions  (<base>/chat/completions)",
-            Self::OpenaiResponses => "OpenAI Responses         (<base>/responses)",
-            Self::AnthropicMessages => "Anthropic Messages       (<base>/messages)",
-        }
-    }
-
-    fn kind(self) -> &'static str {
-        match self {
-            Self::OpenaiChat => "openai",
-            Self::OpenaiResponses => "openai-response",
-            Self::AnthropicMessages => "anthropic",
-        }
-    }
-
-    /// The protocol name for a `config.yaml` kind; other kinds (Codex, Grok
-    /// Build, Google) are shown as their kind.
-    fn label_for_kind(kind: &str) -> &str {
-        match kind {
-            "openai" | "openai-compatible" | "openai-completion" => Self::OpenaiChat.name(),
-            "openai-response" => Self::OpenaiResponses.name(),
-            "anthropic" => Self::AnthropicMessages.name(),
-            other => other,
-        }
-    }
 }
 
 /// Run one `hya provider` subcommand; `db` names the backend to keep in sync.
@@ -193,36 +139,46 @@ fn ask_base_url() -> anyhow::Result<String> {
     }
 }
 
-fn ask_protocol(base_url: &str) -> anyhow::Result<Protocol> {
-    let guess = if base_url.contains("anthropic") {
-        Protocol::AnthropicMessages
-    } else {
-        Protocol::OpenaiChat
-    };
+/// The registered kinds (aliases left out), sorted by label.
+fn kind_menu(kinds: &ProviderKinds) -> Vec<(&str, &str)> {
+    kinds
+        .labels()
+        .filter_map(|label| {
+            let protocol = kinds.protocol(label)?;
+            (protocol.kind() == label).then(|| (label, protocol.description()))
+        })
+        .collect()
+}
+
+/// Ask for a kind from `kinds`, suggesting the first one whose label the
+/// base URL contains (`openai` otherwise).
+fn ask_protocol(base_url: &str, kinds: &ProviderKinds) -> anyhow::Result<String> {
+    let menu = kind_menu(kinds);
+    let guess = menu
+        .iter()
+        .position(|(label, _)| base_url.contains(label))
+        .or_else(|| menu.iter().position(|(label, _)| *label == "openai"))
+        .unwrap_or(0);
+    let width = menu.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
     eprintln!("Protocol:");
-    for (index, protocol) in Protocol::ALL.iter().enumerate() {
-        eprintln!(
-            "  {}) {:<19} {}",
-            index + 1,
-            protocol.name(),
-            protocol.describe()
-        );
+    for (index, (label, description)) in menu.iter().enumerate() {
+        eprintln!("  {}) {label:<width$}  {description}", index + 1);
     }
-    let default = Protocol::ALL.iter().position(|p| *p == guess).unwrap_or(0) + 1;
     loop {
-        let answer = required(&format!("Choose [{default}]: "), "--protocol", false)?;
-        if answer.is_empty() {
-            return Ok(guess);
-        }
-        let chosen = answer
-            .parse::<usize>()
-            .ok()
-            .and_then(|number| number.checked_sub(1))
-            .and_then(|index| Protocol::ALL.get(index).copied())
-            .or_else(|| Protocol::from_str(&answer, true).ok());
+        let answer = required(&format!("Choose [{}]: ", guess + 1), "--protocol", false)?;
+        let chosen = if answer.is_empty() {
+            menu.get(guess)
+        } else {
+            answer
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .and_then(|index| menu.get(index))
+                .or_else(|| menu.iter().find(|(label, _)| *label == answer))
+        };
         match chosen {
-            Some(protocol) => return Ok(protocol),
-            None => eprintln!("choose 1-{} or a protocol name", Protocol::ALL.len()),
+            Some((label, _)) => return Ok((*label).to_string()),
+            None => eprintln!("choose 1-{} or a kind label", menu.len()),
         }
     }
 }
@@ -285,8 +241,7 @@ fn confirm_replace(id: &str, yes: bool) -> anyhow::Result<()> {
     if yes
         || prompt::confirm(&format!(
             "Provider `{id}` exists ({}, {}). Replace it?",
-            Protocol::label_for_kind(&existing.kind),
-            existing.base_url
+            existing.kind, existing.base_url
         ))?
     {
         return Ok(());
@@ -311,9 +266,10 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
         }
         None => ask_base_url()?,
     };
+    let kinds = hya_app::provider_kinds::configured()?;
     let protocol = match args.protocol {
         Some(protocol) => protocol,
-        None => ask_protocol(&base_url)?,
+        None => ask_protocol(&base_url, &kinds)?,
     };
     let api_key = match args.api_key {
         Some(key) => key,
@@ -328,7 +284,7 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
     let probe_id = named.clone().unwrap_or_else(|| suggested_id(&base_url));
     eprintln!("Fetching models from {base_url}/models …");
     let discovery =
-        config::probe_provider(&probe_id, protocol.kind(), &base_url, api_key.as_deref())
+        config::probe_provider(&probe_id, &protocol, &base_url, api_key.as_deref(), &kinds)
             .await
             .map_err(|error| anyhow::anyhow!("{error}"))?;
     let ids = discovery.model_ids();
@@ -370,18 +326,18 @@ async fn add(args: AddArgs, db: &str) -> anyhow::Result<()> {
     persist_provider_upsert(
         &config_path,
         &id,
-        protocol.kind(),
+        &protocol,
         &base_url,
         api_key
             .as_deref()
             .map_or(SavedProviderKey::Remove, SavedProviderKey::Set),
         Some(&discovery),
+        &kinds,
     )
     .await?;
 
     println!(
-        "Saved provider `{id}` ({}, {base_url}) to {}",
-        protocol.name(),
+        "Saved provider `{id}` ({protocol}, {base_url}) to {}",
         config_path.display()
     );
     if api_key.is_some()
@@ -424,15 +380,18 @@ async fn list(refresh: bool, db: &str) -> anyhow::Result<()> {
     }
     let mut models: BTreeMap<String, Vec<(String, ModelCatalogSource)>> = BTreeMap::new();
     if !declared.is_empty() {
-        // The backend writes the model cache that `load` then reads.
+        // The backend writes the model cache that `resolve` then reads.
         let refreshed = refresh && refresh_through_backend(db, None).await?.is_some();
-        let resolved = config::load().await?.context("config.yaml is missing")?;
+        let parsed = config::parse()?.context("config.yaml is missing")?;
+        let kinds = hya_app::provider_kinds::load(parsed.builtin_bundles())?;
+        let resolved = config::resolve(parsed, &kinds).await?;
         let catalog = if refresh && !refreshed {
             config::rebuild_providers(
                 None,
                 config::DiscoverMode::Always,
                 resolved.catalog.as_ref(),
                 &resolved.router,
+                &kinds,
             )
             .await?
             .catalog
@@ -458,9 +417,7 @@ async fn list(refresh: bool, db: &str) -> anyhow::Result<()> {
         };
         println!(
             "{}  {}  {}  {key}",
-            provider.id,
-            Protocol::label_for_kind(&provider.kind),
-            provider.base_url
+            provider.id, provider.kind, provider.base_url
         );
         match models.get_mut(&provider.id) {
             Some(rows) => {
@@ -511,8 +468,7 @@ async fn remove(id: &str, yes: bool, db: &str) -> anyhow::Result<()> {
     if !yes
         && !prompt::confirm(&format!(
             "Remove provider `{id}` ({}, {}) with its saved key and cached models?",
-            Protocol::label_for_kind(&provider.kind),
-            provider.base_url
+            provider.kind, provider.base_url
         ))?
     {
         anyhow::bail!("provider `{id}` left unchanged");
@@ -630,7 +586,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn suggested_id_check_id_and_protocol_labels() {
+    fn suggested_id_check_id_and_source_notes() {
         for (url, expected) in [
             ("https://api.openai.com/v1", "openai"),
             ("https://gateway.example.org/v1", "example"),
@@ -644,16 +600,6 @@ mod tests {
         assert!(check_id("acme-1_2").is_ok());
         for bad in ["", "hya", "acme.3", "bad/id", "has space"] {
             assert!(check_id(bad).is_err(), "{bad:?}");
-        }
-        for (kind, label) in [
-            ("openai", "openai-chat"),
-            ("openai-compatible", "openai-chat"),
-            ("openai-completion", "openai-chat"),
-            ("openai-response", "openai-responses"),
-            ("anthropic", "anthropic-messages"),
-            ("google", "google"),
-        ] {
-            assert_eq!(Protocol::label_for_kind(kind), label, "{kind}");
         }
         assert_eq!(
             source_note(ModelCatalogSource::Overridden),

@@ -353,6 +353,42 @@ tonic = "0.13"
     });
   });
 
+  test("accepts the providers native capability and rejects unknown capabilities", () => {
+    const manifest = (capabilities) => `kind: Bundle
+schema_version: 2
+identity:
+  id: acme/provider-demo
+  version: 1.0.0
+  publisher: acme
+runtime:
+  kind: native
+  abi_version: 2
+  crate_dir: native
+  capabilities: [${capabilities}]
+`;
+    const native = {
+      "native/Cargo.toml": `[package]
+name = "acme-provider-demo"
+version = "0.0.0"
+[dependencies]
+hya-runtime-abi = { workspace = true }
+`,
+      "native/src/lib.rs": `hya_runtime_abi::export_native_bundle_v2!(|_out| {});\n`,
+    };
+    withTempDir((dir) => {
+      writeFiles(dir, { "bundle.yaml": manifest("providers"), ...native });
+      const res = validateBundleStatic(dir);
+      expect(res.errors).toEqual([]);
+      expect(res.ok).toBe(true);
+    });
+    withTempDir((dir) => {
+      writeFiles(dir, { "bundle.yaml": manifest("providers, models"), ...native });
+      const res = validateBundleStatic(dir);
+      expect(res.ok).toBe(false);
+      expect(res.errors.some((e) => e.includes("schemas, apis, or providers"))).toBe(true);
+    });
+  });
+
   test("rejects MCP stdio+http conflict and hardcoded Authorization secret", () => {
     withTempDir((dir) => {
       writeFiles(dir, {

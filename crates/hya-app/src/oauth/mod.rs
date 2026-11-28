@@ -1,6 +1,7 @@
 //! Interactive OAuth login and token refresh for subscription providers.
 //!
-//! Supported types: `openai-codex` (ChatGPT/Codex) and `grok-build` (xAI CLI).
+//! Each OAuth type is a [`hya_provider::ProviderAuthFlow`] registered with its
+//! provider kind; this module runs a flow's login and stores the credential.
 
 mod callback;
 mod ensure;
@@ -12,88 +13,33 @@ mod pkce;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use thiserror::Error;
+use hya_provider::{OAuthLoginRequest, ProviderKinds};
 
-use crate::auth::{AuthCredential, OAuthType};
+use crate::auth::AuthCredential;
 use crate::config;
 
 pub use ensure::{
     ensure_access_token, ensure_access_token_in, force_refresh_access_token,
     force_refresh_access_token_in, oauth_status_in,
 };
-pub use grok_build::login_grok_build;
+pub(crate) use grok_build::GrokAuthFlow;
 pub use models_catalog::fetch_oauth_models;
-pub use openai_codex::{login_openai_codex, login_openai_codex_device};
+pub(crate) use openai_codex::CodexAuthFlow;
 
-/// Errors from OAuth login, refresh, or credential loading.
-#[derive(Debug, Error)]
-pub enum OAuthError {
-    /// Stored credentials are missing, expired, or revoked; user must re-login.
-    #[error(
-        "OAuth credentials for provider '{provider}' require re-login ({reason}). Run: hya oauth login --provider {provider} --type {oauth_type}"
-    )]
-    NeedsLogin {
-        /// Config/auth provider id.
-        provider: String,
-        /// Canonical OAuth type string for the re-login command line.
-        oauth_type: String,
-        /// Short reason shown in the error message.
-        reason: String,
-    },
-    /// Token is valid but the subscription cannot call the API.
-    #[error(
-        "provider '{provider}' OAuth grant is valid but not entitled for API access ({detail}). Re-login will not help; use an API key path or upgrade the subscription."
-    )]
-    Entitlement {
-        /// Provider id that failed entitlement checks.
-        provider: String,
-        /// Upstream detail describing the entitlement failure.
-        detail: String,
-    },
-    /// HTTP/transport failure talking to the OAuth or catalog endpoint.
-    #[error("OAuth network error: {0}")]
-    Network(String),
-    /// Unexpected OAuth protocol response or missing fields.
-    #[error("OAuth protocol error: {0}")]
-    Protocol(String),
-    /// Interactive flow or network wait exceeded the configured timeout.
-    #[error("OAuth timed out: {0}")]
-    Timeout(String),
-    /// Local filesystem failure while reading/writing auth or config.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    /// Config path or YAML update failure (non-network).
-    #[error("config error: {0}")]
-    Config(String),
-}
-
-impl OAuthError {
-    /// Build a re-login error for a known OAuth type.
-    pub fn needs_login(
-        provider: impl Into<String>,
-        oauth_type: OAuthType,
-        reason: impl Into<String>,
-    ) -> Self {
-        Self::NeedsLogin {
-            provider: provider.into(),
-            oauth_type: oauth_type.as_str().to_string(),
-            reason: reason.into(),
-        }
-    }
-}
+pub use hya_provider::OAuthError;
 
 /// Options for `oauth login`.
 #[derive(Debug, Clone)]
 pub struct OAuthLoginOptions {
     /// Provider id written under `providers.<id>` and `auth/<id>.yaml`.
     pub provider: String,
-    /// Which OAuth implementation to run.
-    pub oauth_type: OAuthType,
-    /// Use localhost PKCE callback for openai-codex instead of device-code.
+    /// OAuth type of the registered flow to run (`--type`).
+    pub oauth_type: String,
+    /// Use a localhost callback instead of the flow's default (`--loopback`).
     pub loopback: bool,
-    /// Do not attempt to open a system browser (print URL only).
-    /// Default for openai-codex device login is true (Codex-style no-browser).
-    pub no_browser: bool,
+    /// `--browser` (`Some(true)`) or `--no-browser` (`Some(false)`); `None`
+    /// keeps the flow's default.
+    pub browser: Option<bool>,
     /// Optional model id to register on the provider after login.
     pub model: Option<String>,
     /// Optional inference base URL override for the provider route.
@@ -102,24 +48,8 @@ pub struct OAuthLoginOptions {
     pub auth_dir: Option<PathBuf>,
     /// Override config path (tests).
     pub config_path: Option<PathBuf>,
-    /// Overall interactive flow deadline (default 600s).
+    /// Overall interactive flow deadline.
     pub timeout: Duration,
-}
-
-impl Default for OAuthLoginOptions {
-    fn default() -> Self {
-        Self {
-            provider: String::new(),
-            oauth_type: OAuthType::GrokBuild,
-            loopback: false,
-            no_browser: false,
-            model: None,
-            base_url: None,
-            auth_dir: None,
-            config_path: None,
-            timeout: Duration::from_secs(600),
-        }
-    }
 }
 
 /// Result of a successful OAuth login.
@@ -127,8 +57,10 @@ impl Default for OAuthLoginOptions {
 pub struct OAuthLoginResult {
     /// Provider id that was written.
     pub provider: String,
-    /// OAuth implementation that completed successfully.
-    pub oauth_type: OAuthType,
+    /// OAuth type of the flow that completed.
+    pub oauth_type: String,
+    /// Config `kind` written for the provider.
+    pub kind: String,
     /// Path of the saved auth credential file.
     pub auth_path: PathBuf,
     /// Path of the updated `config.yaml`.
@@ -143,8 +75,12 @@ pub struct OAuthLoginResult {
     pub models_from_catalog: bool,
 }
 
-/// Run the interactive OAuth login for the requested provider type (all Rust).
-pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuthError> {
+/// Run the interactive login of the flow `kinds` registers for
+/// `options.oauth_type`, save the credential, and declare the provider.
+pub async fn login(
+    options: OAuthLoginOptions,
+    kinds: &ProviderKinds,
+) -> Result<OAuthLoginResult, OAuthError> {
     let provider = options.provider.trim();
     if provider.is_empty() {
         return Err(OAuthError::Protocol(
@@ -152,22 +88,39 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
         ));
     }
     validate_provider_id(provider)?;
+    let flow = kinds.auth_flow(&options.oauth_type).ok_or_else(|| {
+        let supported = kinds
+            .labels()
+            .filter(|label| kinds.supports_oauth(label))
+            .collect::<Vec<_>>()
+            .join(", ");
+        OAuthError::Protocol(format!(
+            "unknown OAuth type `{}`; supported: {supported}",
+            options.oauth_type
+        ))
+    })?;
+    // `ProviderKinds` maps an OAuth type to its flow only; the flows
+    // registered today are named after the kind they log in to.
+    let protocol = kinds.protocol(flow.oauth_type()).cloned().ok_or_else(|| {
+        OAuthError::Config(format!(
+            "OAuth type `{}` has no provider kind of the same name",
+            flow.oauth_type()
+        ))
+    })?;
+    if options.loopback && !flow.supports_loopback() {
+        return Err(OAuthError::Protocol(format!(
+            "--loopback is not supported for --type {}",
+            flow.oauth_type()
+        )));
+    }
 
-    let credential = match options.oauth_type {
-        OAuthType::OpenaiCodex => {
-            // Codex CLI default: device-code, print URL/code, no local callback.
-            // Loopback PKCE is opt-in via `loopback`.
-            let use_device = !options.loopback;
-            if use_device {
-                // Device path defaults to no auto-open unless caller set no_browser=false
-                // and did not force loopback — open only when explicitly allowed.
-                login_openai_codex_device(options.timeout, !options.no_browser).await?
-            } else {
-                login_openai_codex(options.timeout, !options.no_browser).await?
-            }
-        }
-        OAuthType::GrokBuild => login_grok_build(options.timeout, !options.no_browser).await?,
-    };
+    let credential = flow
+        .login(OAuthLoginRequest {
+            loopback: options.loopback,
+            browser: options.browser,
+            timeout: options.timeout,
+        })
+        .await?;
 
     let auth_dir = options
         .auth_dir
@@ -183,11 +136,11 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
     let base_url = options
         .base_url
         .clone()
-        .unwrap_or_else(|| options.oauth_type.default_base_url().to_string());
+        .unwrap_or_else(|| flow.default_base_url().to_string());
     let preferred_model = options
         .model
         .clone()
-        .unwrap_or_else(|| options.oauth_type.default_model().to_string());
+        .unwrap_or_else(|| flow.default_model().to_string());
     let config_path = options
         .config_path
         .clone()
@@ -196,7 +149,7 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
     // A login-time fetch may improve the confirmation output, but it is never
     // persisted. An empty provider list remains eligible for startup discovery.
     let (model_ids, models_from_catalog) = match fetch_oauth_models(
-        options.oauth_type,
+        std::sync::Arc::clone(&protocol),
         &credential.access_token,
         credential.account_id.as_deref(),
         &base_url,
@@ -218,17 +171,14 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
     };
     let model = model_ids.first().cloned().unwrap_or(preferred_model);
 
-    config::upsert_oauth_provider(
-        &config_path,
-        provider,
-        options.oauth_type.provider_kind(),
-        &base_url,
-    )
-    .map_err(|e| OAuthError::Config(e.to_string()))?;
+    let kind = protocol.kind().to_string();
+    config::upsert_oauth_provider(&config_path, provider, &kind, &base_url)
+        .map_err(|e| OAuthError::Config(e.to_string()))?;
 
     Ok(OAuthLoginResult {
         provider: provider.to_string(),
-        oauth_type: options.oauth_type,
+        oauth_type: flow.oauth_type().to_string(),
+        kind,
         auth_path,
         config_path,
         base_url,

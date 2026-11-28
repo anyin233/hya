@@ -10,7 +10,7 @@ Use this page to navigate the repository and quickly find which crate, built-in 
 hya/
 ├── crates/                  # Rust workspace crates (backend, kernel, runtime-abi, engine, store, server, SDK, migration, relay, xtask, e2e)
 ├── bundles/
-│   ├── builtin/             # 14 trusted first-party bundles (10 native ABI v2, 3 static presets, 1 JS/TUI v2)
+│   ├── builtin/             # 15 trusted first-party bundles (11 native ABI v2, 3 static presets, 1 JS/TUI v2)
 │   ├── extra/               # 6 optional installable hya-extra/* bundles (zvec-grep, scout, jev-model-router, model-fallback, token-summary, orchestrator)
 │   └── examples/            # Full Argus multi-stage workflow bundle example
 ├── packages/
@@ -19,7 +19,7 @@ hya/
 │   ├── hya-tui-web/         # Real-PTY + xterm.js browser WebUI host & tui-exp / Playwright test suites
 │   └── hya-tui-sdk/         # Standalone @hya/tui-sdk v2 package & QuickJS WASM / JIT extension runner
 ├── proto/
-│   ├── hya/v2/              # Canonical hya.v2 Protobuf contract (17 services, 104 RPCs)
+│   ├── hya/v2/              # Canonical hya.v2 Protobuf contract (15 services, 95 RPCs)
 │   └── hya/relay/v1/        # Blind relay rendezvous Protobuf contract
 ├── plugins/                 # Standalone full-stack example plugins (e.g. disk-inspector)
 ├── public/                  # Static GitHub Pages root landing page (plain HTML/CSS/JS)
@@ -47,7 +47,7 @@ Lower-level crates never depend on `hya-backend` or frontend packages. `hya-prot
 | **`hya-tool-loader`** | Verifies lockstep ABI v2 digests and loads the 10 first-party native `cdylib` bundles (`load_v2`, `NativeBundleLoader`) into `NativeRegistrations` with Tokio runtime & deadline-cell bridging. |
 | **`hya-provider`** | Streams OpenAI Chat, OpenAI Responses, OpenAI Codex, Grok Build, Anthropic, Google Gemini, scripted `FakeProvider`, and offline `DevProvider` into canonical `Event`s. |
 | **`hya-store`** | SQLite WAL v2 persistence (`format_version = 2`): `schema_meta`, `event_log`, `projection_snapshot`, `project`/`project_root`, generic `bundle_state` (CAS KV), generic `bundle_claim` (fenced leases), `pending_resume`, `saved_permission`, `file_blob`, and `<db>.runtime-owner.lock`. Fails fast on unmigrated v1 databases. |
-| **`hya-bundle`** | `.hyabundle` `schema_version: 2` preparation, `overrides: hya/bare` resolution, `BuiltinBundleProfile`/`BuiltinBundleSelection`, digest/closure validation, `BundleCatalog`, and loader for the 14 trusted built-in bundles. |
+| **`hya-bundle`** | `.hyabundle` `schema_version: 2` preparation, `overrides: hya/bare` resolution, `BuiltinBundleProfile`/`BuiltinBundleSelection`, digest/closure validation, `BundleCatalog`, and loader for the 15 trusted built-in bundles. |
 | **`hya-workflow`** | Parses, validates, and compiles `*.hya.md` Stage DAGs into immutable `CompiledWorkflow` plans (executed at runtime by `bundles/builtin/workflow`). |
 | **`hya-child-io`** | Bounded NDJSON line framing and async I/O task tracking shared by MCP and plugin child processes. |
 | **`hya-mcp`** | MCP stdio, Streamable HTTP, and SSE client manager bridging `mcp__<server>__<tool>` into `hya-tool`. |
@@ -77,7 +77,7 @@ flowchart BT
     Sidecars["hya-child-io · hya-mcp · hya-plugin · hya-plugin-bun · hya-plugin-claude"]
     Kernel["hya-core (3-primitive kernel + 8 bare tools)"]
     Engine["hya-engine (SessionEngine + Extension Host)"]
-    Bundles["bundles/builtin/* (10 native ABI v2 cdylibs · 3 static · 1 TUI v2)"]
+    Bundles["bundles/builtin/* (11 native ABI v2 cdylibs · 3 static · 1 TUI v2)"]
     App["hya-app (Composition · HostRuntime · Code Mode)"]
     Surface["hya-server · hya-sdk · hya-migration · hya-relay · hya-updater"]
     CLI["hya-backend (bin/hya)"]

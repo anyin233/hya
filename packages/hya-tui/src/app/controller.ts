@@ -770,7 +770,7 @@ export function createController({ client, store, directory, remote: startedRemo
       case "project.set_roots": await client.updateProject(command.id, { roots: [...command.roots] }); await refreshProjects(); return undefined
       case "project.delete": await client.deleteProject(command.id); await refreshProjects(); return undefined
       case "fs.complete": {
-        // A root path being typed: the backend filesystem's first match (`/v2/fs/find`).
+        // A root path being typed: the workspace-files bundle's first match.
         const candidates = await client.findFiles(`${command.input.replace(/\/+$/, "")}*`, 1)
         return { candidates, ...(candidates[0] ? { completion: candidates[0] } : {}) }
       }
@@ -890,7 +890,7 @@ export function createController({ client, store, directory, remote: startedRemo
       roots: activeProject(store.state)?.roots ?? [],
       existsOnBackend: (path) => {
         const scope = backendScope(path)
-        return scope ? client.readFile(path, { directory: scope, maxBytes: 1 }).then(() => true, () => false) : Promise.resolve(false)
+        return scope ? client.readFile(path, { directory: scope, maxBytes: 1 }).then(Boolean, () => false) : Promise.resolve(false)
       },
       resizeImages: store.state.structure.composer.paste.image_resize,
       ssh: inSshSession(env),
@@ -910,7 +910,7 @@ export function createController({ client, store, directory, remote: startedRemo
     return chips.addImage(`clipboard-${hash}.${extension}`, prepared.image, prepared.error)
   }
   /** Remote-mode previews per server + scope + path: typing re-runs the preview, the file is fetched once (cleared on submit). */
-  const remotePreviews = new Map<string, Promise<FileRead>>()
+  const remotePreviews = new Map<string, Promise<FileRead | undefined>>()
   const remotePreviewLimit = 16
 
   /** Where the backend resolves `path` in remote mode: the active Project's root holding an absolute path, else the open session's workdir, else the client's scope; `undefined` before a Project is chosen. */
@@ -935,11 +935,12 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   /** One file on the backend (`ReadFile` under `backendScope`), at most the per-file cap + 1 byte. */
-  async function readBackendFile(path: string): Promise<FileRead> {
+  async function readBackendFile(path: string): Promise<FileRead | undefined> {
     const directory = backendScope(path)
     if (!directory) return { error: "choose a project first (in remote mode @path names a file on the backend)" }
     try {
       const result = await client.readFile(path, { directory, maxBytes: maxAttachmentBytes + 1 })
+      if (!result) return undefined
       return result.size > maxAttachmentBytes ? { size: result.size } : { size: result.size, data: result.data }
     } catch (error) {
       const text = String(error)
@@ -976,6 +977,7 @@ export function createController({ client, store, directory, remote: startedRemo
         const read = backend.remote && !localPastes.has(path)
           ? await (preview ? previewBackendFile(path) : readBackendFile(path))
           : await readLocalFile(path.startsWith("/") ? path : `${workdir}/${path}`)
+        if (!read) continue
         if ("error" in read) {
           previews.push({ path, name, error: read.error })
           continue
@@ -1004,7 +1006,7 @@ export function createController({ client, store, directory, remote: startedRemo
   }
 
   /** `readBackendFile` for the composer's preview: one fetch per server, scope, and path until the next submit. */
-  function previewBackendFile(path: string): Promise<FileRead> {
+  function previewBackendFile(path: string): Promise<FileRead | undefined> {
     const key = `${client.baseUrl}\n${backendScope(path) ?? ""}\n${path}`
     let read = remotePreviews.get(key)
     if (!read) {
@@ -1136,7 +1138,7 @@ export function createController({ client, store, directory, remote: startedRemo
       }
       const scope = backendScope(path)
       if (!scope) return false
-      return client.readFile(path, { directory: scope, maxBytes: 1 }).then(() => true, () => false)
+      return client.readFile(path, { directory: scope, maxBytes: 1 }).then(Boolean, () => false)
     }
     const workdir = (store.state.selected?.workdir || directory).replace(/\/+$/, "")
     const absolute = path.startsWith("/") ? path : `${workdir}/${path}`

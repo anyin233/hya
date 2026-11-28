@@ -3,14 +3,74 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::process::Command;
 
-pub(crate) use crate::support::worktree_git_info::Info;
+use hya_runtime_abi::{HostError, NativeBundleApiRequest};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct WriteRequest {
+    directory: String,
+    name: String,
+    // These fields were accepted by the original API; the path identifies
+    // the worktree, and create always branches from HEAD.
+    #[serde(rename = "branch")]
+    _branch: String,
+    #[serde(rename = "worktree")]
+    _worktree: String,
+}
+
+pub(super) async fn call(request: &NativeBundleApiRequest) -> Result<Value, HostError> {
+    let body = if request.body.is_null() {
+        WriteRequest::default()
+    } else {
+        serde_json::from_value(request.body.clone())
+            .map_err(|error| HostError::InvalidInput(error.to_string()))?
+    };
+    let directory = match request.api.as_str() {
+        "create-worktree" | "reset-worktree" => Some(body.directory.as_str()),
+        _ => request.query.get("directory").map(String::as_str),
+    };
+    let source = super::directory(directory)?;
+    let value = match request.api.as_str() {
+        "list-worktrees" => {
+            let worktrees = infos(source).await.map_err(HostError::Internal)?;
+            json!({ "worktrees": worktrees })
+        }
+        "create-worktree" => {
+            let name = (!body.name.is_empty()).then_some(body.name.as_str());
+            create(source, name).await.map_err(HostError::Internal)?
+        }
+        "delete-worktree" => {
+            remove(source, &request.path_params["worktree"])
+                .await
+                .map_err(HostError::Internal)?;
+            json!({})
+        }
+        "reset-worktree" => {
+            let id = &request.path_params["worktree"];
+            reset(source, id).await.map_err(HostError::Internal)?;
+            worktree(id, None)
+        }
+        _ => unreachable!("the BundleApi router selects a declared worktree endpoint"),
+    };
+    Ok(value)
+}
+
+fn worktree(path: &str, branch: Option<&str>) -> Value {
+    let mut value = json!({ "id": path, "path": path });
+    if let Some(branch) = branch {
+        value["branch"] = json!(branch);
+    }
+    value
+}
 
 struct Entry {
     path: String,
     branch: Option<String>,
 }
 
-pub(crate) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
+async fn infos(source: &Path) -> Result<Vec<Value>, String> {
     if !is_git_source(source).await {
         return Ok(Vec::new());
     }
@@ -24,12 +84,12 @@ pub(crate) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
         })
         .map(|entry| {
             let branch = entry.branch.as_deref().and_then(branch_name);
-            Info::from_path(entry.path, branch)
+            worktree(&entry.path, branch.as_deref())
         })
         .collect())
 }
 
-pub(crate) async fn create(source: &Path, requested: Option<&str>) -> Result<Info, String> {
+async fn create(source: &Path, requested: Option<&str>) -> Result<Value, String> {
     ensure_git_source(source).await?;
     let slug = requested.map_or_else(fallback_name, |name| {
         let slug = slugify(name);
@@ -68,13 +128,13 @@ pub(crate) async fn create(source: &Path, requested: Option<&str>) -> Result<Inf
         ],
     )
     .await?;
-    Ok(Info::new(slug, Some(branch), directory_text))
+    Ok(worktree(&directory_text, Some(&branch)))
 }
 
-pub(crate) async fn remove(source: &Path, directory: &str) -> Result<bool, String> {
+async fn remove(source: &Path, directory: &str) -> Result<(), String> {
     ensure_git_source(source).await?;
     let Some(entry) = locate(source, directory).await? else {
-        return Ok(true);
+        return Ok(());
     };
     run_git(
         source,
@@ -89,10 +149,10 @@ pub(crate) async fn remove(source: &Path, directory: &str) -> Result<bool, Strin
     if let Some(branch) = entry.branch.and_then(|branch| branch_name(&branch)) {
         run_git(source, vec!["branch".to_string(), "-D".to_string(), branch]).await?;
     }
-    Ok(true)
+    Ok(())
 }
 
-pub(crate) async fn reset(source: &Path, directory: &str) -> Result<bool, String> {
+async fn reset(source: &Path, directory: &str) -> Result<(), String> {
     ensure_git_source(source).await?;
     if canonical_text(Path::new(directory)) == canonical_text(source) {
         return Err("Cannot reset the primary workspace".to_string());
@@ -115,7 +175,7 @@ pub(crate) async fn reset(source: &Path, directory: &str) -> Result<bool, String
         vec!["clean".to_string(), "-ffdx".to_string()],
     )
     .await?;
-    Ok(true)
+    Ok(())
 }
 
 async fn ensure_git_source(source: &Path) -> Result<(), String> {
@@ -249,4 +309,50 @@ fn fallback_name() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis());
     format!("worktree-{millis}-{}", std::process::id())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn creates_lists_resets_and_removes_a_linked_worktree()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let scratch = tempfile::tempdir()?;
+        let source = scratch.path().join("repo");
+        std::fs::create_dir(&source)?;
+        run_git(&source, vec!["init".into()]).await?;
+        run_git(
+            &source,
+            [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        )
+        .await?;
+
+        let created = create(&source, Some("My feature")).await?;
+        let path = created["path"].as_str().ok_or("missing worktree path")?;
+        assert_eq!(created["id"], path);
+        assert_eq!(created["branch"], "compat/my-feature");
+        assert_eq!(infos(&source).await?, vec![created.clone()]);
+
+        let untracked = Path::new(path).join("untracked");
+        std::fs::write(&untracked, "discard me")?;
+        reset(&source, path).await?;
+        assert!(!untracked.exists());
+
+        remove(&source, path).await?;
+        assert!(!Path::new(path).exists());
+        assert!(infos(&source).await?.is_empty());
+        Ok(())
+    }
 }

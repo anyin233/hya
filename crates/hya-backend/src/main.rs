@@ -915,7 +915,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             } else {
                 None
             };
-            let mut runtime = resolve_runtime(model).await;
+            let mut runtime = resolve_runtime(model, hya_app::RuntimeFlags::default()).await?;
             if let Some(refreshed) = &refreshed {
                 runtime
                     .pending_discovery
@@ -930,6 +930,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                     config::DiscoverMode::Always,
                     runtime.catalog.as_ref(),
                     &runtime.router,
+                    &runtime.kinds,
                 )
                 .await
                 .context("refresh provider catalog")?;

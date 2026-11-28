@@ -1,6 +1,6 @@
 //! `HttpProvider` — drives a `Protocol` over reqwest + SSE into the canonical
-//! `Event` stream. One provider per upstream route (OpenAI-compatible or
-//! Anthropic), selected by the model id it serves.
+//! `Event` stream. One provider per upstream route, selected by the model id
+//! it serves.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -8,9 +8,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, RETRY_AFTER};
-use secrecy::{ExposeSecret as _, SecretString};
-use serde_json::{Value, json};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
+use serde_json::Value;
 use tokio::{
     sync::mpsc,
     time::{sleep, timeout},
@@ -21,16 +20,10 @@ use tokio_stream::wrappers::ReceiverStream;
 mod output_limit_tests;
 mod stream;
 
-use crate::anthropic::AnthropicMessagesProtocol;
-use crate::auth::{ANTHROPIC_VERSION, AuthStyle, request_header_value};
-use crate::google::GoogleProtocol;
-use crate::openai::{
-    GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items_for_model,
-};
 use crate::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, ModelCatalogSource, Protocol,
-    Provider, ProviderError, ProviderModel, ReasoningEffort, append_capabilities_identity,
-    append_identity_bytes, append_identity_count, append_identity_optional_bytes,
+    Provider, ProviderError, ProviderModel, ReasoningEffort, RequestHeader, RequestPurpose,
+    RouteCredential,
 };
 
 const MAX_REQUEST_ATTEMPTS: usize = 3;
@@ -41,9 +34,6 @@ const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 /// Bounded request budget before successful response headers establish a stream.
 /// Transport, HTTP 429/5xx and one forced auth refresh share this budget.
 /// Established streams are never replayed here.
-///
-/// Retry tuning is deliberately excluded from `configured_identity_v1`: like
-/// the timeout overrides it tunes liveness, not what the route serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetryConfig {
     /// Total request attempts per streamed completion, including the first.
@@ -80,7 +70,8 @@ impl RetryConfig {
 /// HTTP transport, credentials and pre-stream request policy.
 struct RouteCore {
     client: reqwest::Client,
-    auth: AuthStyle,
+    protocol: Arc<dyn Protocol>,
+    credential: Option<RouteCredential>,
     bearer_resolver: Option<BearerResolver>,
     auth_refresher: Option<AuthRefresher>,
     response_header_timeout: Duration,
@@ -108,45 +99,6 @@ const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(60);
 /// retried or failed over. Configurable per route via
 /// [`HttpProvider::with_idle_timeout`].
 const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Which upstream HTTP protocol shape an [`HttpProvider`] speaks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProviderKind {
-    /// OpenAI Chat Completions (`/chat/completions`).
-    OpenAiCompatible,
-    /// OpenAI Responses API (`/responses`).
-    OpenAiResponse,
-    /// ChatGPT Codex subscription backend (`chatgpt.com/backend-api/codex`).
-    OpenAiCodex,
-    /// Grok Build Responses route with encrypted reasoning content.
-    GrokBuild,
-    /// Anthropic Messages API (`/messages`).
-    Anthropic,
-    /// Google Gemini generateContent.
-    Google,
-}
-
-impl ProviderKind {
-    fn protocol(self) -> &'static dyn Protocol {
-        match self {
-            Self::OpenAiCompatible => &OpenAiChatProtocol,
-            Self::OpenAiResponse | Self::OpenAiCodex => &OpenAiResponsesProtocol,
-            Self::GrokBuild => &GrokBuildProtocol,
-            Self::Anthropic => &AnthropicMessagesProtocol,
-            Self::Google => &GoogleProtocol,
-        }
-    }
-
-    /// Default reasoning-variant menu when a model has no per-model override.
-    #[must_use]
-    pub fn reasoning_variants(self) -> Vec<String> {
-        self.protocol()
-            .reasoning_variant_labels()
-            .iter()
-            .map(|level| (*level).to_string())
-            .collect()
-    }
-}
 
 /// Optional live bearer source for re-resolving tokens on each stream.
 pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send + Sync>;
@@ -179,15 +131,14 @@ struct RouteModel {
 /// Owns SSE framing; the protocol decoder only sees data payloads. Redirects are
 /// disabled so auth headers are never followed cross-origin.
 pub struct HttpProvider {
-    /// Whether Anthropic prompt-cache breakpoints are enabled on this route.
+    /// Whether prompt-cache breakpoints are enabled on this route.
     prompt_caching: bool,
     id: String,
-    protocol: &'static dyn Protocol,
+    protocol: Arc<dyn Protocol>,
     core: RouteCore,
     base_url: String,
     models: BTreeMap<String, RouteModel>,
     caps: Capabilities,
-    kind: ProviderKind,
     catalog_source: ModelCatalogSource,
     stream_idle_timeout: Duration,
 }
@@ -203,13 +154,14 @@ pub struct ModelLimitOverride {
 }
 
 impl HttpProvider {
-    /// Build a route for `kind` at `base_url` with optional Hya credential
-    /// material and the models claimed by this route.
+    /// Build a route speaking `protocol` at `base_url` with an optional Hya
+    /// credential (an empty token counts as none) and the models claimed by
+    /// this route.
     pub fn new(
         id: impl Into<String>,
-        kind: ProviderKind,
+        protocol: Arc<dyn Protocol>,
         base_url: &str,
-        api_key: Option<String>,
+        credential: Option<RouteCredential>,
         models: impl IntoIterator<Item = String>,
     ) -> Result<Self, ProviderError> {
         // Security: never follow redirects (reqwest keeps `x-api-key` across a
@@ -217,31 +169,20 @@ impl HttpProvider {
         // would abort long streaming completions. Liveness comes from the much
         // narrower RESPONSE_HEADER_TIMEOUT (per attempt) and STREAM_IDLE_TIMEOUT
         // (between SSE frames) instead.
-        // Timeout and retry overrides are not part of `configured_identity_v1`:
-        // they tune liveness, not what the route serves, like the fixed connect
-        // timeout.
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| ProviderError::Http(e.to_string()))?;
         let base = base_url.trim_end_matches('/');
-        let key = api_key
-            .filter(|value| !value.is_empty())
-            .map(SecretString::new);
-        let protocol = kind.protocol();
-        let auth = match kind {
-            ProviderKind::Anthropic => AuthStyle::Anthropic(key),
-            ProviderKind::Google => AuthStyle::Google(key),
-            _ => AuthStyle::Bearer(key),
-        };
         let prompt_caching = protocol.supports_prompt_cache();
         Ok(Self {
             id: id.into(),
-            protocol,
+            protocol: Arc::clone(&protocol),
             core: RouteCore {
                 client,
-                auth,
+                protocol,
+                credential: credential.filter(|credential| !credential.token.is_empty()),
                 bearer_resolver: None,
                 auth_refresher: None,
                 response_header_timeout: RESPONSE_HEADER_TIMEOUT,
@@ -260,7 +201,6 @@ impl HttpProvider {
                     )
                 })
                 .collect(),
-            kind,
             catalog_source: ModelCatalogSource::Configured,
             prompt_caching,
             caps: Capabilities {
@@ -276,7 +216,8 @@ impl HttpProvider {
         })
     }
 
-    /// Enable or disable Anthropic prompt-cache breakpoints for this route.
+    /// Enable or disable prompt-cache breakpoints for this route (only
+    /// effective when the protocol supports them).
     #[must_use]
     pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
         self.prompt_caching = enabled && self.protocol.supports_prompt_cache();
@@ -284,41 +225,7 @@ impl HttpProvider {
         self
     }
 
-    /// Switch a ChatGPT Codex provider to OAuth session auth (account id header).
-    ///
-    /// No-op for non-`OpenAiCodex` kinds so callers can chain unconditionally.
-    #[must_use]
-    pub fn with_codex_session_auth(mut self, account_id: Option<String>) -> Self {
-        if self.kind != ProviderKind::OpenAiCodex {
-            return self;
-        }
-        let token = self.core.auth.secret().cloned();
-        self.core.auth = AuthStyle::CodexSession { token, account_id };
-        self
-    }
-
-    /// Switch a Grok Build provider to OAuth session auth (CLI chat-proxy headers).
-    ///
-    /// No-op for non-`GrokBuild` kinds so callers can chain unconditionally.
-    #[must_use]
-    pub fn with_grok_session_auth(
-        mut self,
-        client_version: impl Into<String>,
-        client_identifier: impl Into<String>,
-    ) -> Self {
-        if self.kind != ProviderKind::GrokBuild {
-            return self;
-        }
-        let token = self.core.auth.secret().cloned();
-        self.core.auth = AuthStyle::GrokSession {
-            token,
-            client_version: client_version.into(),
-            client_identifier: client_identifier.into(),
-        };
-        self
-    }
-
-    /// Re-resolve the bearer token on each stream (hot-reload for Grok OAuth).
+    /// Re-resolve the bearer token on each stream (hot-reload for OAuth).
     #[must_use]
     pub fn with_bearer_resolver(mut self, resolver: BearerResolver) -> Self {
         self.core.bearer_resolver = Some(resolver);
@@ -429,8 +336,7 @@ impl HttpProvider {
         self
     }
 
-    /// Attach per-model display names (presentation only; not part of the
-    /// configured routing identity).
+    /// Attach per-model display names (presentation only).
     #[must_use]
     pub fn with_model_display_names(
         mut self,
@@ -492,42 +398,45 @@ impl HttpProvider {
 }
 
 impl RouteCore {
-    /// Credential material this route authenticates with right now.
-    fn active_credential(&self) -> Result<Option<String>, ProviderError> {
-        if self.auth.is_bearer()
-            && let Some(resolver) = &self.bearer_resolver
-        {
+    /// Token this route authenticates with right now.
+    fn active_token(&self) -> Result<Option<String>, ProviderError> {
+        if let Some(resolver) = &self.bearer_resolver {
             return resolver().map(|token| (!token.is_empty()).then_some(token));
         }
-        Ok(self.auth.credential().map(str::to_owned))
+        Ok(self
+            .credential
+            .as_ref()
+            .map(|credential| credential.token.clone()))
     }
 
+    /// The protocol's auth headers for one request, and the token they used.
     fn auth_headers(
         &self,
-        model_override: Option<&str>,
+        model: Option<&str>,
     ) -> Result<(HeaderMap, Option<String>), ProviderError> {
+        let token = self.active_token()?;
+        let credential = token.clone().map(|token| RouteCredential {
+            token,
+            account_id: self
+                .credential
+                .as_ref()
+                .and_then(|credential| credential.account_id.clone()),
+        });
         let mut headers = HeaderMap::new();
-        let bearer = if self.auth.is_bearer() {
-            self.active_credential()?
-        } else {
-            None
-        };
-        let credential = if self.auth.is_bearer() {
-            bearer.as_deref()
-        } else {
-            self.auth.credential()
-        };
-        self.auth
-            .apply_headers(&mut headers, credential, true, model_override)?;
-        Ok((headers, bearer))
+        insert_headers(
+            &mut headers,
+            self.protocol
+                .auth_headers(credential.as_ref(), RequestPurpose::Completion, model),
+        )?;
+        Ok((headers, token))
     }
 
     fn request_headers(
         &self,
         extra: &BTreeMap<String, String>,
-        model_override: Option<&str>,
+        model: Option<&str>,
     ) -> Result<(HeaderMap, Option<String>), ProviderError> {
-        let (mut headers, mut refresh_credential) = self.auth_headers(model_override)?;
+        let (mut headers, mut refresh_credential) = self.auth_headers(model)?;
         for (name, value) in extra {
             let header_name = HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| ProviderError::Http("invalid request header name".to_string()))?;
@@ -536,7 +445,10 @@ impl RouteCore {
                 // bearer, so the route must not refresh its stored credential.
                 refresh_credential = None;
             }
-            headers.insert(header_name, request_header_value(value)?);
+            headers.insert(
+                header_name,
+                header_value(value, true, "invalid request header value")?,
+            );
         }
         Ok((headers, refresh_credential))
     }
@@ -548,7 +460,7 @@ impl RouteCore {
         url: &str,
         body: &Value,
         extra_headers: &BTreeMap<String, String>,
-        model_override: Option<&str>,
+        model: Option<&str>,
         max_attempts: usize,
     ) -> Result<reqwest::Response, ProviderError> {
         let max_attempts = max_attempts.max(1);
@@ -563,8 +475,7 @@ impl RouteCore {
             // Resolve auth exactly once per attempt. The captured value is the
             // credential this request sent, even if another concurrent request
             // rotates storage before this response is handled.
-            let (headers, attempted_credential) =
-                self.request_headers(extra_headers, model_override)?;
+            let (headers, attempted_credential) = self.request_headers(extra_headers, model)?;
             let result = timeout(
                 self.response_header_timeout,
                 self.client.post(url).headers(headers).json(body).send(),
@@ -590,7 +501,7 @@ impl RouteCore {
                             .is_some_and(|token| refresher(token).is_ok());
                         let rotated = hooked
                             && stale.is_some_and(|before| {
-                                self.active_credential().is_ok_and(|current| {
+                                self.active_token().is_ok_and(|current| {
                                     current.as_deref() != Some(before.as_str())
                                 })
                             });
@@ -647,14 +558,14 @@ impl RouteCore {
 }
 
 impl HttpProvider {
-    /// The protocol this route speaks.
+    /// Config `kind` label of the protocol this route speaks.
     ///
     /// A provider whose model entries override `kind` is partitioned into one
     /// route per effective protocol, all sharing the provider id; this getter
     /// tells the protocols apart for diagnostics and tests.
     #[must_use]
-    pub fn kind(&self) -> ProviderKind {
-        self.kind
+    pub fn kind(&self) -> &str {
+        self.protocol.kind()
     }
 
     /// Merge route defaults with any per-model limit overrides.
@@ -741,139 +652,29 @@ impl HttpProvider {
     fn served_model_id(&self, model: &ModelRef) -> Option<String> {
         self.served_model_name(model).map(str::to_owned)
     }
-
-    fn configured_identity_bytes_v1(&self) -> Option<Vec<u8>> {
-        let mut identity = Vec::new();
-        append_identity_bytes(&mut identity, b"hya.provider.http.configured.v1")?;
-        append_identity_bytes(&mut identity, hya_version::BACKEND_VERSION.as_bytes())?;
-        append_identity_bytes(&mut identity, self.id.as_bytes())?;
-        append_identity_bytes(&mut identity, provider_kind_identity(self.kind))?;
-        // Preserve the v1 representation for model-specific Gemini URLs.
-        if self.kind == ProviderKind::Google {
-            append_identity_bytes(&mut identity, b"")?;
-            append_identity_optional_bytes(&mut identity, Some(&self.base_url))?;
-        } else {
-            let endpoint = self.protocol.endpoint_url(&self.base_url, "");
-            append_identity_bytes(&mut identity, endpoint.as_bytes())?;
-            append_identity_optional_bytes(&mut identity, None)?;
-        }
-
-        append_identity_count(&mut identity, self.models.len())?;
-        for (model, row) in &self.models {
-            append_identity_bytes(&mut identity, model.as_bytes())?;
-            identity.push(u8::from(row.served));
-            if let Some(variants) = &row.reasoning_variants {
-                identity.push(1);
-                append_identity_count(&mut identity, variants.len())?;
-                for variant in variants {
-                    append_identity_bytes(&mut identity, variant.as_bytes())?;
-                }
-            } else {
-                identity.push(0);
-            }
-            append_identity_bytes(
-                &mut identity,
-                row.reasoning_default
-                    .unwrap_or(ReasoningEffort::Off)
-                    .as_str()
-                    .as_bytes(),
-            )?;
-            if let Some(limit) = &row.limit {
-                identity.push(1);
-                identity.extend_from_slice(&limit.context.to_be_bytes());
-                identity.extend_from_slice(&limit.output.to_be_bytes());
-            } else {
-                identity.push(0);
-            }
-            identity.push(match row.image_input {
-                None => 0,
-                Some(false) => 1,
-                Some(true) => 2,
-            });
-        }
-
-        append_capabilities_identity(&mut identity, &self.caps)?;
-        append_auth_identity(&mut identity, &self.core.auth)?;
-        append_identity_bytes(&mut identity, b"bearer-resolver-slot")?;
-        match &self.core.bearer_resolver {
-            Some(_) => {
-                identity.push(1);
-                append_identity_bytes(&mut identity, self.id.as_bytes())?;
-            }
-            None => identity.push(0),
-        }
-        append_identity_bytes(&mut identity, b"auth-refresher-slot")?;
-        match &self.core.auth_refresher {
-            Some(_) => {
-                identity.push(1);
-                append_identity_bytes(&mut identity, self.id.as_bytes())?;
-            }
-            None => identity.push(0),
-        }
-        Some(identity)
-    }
 }
 
-fn provider_kind_identity(kind: ProviderKind) -> &'static [u8] {
-    match kind {
-        ProviderKind::OpenAiCompatible => b"openai-compatible",
-        ProviderKind::OpenAiResponse => b"openai-response",
-        ProviderKind::OpenAiCodex => b"openai-codex",
-        ProviderKind::GrokBuild => b"grok-build",
-        ProviderKind::Anthropic => b"anthropic",
-        ProviderKind::Google => b"google",
+/// Insert protocol-built headers into `headers`.
+pub(crate) fn insert_headers(
+    headers: &mut HeaderMap,
+    extra: Vec<RequestHeader>,
+) -> Result<(), ProviderError> {
+    for header in extra {
+        let name = HeaderName::from_bytes(header.name.as_bytes())
+            .map_err(|_| ProviderError::Http("invalid auth header name".to_string()))?;
+        headers.insert(
+            name,
+            header_value(&header.value, header.sensitive, "invalid auth header value")?,
+        );
     }
+    Ok(())
 }
 
-fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
-    match auth {
-        AuthStyle::Bearer(key) => {
-            append_identity_bytes(output, b"bearer")?;
-            output.push(u8::from(
-                key.as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-        }
-        AuthStyle::CodexSession { token, account_id } => {
-            append_identity_bytes(output, b"codex-session")?;
-            output.push(u8::from(
-                token
-                    .as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-            append_identity_optional_bytes(output, account_id.as_deref())?;
-        }
-        AuthStyle::GrokSession {
-            token,
-            client_version,
-            client_identifier,
-        } => {
-            append_identity_bytes(output, b"grok-session")?;
-            output.push(u8::from(
-                token
-                    .as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-            append_identity_bytes(output, client_version.as_bytes())?;
-            append_identity_bytes(output, client_identifier.as_bytes())?;
-        }
-        AuthStyle::Anthropic(key) => {
-            append_identity_bytes(output, b"anthropic")?;
-            output.push(u8::from(
-                key.as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-            append_identity_bytes(output, ANTHROPIC_VERSION.as_bytes())?;
-        }
-        AuthStyle::Google(key) => {
-            append_identity_bytes(output, b"google")?;
-            output.push(u8::from(
-                key.as_ref()
-                    .is_some_and(|value| !value.expose_secret().is_empty()),
-            ));
-        }
-    }
-    Some(())
+fn header_value(value: &str, sensitive: bool, error: &str) -> Result<HeaderValue, ProviderError> {
+    let mut header =
+        HeaderValue::from_str(value).map_err(|_| ProviderError::Http(error.to_owned()))?;
+    header.set_sensitive(sensitive);
+    Ok(header)
 }
 
 async fn response_error(response: reqwest::Response) -> ProviderError {
@@ -978,13 +779,13 @@ impl Provider for HttpProvider {
         )
     }
 
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        self.configured_identity_bytes_v1()
-    }
-
     fn catalog(&self) -> Vec<ProviderModel> {
         let variants = if self.caps.reasoning_request {
-            self.kind.reasoning_variants()
+            self.protocol
+                .reasoning_variant_labels()
+                .iter()
+                .map(|label| (*label).to_string())
+                .collect()
         } else {
             Vec::new()
         };
@@ -1017,14 +818,13 @@ impl Provider for HttpProvider {
         let url = self
             .protocol
             .endpoint_url(&self.base_url, req.model.as_str());
-        let model_override = self.protocol.session_model_override(req.model.as_str());
         let resp = self
             .core
             .send_request(
                 &url,
                 &body,
                 &req.headers,
-                model_override,
+                Some(req.model.as_str()),
                 self.core.retry.max_attempts,
             )
             .await?;
@@ -1043,7 +843,7 @@ impl Provider for HttpProvider {
         messages: &[Message],
         system: Option<&str>,
     ) -> Result<Option<CompactedWindow>, ProviderError> {
-        let Some(url) = self.protocol.compact_endpoint(&self.base_url) else {
+        let Some(wire) = self.protocol.compaction() else {
             return Ok(None);
         };
         let model_id = self
@@ -1052,35 +852,24 @@ impl Provider for HttpProvider {
         let images = self
             .capabilities(model)
             .is_some_and(|caps| self.sends_tool_images(&caps));
-        // Encode the same input window the create path would send.
-        let target = ModelRef::new(&model_id);
-        let mut input = encode_input_items_for_model(messages, images, Some(&target))?;
-        if let Some(system) = system.filter(|s| !s.is_empty()) {
-            // Prefer instructions-equivalent as a system item at the front when
-            // the compact endpoint is given an explicit system prompt.
-            input.insert(0, json!({"role": "system", "content": system}));
-        }
-        let body = json!({
-            "model": model_id,
-            "input": input,
-        });
-        let model_override = self.protocol.session_model_override(model_id.as_str());
+        let body = wire.encode(messages, system, &model_id, images)?;
         let resp = self
             .core
-            .send_request(&url, &body, &BTreeMap::new(), model_override, 1)
+            .send_request(
+                &wire.endpoint(&self.base_url),
+                &body,
+                &BTreeMap::new(),
+                Some(&model_id),
+                1,
+            )
             .await?;
         let payload: Value = resp
             .json()
             .await
             .map_err(|e| ProviderError::Http(e.to_string()))?;
-        let items = payload
-            .get("output")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| {
-                ProviderError::Decode("responses compact reply missing output array".to_string())
-            })?;
-        Ok(Some(CompactedWindow { items }))
+        Ok(Some(CompactedWindow {
+            items: wire.parse(&payload)?,
+        }))
     }
 }
 
@@ -1088,11 +877,24 @@ impl Provider for HttpProvider {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use crate::{
+        AnthropicMessagesProtocol, Decoder, GoogleProtocol, GrokBuildProtocol, OpenAiChatProtocol,
+        OpenAiCodexProtocol, OpenAiResponsesProtocol,
+    };
+    use hya_proto::{MessageId, SessionId};
+
+    fn credential(token: &str, account_id: Option<&str>) -> Option<RouteCredential> {
+        Some(RouteCredential {
+            token: token.to_string(),
+            account_id: account_id.map(str::to_string),
+        })
+    }
+
     #[test]
     fn credentialless_openai_route_omits_authorization() {
         let provider = HttpProvider::new(
             "openai",
-            ProviderKind::OpenAiCompatible,
+            Arc::new(OpenAiChatProtocol),
             "https://example/v1",
             None,
             ["gpt-5".to_string()],
@@ -1104,65 +906,129 @@ mod tests {
             .unwrap();
         assert!(!headers.contains_key(AUTHORIZATION));
     }
-    #[test]
-    fn credentialless_auth_styles_never_emit_empty_secret_headers() {
-        let cases = [
-            (
-                ProviderKind::OpenAiCompatible,
-                "https://example/v1",
-                None,
-                None,
-            ),
-            (
-                ProviderKind::OpenAiResponse,
-                "https://example/v1",
-                None,
-                None,
-            ),
-            (ProviderKind::Anthropic, "https://example/v1", None, None),
-            (ProviderKind::Google, "https://example", None, None),
-            (
-                ProviderKind::OpenAiCodex,
-                "https://example/v1",
-                None,
-                Some("account"),
-            ),
-        ];
-        for (kind, base, key, account) in cases {
-            let provider = HttpProvider::new("provider", kind, base, key, ["model".to_string()])
-                .unwrap()
-                .with_codex_session_auth(account.map(str::to_string));
-            let (headers, _) = provider
-                .core
-                .request_headers(&BTreeMap::new(), None)
-                .unwrap();
-            assert!(!headers.contains_key(AUTHORIZATION));
-            assert!(!headers.contains_key(HeaderName::from_static("x-api-key")));
-            assert!(!headers.contains_key(HeaderName::from_static("x-goog-api-key")));
-            assert!(!headers.contains_key(HeaderName::from_static("chatgpt-account-id")));
-        }
 
-        let grok = HttpProvider::new(
-            "grok",
-            ProviderKind::GrokBuild,
+    #[test]
+    fn credentialless_protocols_never_emit_empty_secret_headers() {
+        let protocols: [Arc<dyn Protocol>; 6] = [
+            Arc::new(OpenAiChatProtocol),
+            Arc::new(OpenAiResponsesProtocol),
+            Arc::new(OpenAiCodexProtocol),
+            Arc::new(AnthropicMessagesProtocol),
+            Arc::new(GoogleProtocol),
+            Arc::new(GrokBuildProtocol),
+        ];
+        for protocol in protocols {
+            let label = protocol.kind().to_string();
+            let provider = HttpProvider::new(
+                "provider",
+                protocol,
+                "https://example/v1",
+                credential("", Some("account")),
+                ["model".to_string()],
+            )
+            .unwrap();
+            let (headers, refresh) = provider
+                .core
+                .request_headers(&BTreeMap::new(), Some("model"))
+                .unwrap();
+            assert!(refresh.is_none(), "{label}");
+            for name in [
+                "authorization",
+                "x-api-key",
+                "x-goog-api-key",
+                "chatgpt-account-id",
+                "x-xai-token-auth",
+            ] {
+                assert!(!headers.contains_key(name), "{label} sent {name}");
+            }
+            if label == "grok-build" {
+                assert_eq!(
+                    headers["x-grok-client-version"],
+                    hya_version::BACKEND_VERSION
+                );
+            }
+        }
+    }
+
+    /// A protocol with its own headers, to pin what the transport does with them.
+    struct HeaderProtocol;
+
+    impl Protocol for HeaderProtocol {
+        fn kind(&self) -> &str {
+            "test-headers"
+        }
+        fn description(&self) -> &str {
+            "test protocol"
+        }
+        fn auth_headers(
+            &self,
+            credential: Option<&RouteCredential>,
+            purpose: RequestPurpose,
+            model: Option<&str>,
+        ) -> Vec<RequestHeader> {
+            let mut headers = vec![RequestHeader::new(
+                "x-purpose",
+                format!("{purpose:?}"),
+                false,
+            )];
+            if let Some(credential) = credential {
+                headers.push(RequestHeader::new("x-token", &credential.token, true));
+                if let Some(account) = &credential.account_id {
+                    headers.push(RequestHeader::new("x-account", account, false));
+                }
+            }
+            if let Some(model) = model {
+                headers.push(RequestHeader::new("x-model", model, false));
+            }
+            headers
+        }
+        fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+            OpenAiChatProtocol.encode(req)
+        }
+        fn decoder(
+            &self,
+            session: SessionId,
+            message: MessageId,
+            reasoning: Option<ReasoningEffort>,
+        ) -> Box<dyn Decoder> {
+            OpenAiChatProtocol.decoder(session, message, reasoning)
+        }
+    }
+
+    #[test]
+    fn http_provider_applies_protocol_auth_headers_with_sensitivity_and_model() {
+        let provider = HttpProvider::new(
+            "route",
+            Arc::new(HeaderProtocol),
             "https://example/v1",
-            None,
+            credential("static", Some("acct")),
             ["model".to_string()],
         )
-        .unwrap()
-        .with_grok_session_auth("client-v1", "grok-cli");
-        let (headers, _) = grok.core.request_headers(&BTreeMap::new(), None).unwrap();
-        assert!(!headers.contains_key(AUTHORIZATION));
-        assert!(!headers.contains_key(HeaderName::from_static("x-xai-token-auth")));
-        assert_eq!(
-            headers
-                .get(HeaderName::from_static("x-grok-client-version"))
-                .and_then(|value| value.to_str().ok()),
-            Some("client-v1")
-        );
+        .unwrap();
+        let (headers, refresh) = provider
+            .core
+            .request_headers(&BTreeMap::new(), Some("served-model"))
+            .unwrap();
+        assert_eq!(refresh.as_deref(), Some("static"));
+        assert_eq!(headers["x-purpose"], "Completion");
+        assert_eq!(headers["x-token"], "static");
+        assert!(headers["x-token"].is_sensitive());
+        assert!(!headers["x-account"].is_sensitive());
+        assert_eq!(headers["x-model"], "served-model");
+
+        // A live resolver replaces the token; the account id stays with the route.
+        let resolved = provider.with_bearer_resolver(Arc::new(|| Ok("fresh".to_string())));
+        let (headers, refresh) = resolved
+            .core
+            .request_headers(&BTreeMap::new(), None)
+            .unwrap();
+        assert_eq!(refresh.as_deref(), Some("fresh"));
+        assert_eq!(headers["x-token"], "fresh");
+        assert_eq!(headers["x-account"], "acct");
+        assert!(!headers.contains_key("x-model"));
     }
-    use crate::{DevProvider, FakeProvider, ProviderRouter};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::{DevProvider, ProviderRouter};
 
     #[test]
     fn retry_after_seconds_are_parsed_and_bounded() {
@@ -1174,9 +1040,9 @@ mod tests {
     fn provider() -> Result<HttpProvider, ProviderError> {
         HttpProvider::new(
             "12th",
-            ProviderKind::OpenAiCompatible,
+            Arc::new(OpenAiChatProtocol),
             "https://example/v1",
-            Some("key".to_string()),
+            credential("key", None),
             ["claude-opus-4-8".to_string(), "gpt-5.5".to_string()],
         )
     }
@@ -1268,333 +1134,19 @@ mod tests {
     #[test]
     fn reasoning_variants_are_family_specific() {
         assert_eq!(
-            ProviderKind::Anthropic.reasoning_variants(),
+            AnthropicMessagesProtocol.reasoning_variant_labels(),
             ["low", "medium", "high", "xhigh", "max"]
         );
         assert_eq!(
-            ProviderKind::OpenAiCompatible.reasoning_variants(),
+            OpenAiChatProtocol.reasoning_variant_labels(),
             ["minimal", "low", "medium", "high", "xhigh"]
         );
         assert_eq!(
-            ProviderKind::Google.reasoning_variants(),
+            GoogleProtocol.reasoning_variant_labels(),
             ["minimal", "low", "medium", "high", "max"]
         );
     }
 
-    #[test]
-    fn configured_provider_identity_covers_routes_without_secrets_or_live_state() {
-        fn configured_identities(router: &ProviderRouter) -> Option<Vec<Vec<u8>>> {
-            router
-                .providers()
-                .iter()
-                .map(|provider| {
-                    provider
-                        .configured_identity_v1()
-                        .filter(|identity| !identity.is_empty())
-                })
-                .collect()
-        }
-
-        let route = |id: &str, kind: ProviderKind, base: &str, key: &str, models: &[&str]| {
-            match HttpProvider::new(
-                id,
-                kind,
-                base,
-                Some(key.to_string()),
-                models.iter().map(|model| (*model).to_string()),
-            ) {
-                Ok(provider) => provider,
-                Err(error) => panic!("test HTTP provider route: {error}"),
-            }
-        };
-        let router = |provider: HttpProvider| ProviderRouter::new().with(Arc::new(provider));
-
-        let empty = ProviderRouter::new();
-        assert_eq!(configured_identities(&empty), Some(Vec::new()));
-
-        let equivalent_a = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1/",
-            "secret-a",
-            &["model-b", "model-a"],
-        ));
-        let equivalent_b = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-b",
-            &["model-a", "model-b"],
-        ));
-        assert!(
-            configured_identities(&equivalent_a)
-                .as_ref()
-                .is_some_and(|identities| !identities.is_empty())
-        );
-        assert_eq!(
-            configured_identities(&equivalent_a),
-            configured_identities(&equivalent_b)
-        );
-
-        let empty_key = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&empty_key)
-        );
-
-        let insertion_a = route(
-            "first",
-            ProviderKind::OpenAiCompatible,
-            "https://first.test/v1",
-            "key",
-            &["model"],
-        );
-        let insertion_b = route(
-            "second",
-            ProviderKind::OpenAiCompatible,
-            "https://second.test/v1",
-            "key",
-            &["model"],
-        );
-        let insertion_ab = ProviderRouter::new()
-            .with(Arc::new(insertion_a))
-            .with(Arc::new(insertion_b));
-        let insertion_ba = ProviderRouter::new()
-            .with(Arc::new(route(
-                "second",
-                ProviderKind::OpenAiCompatible,
-                "https://second.test/v1",
-                "key",
-                &["model"],
-            )))
-            .with(Arc::new(route(
-                "first",
-                ProviderKind::OpenAiCompatible,
-                "https://first.test/v1",
-                "key",
-                &["model"],
-            )));
-        assert_ne!(
-            configured_identities(&insertion_ab),
-            configured_identities(&insertion_ba)
-        );
-
-        let id_changed = router(route(
-            "gateway-renamed",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&id_changed)
-        );
-
-        let kind_changed = router(route(
-            "gateway",
-            ProviderKind::OpenAiResponse,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&kind_changed)
-        );
-
-        let endpoint_changed = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://other.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&endpoint_changed)
-        );
-
-        let models_changed = router(route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-c"],
-        ));
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&models_changed)
-        );
-
-        let mut caps_changed_route = route(
-            "gateway",
-            ProviderKind::OpenAiCompatible,
-            "https://example.test/v1",
-            "secret-a",
-            &["model-a", "model-b"],
-        );
-        caps_changed_route.caps.usage_reporting = false;
-        let caps_changed = router(caps_changed_route);
-        assert_ne!(
-            configured_identities(&equivalent_a),
-            configured_identities(&caps_changed)
-        );
-
-        let codex_account_absent = router(
-            route(
-                "codex",
-                ProviderKind::OpenAiCodex,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_codex_session_auth(None),
-        );
-        let codex_account_present = router(
-            route(
-                "codex",
-                ProviderKind::OpenAiCodex,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_codex_session_auth(Some("account-a".to_string())),
-        );
-        let codex_account_changed = router(
-            route(
-                "codex",
-                ProviderKind::OpenAiCodex,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_codex_session_auth(Some("account-b".to_string())),
-        );
-        assert_ne!(
-            configured_identities(&codex_account_absent),
-            configured_identities(&codex_account_present)
-        );
-        assert_ne!(
-            configured_identities(&codex_account_present),
-            configured_identities(&codex_account_changed)
-        );
-
-        let grok_client_a = router(
-            route(
-                "grok",
-                ProviderKind::GrokBuild,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_grok_session_auth("client-v1", "client-a"),
-        );
-        let grok_client_b = router(
-            route(
-                "grok",
-                ProviderKind::GrokBuild,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_grok_session_auth("client-v1", "client-b"),
-        );
-        assert_ne!(
-            configured_identities(&grok_client_a),
-            configured_identities(&grok_client_b)
-        );
-
-        assert!(
-            configured_identities(&equivalent_a).is_some_and(|identities| {
-                identities.iter().any(|identity| {
-                    identity
-                        .windows("hya.provider.http.configured.v1".len())
-                        .any(|bytes| bytes == b"hya.provider.http.configured.v1")
-                        && identity
-                            .windows(hya_version::BACKEND_VERSION.len())
-                            .any(|bytes| bytes == hya_version::BACKEND_VERSION.as_bytes())
-                })
-            })
-        );
-
-        let resolver_count_a = Arc::new(AtomicUsize::new(0));
-        let resolver_count_b = Arc::new(AtomicUsize::new(0));
-        let resolver_route_a = {
-            let counter = Arc::clone(&resolver_count_a);
-            route(
-                "resolver",
-                ProviderKind::OpenAiCompatible,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_bearer_resolver(Arc::new(move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Ok("live-token-a".to_string())
-            }))
-        };
-        let resolver_route_b = {
-            let counter = Arc::clone(&resolver_count_b);
-            route(
-                "resolver",
-                ProviderKind::OpenAiCompatible,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )
-            .with_bearer_resolver(Arc::new(move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-                Ok("live-token-b".to_string())
-            }))
-        };
-        let resolver_router_a = router(resolver_route_a);
-        let resolver_router_b = router(resolver_route_b);
-        assert_eq!(
-            configured_identities(&resolver_router_a),
-            configured_identities(&resolver_router_b)
-        );
-        assert_eq!(resolver_count_a.load(Ordering::SeqCst), 0);
-        assert_eq!(resolver_count_b.load(Ordering::SeqCst), 0);
-        assert_ne!(
-            configured_identities(&resolver_router_a),
-            configured_identities(&router(route(
-                "resolver",
-                ProviderKind::OpenAiCompatible,
-                "https://example.test/v1",
-                "secret",
-                &["model"],
-            )))
-        );
-
-        let fake_router = ProviderRouter::new().with(Arc::new(FakeProvider::scripted(Vec::new())));
-        assert_eq!(configured_identities(&fake_router), None);
-
-        let dev_router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
-        assert!(
-            configured_identities(&dev_router)
-                .as_ref()
-                .is_some_and(|identities| !identities.is_empty())
-        );
-
-        assert!(equivalent_a.resolve(&ModelRef::new("model-a")).is_some());
-        assert!(
-            equivalent_a
-                .resolve(&ModelRef::new("gateway/model-a"))
-                .is_some()
-        );
-        assert!(
-            equivalent_a
-                .resolve(&ModelRef::new("foreign/model-a"))
-                .is_none()
-        );
-    }
     #[test]
     fn per_model_reasoning_defaults_resolve_bare_and_prefixed_refs() -> Result<(), ProviderError> {
         let provider = provider()?.with_model_reasoning_defaults([
@@ -1620,35 +1172,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn provider_identity_covers_defaults_stably_and_without_secrets() -> Result<(), ProviderError> {
-        let make = |defaults: Vec<(&str, Option<ReasoningEffort>)>| {
-            provider()?
-                .with_model_reasoning_defaults(
-                    defaults
-                        .into_iter()
-                        .map(|(id, effort)| (id.to_string(), effort)),
-                )
-                .configured_identity_v1()
-                .ok_or_else(|| ProviderError::Http("missing configured identity".to_string()))
-        };
-        let low = make(vec![("gpt-5.5", Some(ReasoningEffort::Low))])?;
-        let high = make(vec![("gpt-5.5", Some(ReasoningEffort::High))])?;
-        assert_ne!(low, high, "changing only a model default changes identity");
-        let ordered = make(vec![
-            ("gpt-5.5", Some(ReasoningEffort::Low)),
-            ("claude-opus-4-8", Some(ReasoningEffort::Off)),
-        ])?;
-        let reversed = make(vec![
-            ("claude-opus-4-8", Some(ReasoningEffort::Off)),
-            ("gpt-5.5", Some(ReasoningEffort::Low)),
-        ])?;
-        assert_eq!(
-            ordered, reversed,
-            "default row insertion order is not semantic"
-        );
-        Ok(())
-    }
     #[test]
     fn router_default_uses_first_claiming_provider() -> Result<(), ProviderError> {
         let first = provider()?;

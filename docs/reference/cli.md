@@ -147,12 +147,12 @@ Uses `~/.local/state/hya/sessions.db` unless `--db <PATH>` is given:
 
 | Command | Description |
 | --- | --- |
-| `hya provider add [--name <ID>] [--base-url <URL>] [--protocol <PROTO>] [--api-key <KEY>] [-y]` | Interactive or scripted wizard to add an `openai-chat`, `openai-responses`, or `anthropic-messages` provider and fetch its models (`hya providers` is an alias). |
+| `hya provider add [--name <ID>] [--base-url <URL>] [--protocol <KIND>] [--api-key <KEY>] [-y]` | Interactive or scripted wizard to add a provider and fetch its models (`hya providers` is an alias). `--protocol` takes a registered `kind` label (`openai`, `anthropic`, `google`, `openai-response`, …); the prompt lists every registered kind with its description. |
 | `hya provider list [--refresh]` | List configured providers, auth sources, and resolved models. |
 | `hya provider logout <ID>` | Delete the saved credential file `~/.config/hya/auth/<id>.yaml`. |
 | `hya provider remove <ID> [-y]` | Remove the provider from `config.yaml`, delete its saved key, and clear cached models. |
 | `hya login <PROVIDER> <TOKEN>` | Save a static API token to `~/.config/hya/auth/<provider>.yaml` (`0600`). |
-| `hya oauth login --provider <ID> --type <openai-codex\|grok-build> [--browser\|--no-browser] [--loopback]` | Sign in via subscription OAuth (default device-code flow; `--loopback` uses `localhost:1455` PKCE for `openai-codex`). |
+| `hya oauth login --provider <ID> --type <TYPE> [--browser\|--no-browser] [--loopback]` | Sign in via subscription OAuth. `--type` is the OAuth type of a registered provider kind (`openai-codex`, `grok-build`). Each flow picks its defaults: `openai-codex` runs a device-code flow that prints the URL, and `--loopback` switches it to a `localhost:1455` PKCE callback that opens the browser; `grok-build` opens the browser and rejects `--loopback`. `--browser` / `--no-browser` override the browser default. |
 | `hya oauth status [<PROVIDER>]` | Show non-secret OAuth status and token expiry. |
 | `hya models [<PROVIDER>] [--verbose] [--refresh]` | List resolved `provider/model` entries (`--refresh` updates the remote model cache; `--verbose` prints JSON metadata lines). |
 | `hya agent list` | List built-in selectable agents and their roles. |

@@ -540,20 +540,6 @@ fn catalog_result(result: hya_provider::ProviderCatalogResult) -> String {
     .to_owned()
 }
 
-/// Config `kind` label for a live route kind (used when the provider is not
-/// in the settings list, e.g. an embedder without a provider control).
-fn kind_label(kind: hya_provider::ProviderKind) -> &'static str {
-    use hya_provider::ProviderKind as K;
-    match kind {
-        K::OpenAiCompatible => "openai",
-        K::OpenAiResponse => "openai-response",
-        K::OpenAiCodex => "openai-codex",
-        K::GrokBuild => "grok-build",
-        K::Anthropic => "anthropic",
-        K::Google => "google",
-    }
-}
-
 async fn list_providers(
     State(st): State<ServerState>,
     Query(query): Query<BTreeMap<String, String>>,
@@ -612,7 +598,7 @@ pub(crate) async fn provider_rows(
                         if offline {
                             String::new()
                         } else {
-                            kind_label(state.kind).to_owned()
+                            state.kind.clone()
                         }
                     },
                     |settings| settings.kind.clone(),
@@ -668,7 +654,10 @@ pub(crate) async fn provider_info(st: &ServerState, provider_id: &str) -> Option
         .into_iter()
         .filter(|model| model.provider_id == provider_id)
         .collect();
-    let supports_oauth = matches!(summary.kind.as_str(), "openai-codex" | "grok-build");
+    let supports_oauth = snapshot
+        .providers()
+        .iter()
+        .any(|state| state.provider_id == provider_id && state.supports_oauth);
     Some(pb::ProviderInfo {
         summary: Some(summary),
         models,

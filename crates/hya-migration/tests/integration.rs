@@ -1255,7 +1255,7 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         .unwrap();
         assert_eq!(ma_cfg["subagents"]["max_concurrency"].as_u64(), Some(6));
 
-        // Verify v2 `hya-app::config::load` parses migrated `config.yaml` and reads bundle configs!
+        // Verify v2 `hya-app::config::{parse, resolve}` parses migrated `config.yaml` and reads bundle configs!
         let xdg_root = ws.root.join("xdg-check");
         fs::create_dir_all(xdg_root.join("hya")).unwrap();
         // Copy migrated config tree into xdg_root/hya
@@ -1277,7 +1277,12 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", &xdg_root);
         }
-        let loaded = hya_app::config::load().await;
+        let kinds = hya_app::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::full())
+            .expect("provider kinds");
+        let loaded = match hya_app::config::parse() {
+            Ok(Some(parsed)) => hya_app::config::resolve(parsed, &kinds).await.map(Some),
+            other => other.map(|_| None),
+        };
         unsafe {
             match prev_xdg {
                 Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
@@ -1285,7 +1290,7 @@ async fn full_v1_to_v2_migration_v2_runtime_verification_and_sha256_rollback() {
             }
         }
         let resolved = loaded
-            .expect("v2 hya-app::config::load must accept migrated config.yaml")
+            .expect("v2 hya-app::config must accept migrated config.yaml")
             .expect("migrated config.yaml must be discovered under XDG_CONFIG_HOME");
         assert_eq!(
             resolved.settings.bundle_config_json("hya/goal")["goal"]["evaluator_model"],

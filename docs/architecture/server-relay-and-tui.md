@@ -12,6 +12,7 @@ This page explains how `hya-server` serves HTTP and gRPC from one port, how `hya
 - **Zero drift by construction:** `cargo run -p xtask -- gen-api` generates `grpc_generated.rs` from `proto/hya/v2/*.proto` (`// hya.http:` annotations) so almost every unary gRPC method encodes its path/query/body and calls the exact same Axum handler in-process. Only streaming and loopback-only RPCs (`StreamSessionEvents`, `StreamGlobalEvents`, `StreamPty`, `Invoke*BundleApi`, `WaitTurn`, and `RelayControl`) have explicit adapters in `grpc.rs`.
 - **Host allowlist guard (`host.rs`):** Rejects any HTTP `Host` or gRPC `:authority` outside `localhost`, `127.0.0.1`, `[::1]`, a specific `--bind` IP, or `--allow-host` names before CORS or route dispatch—blocking DNS-rebinding attacks from browsers.
 - **Ephemeral session reaper (`ephemeral.rs`):** Speculatively created unused sessions (`ephemeral: true`) are automatically reaped ~5 seconds after their last `StreamSessionEvents` watcher disconnects (or 30 seconds on startup recovery) if no message, title, archive, or fork ever touched them.
+- **Attachment and terminal services:** `Process` stays in the serving surface because the launcher and reconnect paths use `Health` and `GetBootstrap` before opening a session. `Pty` stays there because its bidirectional `StreamPty` and WebSocket frame contract require a streaming transport. `BundleApi` exposes unary invocations.
 
 ---
 

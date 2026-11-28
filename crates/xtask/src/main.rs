@@ -11,12 +11,14 @@ mod matrix_check;
 mod package_bundle;
 mod release_rehearsal;
 mod release_staging;
+mod rings;
 mod startup_bench;
 
 type Task = fn(Vec<String>) -> anyhow::Result<()>;
 
 const TASKS: &[(&str, Task)] = &[
     ("boundary-check", boundary::run),
+    ("ring-report", boundary::ring_report),
     ("startup-bench", startup_bench::run),
     ("lifecycle-bench", lifecycle_bench::run),
     ("matrix-check", matrix_check::run),

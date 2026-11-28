@@ -24,7 +24,7 @@ Options:
 Installs the release layout:
   bin/hya                   unified CLI: exec, serve, login, bundles, models, update, ...
   bin/hya-migration         standalone v1-to-v2 migration and SHA-256 rollback CLI
-  bundles/hya-*.hyabundle   the fourteen trusted first-party bundles it loads at startup
+  bundles/hya-*.hyabundle   the fifteen trusted first-party bundles it loads at startup
   lib/hya/bun-adapter       Bun adapter for JavaScript bundle extensions
   lib/hya/claude-adapter    Claude Code plugin import and runtime adapter
   lib/hya/code-mode         core Code Mode VM runtime
@@ -81,7 +81,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-tool_libraries=(-p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle)
+tool_libraries=(-p hya-hashline -p hya-coding-extras -p hya-multi-agent -p hya-network -p hya-agent-channels -p hya-compaction -p hya-plan -p hya-goal -p hya-loop -p hya-workflow-bundle -p hya-workspace-files)
 case "$profile" in
   release)
     profile_args=(--profile release)

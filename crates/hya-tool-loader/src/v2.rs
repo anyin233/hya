@@ -18,6 +18,9 @@ use async_trait::async_trait;
 use hya_bundle::{FirstPartySource, first_party_bundle, first_party_source, load_first_party};
 use hya_context::rewrite::Rewriter;
 use hya_proto::{Envelope, ModelRef, SessionId};
+use hya_provider::{
+    OAuthCredential, OAuthError, OAuthLoginRequest, ProviderAuthFlow, ProviderKindEntry,
+};
 use hya_runtime_abi::{
     AbiDigestFn, AbiError, DriverReport, DriverRequest, HookPoint, HostError, HostRuntime,
     NativeAgentSpawnInput, NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply,
@@ -99,6 +102,23 @@ async fn poll_host_result<T>(
     })?;
     poll_future_with_runtime(future, with_runtime, &handle, || {
         Err(HostError::Internal(
+            "native runtime bridge did not poll the future".to_string(),
+        ))
+    })
+    .await
+}
+
+async fn poll_oauth_result<T>(
+    future: Pin<Box<dyn Future<Output = Result<T, OAuthError>> + Send + '_>>,
+    with_runtime: RuntimeEntry,
+) -> Result<T, OAuthError> {
+    let handle = tokio::runtime::Handle::try_current().map_err(|error| {
+        OAuthError::Protocol(format!(
+            "native bundle auth flow needs a Tokio runtime: {error}"
+        ))
+    })?;
+    poll_future_with_runtime(future, with_runtime, &handle, || {
+        Err(OAuthError::Protocol(
             "native runtime bridge did not poll the future".to_string(),
         ))
     })
@@ -393,6 +413,38 @@ impl NativeDriver for NativeDriverAdapter {
     }
 }
 
+struct ProviderAuthFlowAdapter {
+    inner: Arc<dyn ProviderAuthFlow>,
+    with_runtime: RuntimeEntry,
+}
+
+#[async_trait]
+impl ProviderAuthFlow for ProviderAuthFlowAdapter {
+    fn oauth_type(&self) -> &str {
+        self.inner.oauth_type()
+    }
+
+    fn default_base_url(&self) -> &str {
+        self.inner.default_base_url()
+    }
+
+    fn default_model(&self) -> &str {
+        self.inner.default_model()
+    }
+
+    fn supports_loopback(&self) -> bool {
+        self.inner.supports_loopback()
+    }
+
+    async fn login(&self, request: OAuthLoginRequest) -> Result<OAuthCredential, OAuthError> {
+        poll_oauth_result(self.inner.login(request), self.with_runtime).await
+    }
+
+    async fn refresh(&self, credential: &OAuthCredential) -> Result<OAuthCredential, OAuthError> {
+        poll_oauth_result(self.inner.refresh(credential), self.with_runtime).await
+    }
+}
+
 fn wrap_registrations_with_runtime(
     regs: NativeRegistrations,
     with_runtime: RuntimeEntry,
@@ -468,6 +520,20 @@ fn wrap_registrations_with_runtime(
                     inner,
                     with_runtime,
                 }) as Arc<dyn NativeDriver>
+            })
+            .collect(),
+        // Protocols are called synchronously and pass through unchanged.
+        providers: regs
+            .providers
+            .into_iter()
+            .map(|entry| ProviderKindEntry {
+                protocol: entry.protocol,
+                auth_flow: entry.auth_flow.map(|inner| {
+                    Arc::new(ProviderAuthFlowAdapter {
+                        inner,
+                        with_runtime,
+                    }) as Arc<dyn ProviderAuthFlow>
+                }),
             })
             .collect(),
     }

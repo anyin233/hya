@@ -18,7 +18,6 @@ path segment.
 - [BundleApi service](#service-bundleapi)
 - [Catalog service](#service-catalog)
 - [Events service](#service-events)
-- [Files service](#service-files)
 - [Interactions service](#service-interactions)
 - [Logs service](#service-logs)
 - [Mcp service](#service-mcp)
@@ -29,7 +28,6 @@ path segment.
 - [RelayControl service](#service-relaycontrol)
 - [Session service](#service-session)
 - [Turn service](#service-turn)
-- [Worktrees service](#service-worktrees)
 - [Messages](#messages)
 - [Enums](#enums)
 
@@ -326,37 +324,6 @@ replay `ListEvents` from the last durable `seq` applied.
 ### `Events.StreamGlobalEvents`
 
 Live stream across all sessions of a directory scope.
-
-
-## Service `Files`
-
-Filesystem reads for frontends (tree views, editors).
-
-| RPC | HTTP | gRPC | Request | Response |
-|---|---|---|---|---|
-| `ReadFile` | `GET /v2/fs/read` | `hya.v2.Files.ReadFile` | `ReadFileRequest` | `ReadFileResponse` |
-| `ListDirectory` | `GET /v2/fs/list` | `hya.v2.Files.ListDirectory` | `ListDirectoryRequest` | `ListDirectoryResponse` |
-| `FindFiles` | `GET /v2/fs/find` | `hya.v2.Files.FindFiles` | `FindFilesRequest` | `FindFilesResponse` |
-| `SearchText` | `GET /v2/fs/search` | `hya.v2.Files.SearchText` | `SearchTextRequest` | `SearchTextResponse` |
-
-### `Files.ReadFile`
-
-Read one file's content.
-
-
-### `Files.ListDirectory`
-
-List one directory's entries.
-
-
-### `Files.FindFiles`
-
-Find files by glob-ish name pattern.
-
-
-### `Files.SearchText`
-
-Full-text search across files (ripgrep-backed).
 
 
 ## Service `Interactions`
@@ -873,38 +840,6 @@ Block until the turn reaches a terminal state or the timeout elapses.
 ### `Turn.CancelTurn`
 
 Request cancellation of a running turn (cooperative abort).
-
-
-## Service `Worktrees`
-
-Worktree create/list/delete surface backed by the engine's worktree
-helpers.
-
-| RPC | HTTP | gRPC | Request | Response |
-|---|---|---|---|---|
-| `ListWorktrees` | `GET /v2/worktrees` | `hya.v2.Worktrees.ListWorktrees` | `ListWorktreesRequest` | `ListWorktreesResponse` |
-| `CreateWorktree` | `POST /v2/worktrees` | `hya.v2.Worktrees.CreateWorktree` | `CreateWorktreeRequest` | `Worktree` |
-| `DeleteWorktree` | `DELETE /v2/worktrees/{worktree}` | `hya.v2.Worktrees.DeleteWorktree` | `DeleteWorktreeRequest` | `DeleteWorktreeResponse` |
-| `ResetWorktree` | `POST /v2/worktrees/{worktree}/reset` | `hya.v2.Worktrees.ResetWorktree` | `ResetWorktreeRequest` | `Worktree` |
-
-### `Worktrees.ListWorktrees`
-
-List worktrees of a repository.
-
-
-### `Worktrees.CreateWorktree`
-
-Create a new worktree (and its branch when needed).
-
-
-### `Worktrees.DeleteWorktree`
-
-Delete a worktree and optionally its branch.
-
-
-### `Worktrees.ResetWorktree`
-
-Reset a worktree to a clean state at its branch head.
 
 
 ## Messages
@@ -1988,93 +1923,6 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 | `message` (3) | `string` | System message carrying the summary (the transcript divider). |
 | `folded_count` (4) | `uint32` | Number of messages folded behind the summary. |
 | `manual` (5) | `bool` | Whether a client asked for it (`CompactSession`) rather than the context crossing its threshold. |
-
-### `ReadFileRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-| `path` (2) | `string` | File path relative to the directory. |
-| `max_bytes` (3) | `uint64` | Truncate after this many bytes; 0 reads the whole file. |
-
-### `ReadFileResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `content` (1) | `bytes` | File content; raw bytes for binary files. |
-| `text` (2) | `bool` | Whether `content` decodes as UTF-8 text. |
-| `mime` (3) | `string` | Guessed MIME type. |
-
-### `ListDirectoryRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-| `path` (2) | `string` | Subdirectory path relative to the directory; empty lists the root. |
-
-### `DirEntry`
-
-One directory entry.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` (1) | `string` | Entry name within its parent directory. |
-| `kind` (2) | `DirEntryKind` | Entry kind. |
-| `size` (3) | `uint64` | File size in bytes when known. |
-| `time_modified` (4) | `google.protobuf.Timestamp` | Modification time when known. |
-
-### `ListDirectoryResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `entries` (1) | `repeated DirEntry` | Entries in stable name order. |
-
-### `FindFilesRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-| `pattern` (2) | `string` | Glob pattern matched against relative paths (`**/*.rs`). |
-| `limit` (3) | `uint32` | Maximum paths to return; 0 uses the server default. |
-
-### `FindFilesResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `paths` (1) | `repeated string` | Matching relative paths. |
-
-### `SearchTextRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-| `query` (2) | `string` | Search query (regex when the backend enables it, else literal). |
-| `glob` (3) | `string` | Restrict search to files matching this glob; empty searches all. |
-| `limit` (4) | `uint32` | Maximum matches to return; 0 uses the server default. |
-
-### `TextMatch`
-
-One text search match.
-
-| Field | Type | Description |
-|---|---|---|
-| `path` (1) | `string` | Relative file path. |
-| `line_number` (2) | `uint32` | 1-based line number. |
-| `text` (3) | `string` | Matched line content. |
-
-### `SearchTextResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `matches` (1) | `repeated TextMatch` | Matches in path order. |
 
 ### `Interaction`
 
@@ -3283,57 +3131,6 @@ features return an empty id.
 | `session` (1) | `string` | Session identifier. |
 | `turn` (2) | `string` | Turn identifier. |
 
-### `Worktree`
-
-One git worktree.
-
-| Field | Type | Description |
-|---|---|---|
-| `id` (1) | `string` | Worktree identifier. |
-| `path` (2) | `string` | Absolute path of the worktree directory. |
-| `branch` (3) | `string` | Branch checked out in the worktree. |
-| `head` (4) | `string` | HEAD commit hash when known. |
-
-### `ListWorktreesRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-
-### `ListWorktreesResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `worktrees` (1) | `repeated Worktree` | Worktrees of the repository. |
-
-### `CreateWorktreeRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
-| `name` (2) | `string` | Worktree name; derived from the branch when empty. |
-| `branch` (3) | `string` | Branch to check out; created from the current HEAD when empty. |
-
-### `DeleteWorktreeRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `worktree` (1) | `string` | Worktree identifier to delete. |
-| `delete_branch` (2) | `bool` | Also delete the checked-out branch. |
-| `directory` (3) | `string` | Directory scope (absolute): the repository the worktree belongs to. Required: without one the rpc fails with invalid_argument. |
-
-### `ResetWorktreeRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `worktree` (1) | `string` | Worktree identifier to reset. |
-| `directory` (2) | `string` | Directory scope (absolute): the repository the worktree belongs to. Required: without one the rpc fails with invalid_argument. |
-
 ## Enums
 
 ### `AgentEffortSource`
@@ -3372,17 +3169,6 @@ Authentication state of a provider route.
 | `AUTH_STATUS_AUTH_REQUIRED` | 3 | Credentials missing; provider requires them. |
 | `AUTH_STATUS_AUTH_REJECTED` | 4 | Credentials present but rejected by the provider. |
 | `AUTH_STATUS_NOT_APPLICABLE` | 5 | Auth does not apply to this route kind. |
-
-### `DirEntryKind`
-
-Kind of a directory entry.
-
-| Value | Number | Description |
-|---|---|---|
-| `DIR_ENTRY_KIND_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
-| `DIR_ENTRY_KIND_FILE` | 1 | A regular file. |
-| `DIR_ENTRY_KIND_DIRECTORY` | 2 | A subdirectory. |
-| `DIR_ENTRY_KIND_SYMLINK` | 3 | A symbolic link. |
 
 ### `InteractionType`
 

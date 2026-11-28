@@ -40,14 +40,14 @@ The repository organizes all bundles into **three top-level directories** (conso
 
 ```text
 bundles/
-├── builtin/        # 14 trusted first-party bundles upgrading hya --bare to full mode
+├── builtin/        # 15 trusted first-party bundles upgrading hya --bare to full mode
 ├── extra/          # 6 optional official extension bundles (Marketplace-ready)
 └── examples/       # Developer starter & workflow examples
 ```
 
-### 2.1 `bundles/builtin/` (14 Built-in Bundles)
+### 2.1 `bundles/builtin/` (15 Built-in Bundles)
 
-All 14 bundles in `bundles/builtin/` (10 native ABI v2 bundles—4 of which are hybrid `native` + `tui` bundles—3 static preset bundles, and 1 standalone `@hya/tui-sdk` v2 bundle) ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` live inside `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
+All 15 bundles in `bundles/builtin/` (11 native ABI v2 bundles—4 of which are hybrid `native` + `tui` bundles—3 static preset bundles, and 1 standalone `@hya/tui-sdk` v2 bundle) ship in every release archive under `<prefix>/bundles/hya-<name>.hyabundle` and are verified by the independent `builtin-bundles` CI workflow. (`skill` and `code-mode` live inside `hya-bare` core — `crates/hya-core/src/kernel/tools/skill.rs` and `packages/hya-code-mode/` + `crates/hya-app/src/code_mode.rs` — per [ADR-0039](../adr/0039-hya-bare-and-v2-modular-architecture.md).)
 
 | Path | Bundle ID | Runtime | Capabilities | `bare` vs `full` loading role |
 | --- | --- | --- | --- | --- |
@@ -57,6 +57,7 @@ All 14 bundles in `bundles/builtin/` (10 native ABI v2 bundles—4 of which are 
 | `bundles/builtin/network` | `hya/network` | **Native ABI v2** (`cdylib`) | 2 tools (`webfetch`, `websearch`) + `NetworkService` + `ToolVisibility` hook (`config.yml`) | **Full default** via `hya-tool-loader`; disableable for air-gapped operation & skipped in `--bare` |
 | `bundles/builtin/agent-channels` | `hya/agent-channels` | **Native ABI v2** (`cdylib`) + static `channels:` + **TUI v2** | 4 tools (`send`, `list_channel`, `report`, and mail-aware `wait` with `overrides: hya/multi-agent`), `AgentChannelsService` (`services`), `channel://` `UriSchemaHandler` (`schemas`), `unread-mail-steer` `NativeHook` (`hooks`), read-only `BundleApi` (`apis`), `ProjectionReducer`, 2 default channel templates (`unit-default`, `parent-dm-default`), and `@hya/tui-sdk` v2 `send`/`list_channel`/`report` renderers + unread mail status badge | **Full default** via `hya-tool-loader` (`load_v2`); skipped in `--bare` |
 | `bundles/builtin/compaction` | `hya/compaction` | **Native ABI v2** (`cdylib`) | 1 `Rewriter` (`shake` + `remote`, reads `keep_recent` from its own `config.yml`) + 1 `ProjectionReducer` (`extensions["hya/compaction"]`; eviction notices through `tool_output_overrides`) | Loaded through native bundle registration when enabled; disabled by the bare profile |
+| `bundles/builtin/workspace-files` | `hya/workspace-files` | **Native ABI v2** (`cdylib`) | [Filesystem and Git worktree endpoints](../protocol/README.md#workspace-files-and-worktrees) over `BundleApi` | **Full catalog + native ABI v2**, skipped in `--bare` |
 | `bundles/builtin/plan` | `hya/plan` | **Native ABI v2** (`cdylib`) + **TUI v2** | `hya-plan` read-only main agent, `plan_exit` tool (hidden alias `plan`), `tool.visibility` native hook, and `@hya/tui-sdk` v2 `plan_exit` card renderer + `Plan` status badge | **Full catalog + native ABI v2 + TUI v2** via `hya-tool-loader` & `hya-app`; skipped in `--bare` |
 | `bundles/builtin/goal` | `hya/goal` | **Native ABI v2** (`cdylib`) | the `goal` driver (`drivers`, `hya/goal:goal`) + `GoalDriverService` (`services`), 3 goal skills (`goal-contract`, `guided-goal`, `evaluator-prompt`), and 2 private agents (`hya-goal-guide`, `hya-goal-verifier`) | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::goal_driver()`; skipped in `--bare` (`hya -p` errors cleanly when disabled) |
 | `bundles/builtin/loop` | `hya/loop` | **Native ABI v2** (`cdylib`) | the `loop` driver (`hya/loop:loop`), `LoopService` (`capabilities: [services, drivers]`), and `loop-verifier-prompt` / `loop-planner-prompt` skills | **Full catalog + native ABI v2** via `hya-tool-loader` & `HostRuntime::loop_driver()`; skipped in `--bare` (`hya loop` errors cleanly when disabled) |
@@ -156,7 +157,7 @@ runtime:
   abi_version: 2                # Required: 2 (Lockstep Native ABI v2 via crates/hya-runtime-abi)
   crate_dir: native             # Source build directory (not packed as source files into .hyabundle)
   library: native/libacme_my_bundle.so  # Target dynamic library path inside packaged .hyabundle
-  capabilities: [tools, hooks, rewriters, services, apis, schemas, drivers]
+  capabilities: [tools, hooks, rewriters, services, apis, schemas, drivers, providers]
 
 # Self-check contract executed by CI and `hya bundle verify`
 # Tip: use `--pass-with-no-tests` with `bun test` so stripped `.hyabundle` archives (which omit `*.test.ts`) still verify cleanly.
@@ -584,7 +585,7 @@ flowchart TD
 
 ### 7.2 Physical Load Sources for `bundles/builtin/`
 
-Hya selects the physical load source for the 14 built-in bundles automatically based on how `hya` is launched:
+Hya selects the physical load source for the 15 built-in bundles automatically based on how `hya` is launched:
 
 1. **Development checkout (Cargo build outside `<prefix>/bin/`):**
    - *Manifests & static assets:* Reads directly from `bundles/builtin/<name>/` (or `HYA_FIRST_PARTY_SOURCE_ROOT` when pinned by daemon rollback snapshots), falling back to `<target-dir>/bundles/hya-<name>.hyabundle`.
@@ -624,10 +625,10 @@ scripts/bundle-ci/
 Scoped strictly to `bundles/builtin/**` (plus bundle core/loader crates and workflow self-changes), running without `hya-e2e`, unrelated crates, or TUI suites:
 
 1. **`discover`** — scans `bundles/builtin/*` and emits separate `native` (10 ABI v2 bundles) and `js_static` (4 static / TUI bundles) matrices.
-2. **`validate`** — runs `scripts/bundle-ci/verify.mjs` static schema and descriptor validation across all 14 built-in bundles.
+2. **`validate`** — runs `scripts/bundle-ci/verify.mjs` static schema and descriptor validation across all 15 built-in bundles.
 3. **`test-native`** *(10-way matrix)* — runs per-crate `cargo clippy` and `cargo test`, compiles the `cdylib`, verifies the zero-linkage red line and all four required ABI v2 exported symbols (`hya_native_abi_v2`, `hya_native_with_runtime_v2`, `hya_native_share_deadline_v2`, `hya_native_register_v2`), and packs/verifies `.hyabundle`.
 4. **`test-js-static`** *(4-way matrix)* — requires only Bun (no Rust build); executes `check.command` and black-box JSON-RPC / TUI checks via `scripts/bundle-ci/verify.mjs`, plus `.hyabundle` pack/verify.
-5. **`bare-vs-full-smoke`** — confirms `hya exec --bare` runs without `bundles/builtin/` and that all 14 staged `.hyabundle` packages load cleanly.
+5. **`bare-vs-full-smoke`** — confirms `hya exec --bare` runs without `bundles/builtin/` and that all 15 staged `.hyabundle` packages load cleanly.
 6. **`builtin-bundles-gate`** — single summary status check for branch protection.
 
 ### 8.2 `bundles` Workflow (`.github/workflows/bundles.yml` — Marketplace-Portable)

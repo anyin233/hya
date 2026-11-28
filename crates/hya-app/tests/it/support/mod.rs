@@ -87,10 +87,6 @@ impl Provider for IdentityFakeProvider {
         self.inner.capabilities(model)
     }
 
-    fn configured_identity_v1(&self) -> Option<Vec<u8>> {
-        Some(b"hya-test-nested-spawn-identity-v1".to_vec())
-    }
-
     async fn stream(
         &self,
         request: CompletionRequest,

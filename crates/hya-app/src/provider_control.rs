@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_engine::SessionEngine;
+use hya_provider::ProviderKinds;
 use hya_server::{
     PROVIDER_CONTROL_FAILURE, PROVIDER_INVALID_REQUEST, PROVIDER_NOT_FOUND, ProviderChange,
     ProviderControl, ProviderControlError, ProviderControlFuture, ProviderDiscoveryReport,
@@ -27,6 +28,7 @@ use crate::config::{self, ConfigEditError, DiscoverMode, PendingCatalogDiscovery
 #[derive(Clone)]
 pub struct ProviderManager {
     engine: Arc<SessionEngine>,
+    kinds: Arc<ProviderKinds>,
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -61,6 +63,7 @@ pub enum SavedProviderKey<'a> {
 /// Persist a provider declaration, its saved credential, and any preflight
 /// discovery result. A live server upsert passes no preflight result and
 /// discovers after saving. The CLI can reuse the result shown before saving.
+/// `kind` must be one of `kinds`.
 ///
 /// # Errors
 /// Returns config edit or credential file failures. If a credential update
@@ -72,17 +75,15 @@ pub async fn persist_provider_upsert(
     base_url: &str,
     key: SavedProviderKey<'_>,
     discovery: Option<&config::DiscoveryResult>,
+    kinds: &ProviderKinds,
 ) -> Result<(), ConfigEditError> {
     if !hya_provider::valid_provider_id(id) || id == "hya" {
         return Err(ConfigEditError::Invalid(format!(
             "invalid provider id `{id}`"
         )));
     }
-    if !config::PROVIDER_KIND_LABELS.contains(&kind) {
-        return Err(ConfigEditError::Invalid(format!(
-            "unknown provider kind `{kind}` (expected one of {})",
-            config::PROVIDER_KIND_LABELS.join(", ")
-        )));
+    if kinds.protocol(kind).is_none() {
+        return Err(ConfigEditError::Invalid(config::unknown_kind(kind, kinds)));
     }
     config::validate_base_url(base_url).map_err(ConfigEditError::Invalid)?;
     config::upsert_provider_entry(config_path, id, kind, base_url)?;
@@ -112,11 +113,12 @@ fn report(discovery: &config::DiscoveryResult) -> ProviderDiscoveryReport {
 }
 
 impl ProviderManager {
-    /// Manage providers on `engine`.
+    /// Manage providers on `engine`, resolving kinds against `kinds`.
     #[must_use]
-    pub fn new(engine: Arc<SessionEngine>) -> Self {
+    pub fn new(engine: Arc<SessionEngine>, kinds: Arc<ProviderKinds>) -> Self {
         Self {
             engine,
+            kinds,
             lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
@@ -152,10 +154,15 @@ impl ProviderManager {
     ) -> Result<ProviderChange, ProviderControlError> {
         let snapshot = self.engine.provider_snapshot();
         let ids = BTreeSet::from([provider_id.to_string()]);
-        let rebuilt =
-            config::rebuild_providers(Some(&ids), mode, snapshot.catalog(), snapshot.router())
-                .await
-                .map_err(failure)?;
+        let rebuilt = config::rebuild_providers(
+            Some(&ids),
+            mode,
+            snapshot.catalog(),
+            snapshot.router(),
+            &self.kinds,
+        )
+        .await
+        .map_err(failure)?;
         self.engine
             .publish_provider_catalog(Arc::new(rebuilt.router), rebuilt.catalog);
         Ok(ProviderChange {
@@ -254,6 +261,7 @@ impl ProviderControl for ProviderManager {
                     .as_deref()
                     .map_or(SavedProviderKey::Keep, SavedProviderKey::Set),
                 None,
+                &self.kinds,
             )
             .await
             .map_err(edit_error)?;

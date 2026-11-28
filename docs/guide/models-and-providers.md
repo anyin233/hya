@@ -85,6 +85,40 @@ Saved keys from `hya login` or `/key` always take priority over `api_key` in `co
 
 ---
 
+## Where provider kinds come from
+
+Every `kind` a provider uses is registered when Hya starts. The core always registers `openai` (aliases `openai-compatible` and `openai-completion`). The other kinds follow the built-in bundle selection (`bundles.builtin` in `config.yaml`) under these bundle ids:
+
+| Bundle id | Kinds | OAuth type |
+| --- | --- | --- |
+| `hya/provider-anthropic` | `anthropic` | |
+| `hya/provider-google` | `google` | |
+| `hya/provider-openai` | `openai-response`, `openai-codex` | `openai-codex` |
+| `hya/provider-grok` | `grok-build` | `grok-build` |
+
+`profile: full` (the default) enables them all. `hya --bare` and `profile: bare` enable none, so only `openai` routes; list an id under `enable` to add its kinds back:
+
+```yaml
+bundles:
+  builtin:
+    profile: bare
+    enable: [hya/provider-anthropic]
+```
+
+### Unsupported providers
+
+A provider is `unsupported` when its `kind`, or the `kind` of one of its `models:` entries, is not registered, or when its saved OAuth credential has an OAuth type no registered kind provides. An unsupported provider gets no route and no models, but every other provider still works. Startup prints the reason on stderr, for example:
+
+```text
+hya: provider claude: kind `anthropic` is not provided by any enabled bundle (enabled kinds: openai, openai-compatible, openai-completion)
+```
+
+`hya models` does not list its models, and the `/v2` provider summary reports `result: unsupported`. Enable the bundle that provides the kind, or change the `kind`, and restart.
+
+Adding or editing a provider (`/key`, `hya provider add`, `PUT /v2/providers/{id}`) checks only the kind it writes: an unregistered kind is rejected, and other providers with unregistered kinds do not block the edit.
+
+---
+
 ## Switching models and thinking effort
 
 Inside a chat:

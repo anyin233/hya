@@ -46,6 +46,8 @@ pub mod project_plugins;
 mod project_scope;
 /// Live provider management behind the v1 provider routes.
 pub mod provider_control;
+/// Provider kinds the runtime routes, by config `kind` label.
+pub mod provider_kinds;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
 mod runtime_extensions_refresh;
@@ -74,8 +76,8 @@ pub use project_scope::ProjectScopeRefresh;
 pub use provider_control::ProviderManager;
 pub use runtime::{
     BUILTIN_DEFAULT_AGENT_ID, BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice,
-    RuntimeConfig, RuntimeOptions, RuntimeStoreOpenError, RuntimeTaskOwner, ServerEngine,
-    ServerRuntime, agent_base_for_runtime, agent_base_with_model, agent_for_runtime,
+    RuntimeConfig, RuntimeFlags, RuntimeOptions, RuntimeStoreOpenError, RuntimeTaskOwner,
+    ServerEngine, ServerRuntime, agent_base_for_runtime, agent_base_with_model, agent_for_runtime,
     agent_with_model, agent_with_model_pure, bare_tool_registry, build_session_engine,
     build_session_engine_pure, build_session_engine_without_project_plugins, builtin_agent_catalog,
     builtin_agent_catalog_for, builtin_selection, compose_builtin_tool_registry,

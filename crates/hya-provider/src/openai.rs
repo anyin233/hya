@@ -13,17 +13,27 @@ mod responses;
 
 pub use decoder::OpenAiChatDecoder;
 pub use response_decoder::OpenAiResponsesDecoder;
-pub(crate) use responses::GrokBuildProtocol;
-pub(crate) use responses::encode_input_items_for_model;
 pub use responses::{
-    COMPACT_CONTEXT_MARKER, OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER,
-    encode_input_items, format_responses_compact_system, parse_responses_compact_items,
+    GrokBuildProtocol, OpenAiCodexProtocol, OpenAiResponsesProtocol, ResponsesCompactWire,
+    encode_input_items,
 };
 
-/// OpenAI Chat Completions request encoder + SSE decoder factory.
+/// OpenAI Chat Completions request encoder + SSE decoder factory (`kind: openai`).
 pub struct OpenAiChatProtocol;
 
 impl Protocol for OpenAiChatProtocol {
+    fn kind(&self) -> &str {
+        "openai"
+    }
+
+    fn aliases(&self) -> &[&str] {
+        &["openai-compatible", "openai-completion"]
+    }
+
+    fn description(&self) -> &str {
+        "OpenAI Chat Completions (<base>/chat/completions)"
+    }
+
     fn endpoint_url(&self, base: &str, _model: &str) -> String {
         format!("{base}/chat/completions")
     }

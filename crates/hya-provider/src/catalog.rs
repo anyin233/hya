@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use hya_proto::ModelRef;
 
-use crate::{ProviderKind, ProviderModel};
+use crate::ProviderModel;
 
 /// Origin of a model row in the catalog.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,8 +85,12 @@ pub enum ProviderCatalogResult {
 pub struct ProviderCatalogState {
     /// Hya provider id.
     pub provider_id: String,
-    /// Configured protocol kind.
-    pub kind: ProviderKind,
+    /// Configured `kind` label.
+    pub kind: String,
+    /// Whether the kind has an OAuth login flow.
+    pub supports_oauth: bool,
+    /// Smallest `max_output_tokens` the kind's upstream accepts.
+    pub min_output_tokens: u32,
     /// How the provider's model set was obtained.
     pub source: ProviderCatalogSource,
     /// Whether the startup request had usable Hya authentication.
@@ -186,7 +190,9 @@ impl ProviderCatalogSnapshot {
             providers.retain(|provider| provider.provider_id != "hya");
             providers.push(ProviderCatalogState {
                 provider_id: "hya".to_string(),
-                kind: ProviderKind::OpenAiCompatible,
+                kind: "openai".to_string(),
+                supports_oauth: false,
+                min_output_tokens: 1,
                 source: ProviderCatalogSource::Offline,
                 auth: ProviderAuthState::NotApplicable,
                 result: ProviderCatalogResult::Offline,
@@ -201,7 +207,9 @@ impl ProviderCatalogSnapshot {
                 if provider_ids.insert(model.provider_id.clone()) {
                     providers.push(ProviderCatalogState {
                         provider_id: model.provider_id.clone(),
-                        kind: ProviderKind::OpenAiCompatible,
+                        kind: "openai".to_string(),
+                        supports_oauth: false,
+                        min_output_tokens: 1,
                         source: match model.source {
                             ModelCatalogSource::Configured => ProviderCatalogSource::Configured,
                             ModelCatalogSource::Discovered | ModelCatalogSource::Overridden => {

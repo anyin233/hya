@@ -824,13 +824,13 @@ export class FakeBackend {
     }
 
     // Files
-    if (method === "GET" && pathname === "/v2/fs/find") {
+    if (method === "GET" && pathname === "/v2/bundles/hya%2Fworkspace-files/api/fs/find") {
       const pattern = url.searchParams.get("pattern") ?? "*"
       const limit = Number(url.searchParams.get("limit") ?? "50")
       const paths = [...this.files.keys()].filter((p) => globMatch(p, pattern)).slice(0, limit)
       return jsonResponse({ paths })
     }
-    if (method === "GET" && pathname === "/v2/fs/read") {
+    if (method === "GET" && pathname === "/v2/bundles/hya%2Fworkspace-files/api/fs/read") {
       const path = url.searchParams.get("path") ?? ""
       const bytes = this.files.get(path)
       if (!bytes) return errorResponse(404, "not_found", `file not found: ${path}`)

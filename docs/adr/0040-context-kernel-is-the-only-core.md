@@ -29,8 +29,8 @@ everyone else, and if the core has no second code path for them.
    tools.
 2. **Everything else is a bundle.** The core exposes generic injection
    points: tools, rewriters, hooks, services, BundleApi, projection reducers,
-   URI schemes, drivers, CLI commands, and TUI contributions. It never names a
-   bundle or a bundle concept.
+   URI schemes, drivers, provider kinds, CLI commands, and TUI contributions.
+   It never names a bundle or a bundle concept.
 3. **First-party bundles get no privileges.** They load through the public
    Native ABI v2 and `@hya/tui-sdk` v2 only, like a third-party bundle.
 4. **One turn path, one interface.** Every turn runs through
@@ -73,7 +73,14 @@ everyone else, and if the core has no second code path for them.
   on `snake_case` and `camelCase` boundaries in Rust, TypeScript, and
   protobuf identifiers; comments, string literals, tests, and generated code
   do not count. A short exemption list covers generic vocabulary that shares
-  a word, such as `std::fmt::Formatter` and async `mpsc::channel` queues.
+  a word, such as `std::fmt::Formatter` and async `mpsc::channel` queues;
+- a crate depends (normal or build dependency) on a crate of an outer ring, a
+  client, or tooling. The `[rings]` map places every directory under
+  `crates/` and `packages/` in exactly one group: R0, R1, R2, the `hya`
+  executable (which composes R2 with bundle tooling and the client library,
+  and on which nothing depends), clients, bundle tooling, or repository
+  tooling. `cargo run -p xtask -- ring-report` counts production lines per
+  ring from the same map, with the five standard tools on their own row.
 
 The guard started with an allowlist of the violations on `8a7d52dc`. An entry
 that no longer matches a violation also fails the guard, so the allowlist

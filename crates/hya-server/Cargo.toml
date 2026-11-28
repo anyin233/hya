@@ -35,7 +35,6 @@ tokio-util = { workspace = true }
 futures = { workspace = true }
 libc = { workspace = true }
 pbjson-types = { workspace = true }
-mime_guess = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 tonic = { workspace = true }

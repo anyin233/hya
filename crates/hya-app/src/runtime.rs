@@ -29,7 +29,9 @@ use hya_mcp::McpServerConfig;
 use hya_plugin::HostInfo;
 use hya_plugin::config::PluginSpec;
 use hya_proto::{AgentName, FinishCause, ModelRef, OwnerRunId, SessionId};
-use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
+use hya_provider::{
+    DevProvider, ProviderCatalogSnapshot, ProviderKinds, ProviderRouter, ReasoningEffort,
+};
 use hya_store::SessionStore;
 use hya_tool::{
     Action, AliasVisibility, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, Mode,
@@ -281,6 +283,8 @@ pub struct RuntimeConfig {
     pub router: ProviderRouter,
     /// Shared immutable startup model/provider catalog.
     pub catalog: Arc<ProviderCatalogSnapshot>,
+    /// Provider kinds registered by the core and the enabled bundles.
+    pub kinds: Arc<ProviderKinds>,
     /// Active request model id for new sessions.
     pub model: String,
     /// MCP server configs to connect at engine build.
@@ -305,6 +309,24 @@ pub struct RuntimeConfig {
     pub settings: config::EngineSettings,
 }
 
+/// Startup flags that change what [`resolve_runtime`] composes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeFlags {
+    /// `--bare` (`BuiltinBundleProfile::Bare`): disable all built-in
+    /// first-party bundles (their provider kinds included), use the 8
+    /// standard bare tools (`read`, `write`, `edit`, `bash`, `grep`, `todo`,
+    /// `rewrite`, `skill`), core `code-mode` without `agent()`, and the
+    /// minimal `hya-bare` default agent while keeping `AGENTS.md`,
+    /// filesystem skills, MCP, and user/project bundles and plugins active
+    /// (unless `pure` is also set).
+    pub bare: bool,
+    /// `--pure`: load no external MCP servers or plugins (config is
+    /// cleared), and mark the runtime so engine builds and per-turn guidance
+    /// skip external context. Websearch keeps its own configuration; builtin
+    /// tools and the embedded skill catalog are unaffected.
+    pub pure: bool,
+}
+
 impl RuntimeConfig {
     /// When `yolo` is true, force [`PermissionModel::Danger`] (auto-approve all tools).
     #[must_use]
@@ -315,31 +337,18 @@ impl RuntimeConfig {
         self
     }
 
-    /// `--pure` mode: load no external MCP servers or plugins (config is
-    /// cleared), and mark the runtime so engine builds and per-turn guidance
-    /// skip external context. Websearch keeps its own configuration; builtin
-    /// tools and the embedded skill catalog are unaffected.
+    /// Apply `--bare` and `--pure` ([`RuntimeFlags`]) to a resolved runtime.
+    /// The provider kinds must already come from the matching selection.
     #[must_use]
-    pub fn with_pure(mut self, pure: bool) -> Self {
-        if pure {
-            self.mcp.clear();
-            self.plugins.clear();
-        }
-        self.pure = pure;
-        self
-    }
-
-    /// `--bare`: the empty built-in bundle set ([`builtin_selection`]), so
-    /// the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`,
-    /// `todo`, `rewrite`, `skill`), core `code-mode` without `agent()`, and the
-    /// compiled-in `hya-bare` default agent, while keeping `AGENTS.md`,
-    /// filesystem skills, MCP, and user/project bundles and plugins active
-    /// (unless `--pure` is also set).
-    #[must_use]
-    pub fn with_bare(mut self, bare: bool) -> Self {
-        if bare {
+    pub fn with_flags(mut self, flags: RuntimeFlags) -> Self {
+        if flags.bare {
             self.settings.set_builtin_bundles(builtin_selection(true));
             self.default_agent = None;
+        }
+        if flags.pure {
+            self.mcp.clear();
+            self.plugins.clear();
+            self.pure = true;
         }
         self
     }
@@ -357,10 +366,15 @@ pub fn builtin_selection(bare: bool) -> hya_bundle::BuiltinBundleSelection {
 }
 
 /// The offline-provider runtime, built without reading `config.yaml`: no
-/// providers, MCP servers, or plugins. `strict` asks before every tool use
-/// (the fallback after a configuration error).
+/// providers, MCP servers, or plugins, with the provider `kinds` given.
+/// `strict` asks before every tool use (the fallback after a configuration
+/// error).
 #[must_use]
-pub fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfig {
+pub fn offline_runtime(
+    model_override: Option<String>,
+    strict: bool,
+    kinds: Arc<ProviderKinds>,
+) -> RuntimeConfig {
     let (router, model) = offline_router(model_override);
     let catalog = Arc::new(ProviderCatalogSnapshot::build(
         Vec::new(),
@@ -371,6 +385,7 @@ pub fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeC
     RuntimeConfig {
         router,
         catalog,
+        kinds,
         model,
         mcp: BTreeMap::new(),
         plugins: Vec::new(),
@@ -390,27 +405,54 @@ pub fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeC
 }
 
 /// Resolve providers and the immutable catalog before returning runtime state.
-/// A configuration error falls back to the offline provider (with a notice).
-pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
-    match resolve_runtime_strict(model_override.clone()).await {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("hya: config error ({error:#}); using the offline provider");
-            offline_runtime(model_override, true)
-        }
-    }
-}
-
-/// [`resolve_runtime`] without the offline fallback: a configuration error
-/// is returned rather than composing the offline provider.
+///
+/// The config is parsed first, its bundle selection (bare under
+/// `flags.bare`) decides the registered provider kinds, and the providers
+/// then resolve against those kinds. A configuration error falls back to the
+/// offline provider (with a notice); the kinds stay registered, so provider
+/// control can still add a provider.
 ///
 /// # Errors
-///
-/// The configuration could not be loaded.
-async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Result<RuntimeConfig> {
-    let Some(cfg) = config::load().await? else {
-        return Ok(offline_runtime(model_override, false));
+/// The provider kinds of the selection could not be registered.
+pub async fn resolve_runtime(
+    model_override: Option<String>,
+    flags: RuntimeFlags,
+) -> anyhow::Result<RuntimeConfig> {
+    let parsed = config::parse();
+    let selection = if flags.bare {
+        hya_bundle::BuiltinBundleSelection::bare()
+    } else {
+        match &parsed {
+            Ok(Some(parsed)) => parsed.builtin_bundles().clone(),
+            Ok(None) | Err(_) => hya_bundle::BuiltinBundleSelection::default(),
+        }
     };
+    let kinds = crate::provider_kinds::load(&selection)?;
+    let configured = match parsed {
+        Ok(None) => Ok(None),
+        Ok(Some(parsed)) => configured_runtime(model_override.clone(), parsed, Arc::clone(&kinds))
+            .await
+            .map(Some),
+        Err(error) => Err(error),
+    };
+    let runtime = match configured {
+        Ok(Some(runtime)) => runtime,
+        Ok(None) => offline_runtime(model_override, false, kinds),
+        Err(error) => {
+            eprintln!("hya: config error ({error:#}); using the offline provider");
+            offline_runtime(model_override, true, kinds)
+        }
+    };
+    Ok(runtime.with_flags(flags))
+}
+
+/// The runtime of a parsed config resolved against `kinds`.
+async fn configured_runtime(
+    model_override: Option<String>,
+    parsed: config::ParsedConfig,
+    kinds: Arc<ProviderKinds>,
+) -> anyhow::Result<RuntimeConfig> {
+    let cfg = config::resolve(parsed, &kinds).await?;
     let model = model_override
         .or_else(|| std::env::var("HYA_MODEL").ok())
         .unwrap_or_else(|| cfg.default_model.clone());
@@ -420,6 +462,7 @@ async fn resolve_runtime_strict(model_override: Option<String>) -> anyhow::Resul
     Ok(RuntimeConfig {
         router: cfg.router,
         catalog: cfg.catalog,
+        kinds,
         model,
         mcp: cfg.mcp,
         plugins: plugins::resolve(cfg.plugins),
@@ -1406,6 +1449,7 @@ pub struct ServerEngine {
     auto_title: bool,
     use_core_commands: bool,
     pending_discovery: Vec<config::PendingCatalogDiscovery>,
+    kinds: Arc<ProviderKinds>,
 }
 
 impl ServerEngine {
@@ -1449,6 +1493,7 @@ impl ServerEngine {
             auto_title,
             use_core_commands,
             pending_discovery: runtime.pending_discovery,
+            kinds: runtime.kinds,
         })
     }
 
@@ -1460,7 +1505,7 @@ impl ServerEngine {
             .take_questions()
             .context("questions receiver missing")?;
         let engine = self.built.engine();
-        let provider_manager = crate::ProviderManager::new(Arc::clone(&engine));
+        let provider_manager = crate::ProviderManager::new(Arc::clone(&engine), self.kinds);
         let state = hya_server::AppState::new(engine, self.agent)
             .with_provider_control(Arc::new(provider_manager.clone()))
             .with_bundle_control(Arc::new(
@@ -1592,11 +1637,15 @@ impl HyaRuntime {
 
     async fn start_with_store(store: SessionStore, opts: RuntimeOptions) -> anyhow::Result<Self> {
         let runtime = if opts.force_offline {
-            let mut runtime = offline_runtime(opts.model, false);
+            let mut runtime = offline_runtime(
+                opts.model,
+                false,
+                crate::provider_kinds::load(&hya_bundle::BuiltinBundleSelection::default())?,
+            );
             runtime.default_agent = opts.default_agent;
             runtime
         } else {
-            let mut runtime = resolve_runtime(opts.model).await;
+            let mut runtime = resolve_runtime(opts.model, RuntimeFlags::default()).await?;
             if opts.default_agent.is_some() {
                 runtime.default_agent = opts.default_agent;
             }

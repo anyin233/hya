@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 hya-bundle = { workspace = true }
 hya-context = { workspace = true }
 hya-proto = { workspace = true }
+hya-provider = { workspace = true }
 hya-tool = { workspace = true }
 hya-tool-error = { workspace = true }
 hya-version = { workspace = true }

@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use hya_provider::{
-    AuthPresence, AuthRefresher, BearerResolver, CatalogAuth, HttpProvider, ModelCatalogSource,
-    ProviderAuthState, ProviderKind, ReasoningEffort,
+    AuthPresence, AuthRefresher, BearerResolver, HttpProvider, ModelCatalogSource, Protocol,
+    ProviderAuthFlow, ProviderAuthState, ProviderKinds, ReasoningEffort, RouteCredential,
 };
 use serde::Deserialize;
-use serde_norway::Value;
 
 use super::file::FileConfig;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ProviderConfig {
-    pub(super) kind: ProviderKindConfig,
+    /// Kind label, resolved against the registered provider kinds.
+    pub(super) kind: String,
     pub(super) base_url: String,
     /// Literal, `{env:VAR}`, or `{file:path}`. Optional — a token saved via
     /// `hya login` (`~/.config/hya/auth/<id>.yaml`) takes precedence.
@@ -25,7 +25,7 @@ pub(super) struct ProviderConfig {
     /// Unset fields inherit the global value.
     #[serde(default)]
     pub(super) retry: Option<ProviderRetryFile>,
-    /// Optional per-route override; Anthropic defaults on, other kinds off.
+    /// Optional per-route override; defaults to whether the kind supports it.
     #[serde(default)]
     prompt_cache: Option<bool>,
 }
@@ -206,67 +206,15 @@ struct ModelReasoningConfig {
     variants: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(super) enum ProviderKindConfig {
-    #[serde(
-        rename = "openai",
-        alias = "openai-compatible",
-        alias = "openai-completion"
-    )]
-    Openai,
-    #[serde(rename = "openai-response")]
-    OpenaiResponse,
-    #[serde(rename = "openai-codex")]
-    OpenaiCodex,
-    #[serde(rename = "grok-build")]
-    GrokBuild,
-    Anthropic,
-    Google,
-}
-
-impl From<ProviderKindConfig> for ProviderKind {
-    fn from(kind: ProviderKindConfig) -> Self {
-        match kind {
-            ProviderKindConfig::Openai => Self::OpenAiCompatible,
-            ProviderKindConfig::OpenaiResponse => Self::OpenAiResponse,
-            ProviderKindConfig::OpenaiCodex => Self::OpenAiCodex,
-            ProviderKindConfig::GrokBuild => Self::GrokBuild,
-            ProviderKindConfig::Anthropic => Self::Anthropic,
-            ProviderKindConfig::Google => Self::Google,
-        }
-    }
-}
-
-/// Validate one model entry's `kind` override label and map it to a protocol.
-///
-/// The accepted labels are exactly the provider `kind` labels (including the
-/// `openai-compatible` / `openai-completion` aliases): parsing goes through
-/// [`ProviderKindConfig`], so the label set has a single source.
-fn parse_model_kind(
-    provider_id: &str,
-    model_id: &str,
-    label: &str,
-) -> anyhow::Result<ProviderKind> {
-    let parsed: ProviderKindConfig =
-        serde_norway::from_value(Value::String(label.to_string())).map_err(|_| {
-            anyhow::anyhow!(
-                "provider {provider_id} model {model_id} has unknown kind {label} (expected one of {})",
-                PROVIDER_KIND_LABELS.join(", ")
-            )
-        })?;
-    Ok(parsed.into())
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct ParsedModel {
     pub(super) id: String,
-    /// Effective protocol: the entry's `kind` override, else the provider's.
-    pub(super) kind: ProviderKind,
+    /// Effective kind label: the entry's `kind` override, else the provider's.
+    pub(super) kind: String,
     /// Configured display name (`name`).
     pub(super) display_name: Option<String>,
     /// Effort menu from config (`reasoning.variants`, `reasoning: false` →
-    /// empty), else the provider-kind fallback menu.
+    /// empty); empty and filled from the kind when not configured.
     pub(super) reasoning_variants: Vec<String>,
     /// Whether config set the menu itself (`reasoning.variants` or
     /// `reasoning: false`); otherwise remote-list variants win over the
@@ -317,7 +265,8 @@ fn resolve_model_limit(
 #[derive(Clone, Debug)]
 pub(crate) struct ParsedProvider {
     pub(super) id: String,
-    pub(super) kind: ProviderKind,
+    /// Kind label as written.
+    pub(super) kind: String,
     pub(super) base_url: String,
     pub(super) api_key: Option<String>,
     pub(super) models: Vec<ParsedModel>,
@@ -329,14 +278,11 @@ pub(crate) struct ParsedProvider {
 pub(crate) struct ProviderCredential {
     /// Hya-owned bearer or API-key material, when configured.
     pub(super) token: Option<String>,
-    /// When true, attach Grok Build CLI chat-proxy session headers.
-    pub(super) use_grok_session: bool,
-    /// When true, attach ChatGPT Codex session headers.
-    pub(super) use_codex_session: bool,
-    /// ChatGPT account id for Codex OAuth (if known).
+    /// Account id stored with an OAuth credential (ChatGPT Codex), if known.
     pub(super) account_id: Option<String>,
-    /// When true, re-resolve the bearer via OAuth refresh on each stream.
-    pub(super) use_oauth_refresh: bool,
+    /// OAuth type of a saved OAuth credential with a token; its registered
+    /// flow re-resolves the bearer on each stream.
+    pub(super) oauth_type: Option<String>,
 }
 
 impl ProviderCredential {
@@ -350,6 +296,14 @@ impl ProviderCredential {
                 AuthPresence::Credentialed
             })
     }
+
+    /// The credential a route or discovery request sends, when there is a token.
+    pub(super) fn route_credential(&self) -> Option<RouteCredential> {
+        self.token.clone().map(|token| RouteCredential {
+            token,
+            account_id: self.account_id.clone(),
+        })
+    }
 }
 
 /// Resolve optional auth for a provider from Hya login token or inline key.
@@ -361,10 +315,10 @@ pub(super) fn resolve_provider_credential(
         let oauth = cred.oauth();
         return Ok(ProviderCredential {
             token: (!token.is_empty()).then(|| token.to_string()),
-            use_grok_session: provider.kind == ProviderKind::GrokBuild,
-            use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
             account_id: oauth.and_then(|o| o.account_id.clone()),
-            use_oauth_refresh: oauth.is_some() && !token.is_empty(),
+            oauth_type: oauth
+                .filter(|_| !token.is_empty())
+                .map(|oauth| oauth.oauth_type.clone()),
         });
     }
     let token = provider
@@ -375,16 +329,13 @@ pub(super) fn resolve_provider_credential(
         .map(str::to_string);
     Ok(ProviderCredential {
         token,
-        use_grok_session: provider.kind == ProviderKind::GrokBuild,
-        use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     })
 }
 
 #[cfg(test)]
 pub(super) fn resolve_provider_credential_with(
-    kind: ProviderKind,
     login_token: Option<&str>,
     inline_api_key: Option<&str>,
 ) -> Option<ProviderCredential> {
@@ -394,24 +345,10 @@ pub(super) fn resolve_provider_credential_with(
         .filter(|t| !t.is_empty())?;
     Some(ProviderCredential {
         token: Some(token.to_string()),
-        use_grok_session: kind == ProviderKind::GrokBuild,
-        use_codex_session: kind == ProviderKind::OpenAiCodex,
         account_id: None,
-        use_oauth_refresh: false,
+        oauth_type: None,
     })
 }
-
-/// Config `kind` labels a provider declaration may use.
-pub const PROVIDER_KIND_LABELS: &[&str] = &[
-    "openai",
-    "openai-compatible",
-    "openai-completion",
-    "openai-response",
-    "openai-codex",
-    "grok-build",
-    "anthropic",
-    "google",
-];
 
 pub(crate) fn resolve_secret(raw: &str) -> anyhow::Result<String> {
     if let Some(var) = raw.strip_prefix("{env:").and_then(|s| s.strip_suffix('}')) {
@@ -435,6 +372,9 @@ pub(super) fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedP
 /// Parse and validate provider declarations. `only` restricts the result to
 /// those ids; `resolve_secrets: false` validates without expanding
 /// `{env:…}`/`{file:…}` keys (used to validate config edits).
+///
+/// Kind labels are not resolved here, so the result does not depend on which
+/// provider kinds are registered; [`merge_provider_models`] resolves them.
 pub(super) fn resolve_providers_filtered(
     file: &FileConfig,
     only: Option<&BTreeSet<String>>,
@@ -445,7 +385,6 @@ pub(super) fn resolve_providers_filtered(
         if only.is_some_and(|only| !only.contains(id)) {
             continue;
         }
-        let kind: ProviderKind = provider.kind.into();
         let mut seen = BTreeSet::new();
         let mut models = Vec::new();
         for model in &provider.models {
@@ -480,20 +419,15 @@ pub(super) fn resolve_providers_filtered(
             if !seen.insert(model_id.to_string()) {
                 continue;
             }
-            let effective_kind = match entry_kind {
-                Some(label) => parse_model_kind(id, model_id, label)?,
-                None => kind,
-            };
-            let fallback_variants = if reasoning_off {
-                Vec::new()
-            } else {
-                effective_kind.reasoning_variants()
-            };
+            let effective_kind = entry_kind
+                .unwrap_or(provider.kind.as_str())
+                .trim()
+                .to_string();
             let variants_configured =
                 reasoning_off || reasoning.is_some_and(|config| config.variants.is_some());
             let configured_variants = reasoning
-                .and_then(|config| config.variants.as_ref())
-                .unwrap_or(&fallback_variants);
+                .and_then(|config| config.variants.clone())
+                .unwrap_or_default();
             let efforts = configured_variants
                 .iter()
                 .map(|variant| {
@@ -518,7 +452,10 @@ pub(super) fn resolve_providers_filtered(
                     })
                 })
                 .transpose()?;
+            // Without configured variants the menu comes from the kind, and
+            // `merge_provider_models` checks the default against it.
             if let Some(default) = explicit_default
+                && variants_configured
                 && default != ReasoningEffort::Off
                 && !efforts.contains(&default)
             {
@@ -564,7 +501,7 @@ pub(super) fn resolve_providers_filtered(
         };
         out.push(ParsedProvider {
             id: id.clone(),
-            kind,
+            kind: provider.kind.trim().to_string(),
             base_url: provider.base_url.clone(),
             api_key,
             models,
@@ -602,32 +539,6 @@ fn map_oauth_error(err: crate::oauth::OAuthError) -> hya_provider::ProviderError
     }
 }
 
-pub(super) fn discovery_auth(kind: ProviderKind, credential: &ProviderCredential) -> CatalogAuth {
-    match kind {
-        ProviderKind::Anthropic | ProviderKind::Google => credential
-            .token
-            .clone()
-            .map_or_else(CatalogAuth::unauthenticated, CatalogAuth::api_key),
-        ProviderKind::OpenAiCodex => credential
-            .token
-            .clone()
-            .map_or_else(CatalogAuth::unauthenticated, |token| {
-                CatalogAuth::bearer(token, credential.account_id.clone())
-            }),
-        ProviderKind::GrokBuild => CatalogAuth::grok(
-            credential.token.clone(),
-            hya_version::BACKEND_VERSION,
-            "grok-cli",
-        ),
-        ProviderKind::OpenAiCompatible | ProviderKind::OpenAiResponse => credential
-            .token
-            .clone()
-            .map_or_else(CatalogAuth::unauthenticated, |token| {
-                CatalogAuth::bearer(token, None)
-            }),
-    }
-}
-
 pub(super) fn status_auth(credential: &ProviderCredential) -> ProviderAuthState {
     match credential.auth_presence() {
         AuthPresence::Credentialed => ProviderAuthState::Credentialed,
@@ -640,8 +551,9 @@ pub(super) fn status_auth(credential: &ProviderCredential) -> ProviderAuthState 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct EffectiveModel {
     pub(super) id: String,
-    /// Effective protocol: the entry's `kind` override, else the provider's.
-    pub(super) kind: ProviderKind,
+    /// Canonical label of the effective kind: the entry's `kind` override,
+    /// else the provider's.
+    pub(super) kind: String,
     pub(super) display_name: Option<String>,
     pub(super) reasoning_variants: Vec<String>,
     pub(super) reasoning_default: Option<ReasoningEffort>,
@@ -654,22 +566,123 @@ pub(super) struct EffectiveModel {
     pub(super) source: ModelCatalogSource,
 }
 
+/// Protocol registered for kind `label` of `provider_id` (`model_id` for an
+/// entry's `kind` override).
+pub(super) fn kind_protocol(
+    kinds: &ProviderKinds,
+    provider_id: &str,
+    model_id: Option<&str>,
+    label: &str,
+) -> anyhow::Result<Arc<dyn Protocol>> {
+    kinds.protocol(label).cloned().ok_or_else(|| {
+        let owner = model_id.map_or_else(
+            || format!("provider {provider_id}"),
+            |model_id| format!("provider {provider_id} model {model_id}"),
+        );
+        anyhow::anyhow!(
+            "{owner} has unknown kind {label} (expected one of {})",
+            kinds.labels().collect::<Vec<_>>().join(", ")
+        )
+    })
+}
+
+/// What a provider routes with once its kinds and OAuth type are registered.
+pub(super) struct ProviderSupport {
+    /// Protocol of the provider's own `kind`.
+    pub(super) protocol: Arc<dyn Protocol>,
+    /// Flow that refreshes the provider's saved OAuth credential.
+    pub(super) auth_flow: Option<Arc<dyn ProviderAuthFlow>>,
+}
+
+/// Look up `provider`'s kind, every model `kind:` override, and its saved
+/// OAuth type in `kinds`; the error says which one no enabled bundle provides.
+pub(super) fn provider_support(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+    kinds: &ProviderKinds,
+) -> Result<ProviderSupport, String> {
+    let missing_kind = |owner: String, label: &str| {
+        format!(
+            "{owner}: kind `{label}` is not provided by any enabled bundle (enabled kinds: {})",
+            kinds.labels().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let protocol = kinds
+        .protocol(&provider.kind)
+        .cloned()
+        .ok_or_else(|| missing_kind(format!("provider {}", provider.id), &provider.kind))?;
+    if let Some(model) = provider
+        .models
+        .iter()
+        .find(|model| kinds.protocol(&model.kind).is_none())
+    {
+        return Err(missing_kind(
+            format!("provider {} model {}", provider.id, model.id),
+            &model.kind,
+        ));
+    }
+    let auth_flow = match &credential.oauth_type {
+        Some(oauth_type) => Some(kinds.auth_flow(oauth_type).cloned().ok_or_else(|| {
+            format!(
+                "provider {}: OAuth type `{oauth_type}` of its saved credential is not provided by any enabled bundle",
+                provider.id
+            )
+        })?),
+        None => None,
+    };
+    Ok(ProviderSupport {
+        protocol,
+        auth_flow,
+    })
+}
+
+fn variant_labels(protocol: &dyn Protocol) -> Vec<String> {
+    protocol
+        .reasoning_variant_labels()
+        .iter()
+        .map(|label| (*label).to_string())
+        .collect()
+}
+
 /// Merge cached remote rows with config entries, per model id.
 ///
 /// Remote-only rows keep their cached metadata; config-only entries keep
 /// today's configured semantics; a model in both is an override whose config
 /// fields win field by field and whose unset config fields fall back to the
 /// cached metadata. Cached rows come first (remote order), then config-only
-/// entries (config order).
+/// entries (config order). Kind labels resolve against `kinds`: an entry
+/// without configured variants gets its kind's menu, and its configured
+/// default must be on it.
 pub(super) fn merge_provider_models(
     provider: &ParsedProvider,
     cached: &[crate::model_cache::CachedModel],
-) -> Vec<EffectiveModel> {
-    let configured = provider
-        .models
-        .iter()
-        .map(|model| (model.id.as_str(), model))
-        .collect::<BTreeMap<_, _>>();
+    kinds: &ProviderKinds,
+) -> anyhow::Result<Vec<EffectiveModel>> {
+    let provider_protocol = kind_protocol(kinds, &provider.id, None, &provider.kind)?;
+    let mut configured = Vec::with_capacity(provider.models.len());
+    for model in &provider.models {
+        let protocol = kind_protocol(kinds, &provider.id, Some(&model.id), &model.kind)?;
+        let mut model = model.clone();
+        model.kind = protocol.kind().to_string();
+        if !model.variants_configured {
+            model.reasoning_variants = variant_labels(protocol.as_ref());
+            if let Some(default) = model.reasoning_default
+                && default != ReasoningEffort::Off
+                && !model
+                    .reasoning_variants
+                    .iter()
+                    .any(|v| v == default.as_str())
+            {
+                anyhow::bail!(
+                    "provider {} model {} reasoning default {} is not advertised",
+                    provider.id,
+                    model.id,
+                    default.as_str()
+                );
+            }
+        }
+        configured.push(model);
+    }
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for row in cached {
@@ -677,16 +690,16 @@ pub(super) fn merge_provider_models(
         if id.is_empty() || (provider.id == "hya" && id == "offline") || !seen.insert(id) {
             continue;
         }
-        out.push(match configured.get(id) {
+        out.push(match configured.iter().find(|model| model.id == id) {
             Some(config) => override_model(config, row),
-            None => remote_model(provider.kind, row),
+            None => remote_model(provider_protocol.as_ref(), row),
         });
     }
-    for model in &provider.models {
+    for model in &configured {
         if seen.insert(model.id.as_str()) {
             out.push(EffectiveModel {
                 id: model.id.clone(),
-                kind: model.kind,
+                kind: model.kind.clone(),
                 display_name: model.display_name.clone(),
                 reasoning_variants: model.reasoning_variants.clone(),
                 reasoning_default: model.reasoning_default,
@@ -697,10 +710,10 @@ pub(super) fn merge_provider_models(
             });
         }
     }
-    out
+    Ok(out)
 }
 
-fn cached_variants(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> Vec<String> {
+fn cached_variants(fallback: &[String], row: &crate::model_cache::CachedModel) -> Vec<String> {
     let variants = row
         .reasoning_variants
         .iter()
@@ -708,7 +721,7 @@ fn cached_variants(kind: ProviderKind, row: &crate::model_cache::CachedModel) ->
         .map(|effort| effort.as_str().to_string())
         .collect::<Vec<_>>();
     if variants.is_empty() {
-        kind.reasoning_variants()
+        fallback.to_vec()
     } else {
         variants
     }
@@ -725,12 +738,12 @@ fn cached_reasoning_declared(row: &crate::model_cache::CachedModel) -> Option<bo
     declared.then_some(true)
 }
 
-fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> EffectiveModel {
+fn remote_model(protocol: &dyn Protocol, row: &crate::model_cache::CachedModel) -> EffectiveModel {
     EffectiveModel {
         id: row.id.trim().to_string(),
-        kind,
+        kind: protocol.kind().to_string(),
         display_name: row.display_name.clone(),
-        reasoning_variants: cached_variants(kind, row),
+        reasoning_variants: cached_variants(&variant_labels(protocol), row),
         // Remote metadata describes capabilities, not a user selection.
         reasoning_default: None,
         limit: hya_provider::ModelLimitOverride {
@@ -749,7 +762,10 @@ fn override_model(config: &ParsedModel, row: &crate::model_cache::CachedModel) -
     } else {
         // Cached variants refine the menu; the explicit configured default
         // (if any) still decides the request effort.
-        (cached_variants(config.kind, row), config.reasoning_default)
+        (
+            cached_variants(&config.reasoning_variants, row),
+            config.reasoning_default,
+        )
     };
     let configured_limit = config.limit.clone().unwrap_or_default();
     let mut limit = hya_provider::ModelLimitOverride {
@@ -774,7 +790,7 @@ fn override_model(config: &ParsedModel, row: &crate::model_cache::CachedModel) -
     }
     EffectiveModel {
         id: config.id.clone(),
-        kind: config.kind,
+        kind: config.kind.clone(),
         display_name: config
             .display_name
             .clone()
@@ -794,18 +810,21 @@ fn override_model(config: &ParsedModel, row: &crate::model_cache::CachedModel) -
 pub(super) fn route_for_models(
     provider: &ParsedProvider,
     credential: &ProviderCredential,
-    kind: ProviderKind,
+    protocol: Arc<dyn Protocol>,
+    auth_flow: Option<&Arc<dyn ProviderAuthFlow>>,
     models: &[EffectiveModel],
 ) -> anyhow::Result<HttpProvider> {
-    let prompt_cache = provider.prompt_cache;
+    let prompt_cache = provider
+        .prompt_cache
+        .unwrap_or_else(|| protocol.supports_prompt_cache());
     let mut route = HttpProvider::new(
         provider.id.clone(),
-        kind,
+        protocol,
         &provider.base_url,
-        credential.token.clone(),
+        credential.route_credential(),
         models.iter().map(|model| model.id.clone()),
     )?
-    .with_prompt_cache(prompt_cache.unwrap_or(kind == ProviderKind::Anthropic))
+    .with_prompt_cache(prompt_cache)
     .with_catalog_source(ModelCatalogSource::Configured)
     .with_retry(provider.retry)
     .with_model_sources(models.iter().map(|model| (model.id.clone(), model.source)))
@@ -841,23 +860,24 @@ pub(super) fn route_for_models(
             .reasoning_declared
             .map(|declared| (model.id.clone(), declared))
     }));
-    if credential.use_codex_session {
-        route = route.with_codex_session_auth(credential.account_id.clone());
-    }
-    if credential.use_grok_session {
-        route = route.with_grok_session_auth(hya_version::BACKEND_VERSION, "grok-cli");
-    }
-    if credential.use_oauth_refresh && credential.token.is_some() {
+    if let Some(flow) = auth_flow {
         let resolver_id = provider.id.clone();
         let refresher_id = provider.id.clone();
+        let resolver_flow = Arc::clone(flow);
+        let refresher_flow = Arc::clone(flow);
         let resolver: BearerResolver = Arc::new(move || {
-            crate::oauth::ensure_access_token(&resolver_id).map_err(map_oauth_error)
+            crate::oauth::ensure_access_token(&resolver_id, resolver_flow.as_ref())
+                .map_err(map_oauth_error)
         });
         route = route.with_bearer_resolver(resolver);
         let refresher: AuthRefresher = Arc::new(move |stale_token: &str| {
-            crate::oauth::force_refresh_access_token(&refresher_id, stale_token)
-                .map(|_fresh| ())
-                .map_err(map_oauth_error)
+            crate::oauth::force_refresh_access_token(
+                &refresher_id,
+                stale_token,
+                refresher_flow.as_ref(),
+            )
+            .map(|_fresh| ())
+            .map_err(map_oauth_error)
         });
         route = route.with_auth_refresher(refresher);
     }
