@@ -3777,12 +3777,7 @@ async fn catalog_scope_sweeper_evicts_idle_scopes_until_stopped() {
 #[tokio::test]
 async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hya_bare_agent() {
     let home = tempdir();
-    let empty_bundles = tempdir();
-    let mut env = EnvGuard::with_home(&home, &home);
-    env.set(
-        "HYA_FIRST_PARTY_SOURCE_ROOT",
-        empty_bundles.to_string_lossy().as_ref(),
-    );
+    let _env = EnvGuard::with_home(&home, &home);
 
     let workdir = tempdir();
     std::fs::write(workdir.join("AGENTS.md"), "# Bare Test\nBARE_APP_MARKER\n").unwrap();
