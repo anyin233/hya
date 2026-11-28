@@ -193,6 +193,43 @@ pub struct BundleClaimLease {
 /// Generic bundle KV (`bundle_state`) and fenced lease (`bundle_claim`) storage.
 #[async_trait]
 pub trait HostBundleStorage: Send + Sync {
+    /// Read a process-local JSON value in a bundle's session scope.
+    fn get_transient_state(
+        &self,
+        _bundle: &str,
+        _session: SessionId,
+        _key: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Err(HostError::Unavailable(
+            "transient state is unavailable".into(),
+        ))
+    }
+
+    /// Set a process-local value, or remove it with `None`.
+    fn set_transient_state(
+        &self,
+        _bundle: &str,
+        _session: SessionId,
+        _key: &str,
+        _value: Option<Value>,
+    ) -> Result<(), HostError> {
+        Err(HostError::Unavailable(
+            "transient state is unavailable".into(),
+        ))
+    }
+
+    /// Watch one key's current value and subsequent changes, including removal.
+    fn subscribe_transient_state(
+        &self,
+        _bundle: &str,
+        _session: SessionId,
+        _key: &str,
+    ) -> Result<tokio::sync::watch::Receiver<Option<Value>>, HostError> {
+        Err(HostError::Unavailable(
+            "transient state is unavailable".into(),
+        ))
+    }
+
     /// Read one `bundle_state` entry.
     async fn get_state(
         &self,
@@ -612,6 +649,7 @@ pub trait HostTurnRunner: Send + Sync {
 
     /// Return `true` when unread-mail steering is currently suppressed for `session`
     /// (for example after `report` latched or while a defer-steer batch is active).
+    // Adapter: removed in CHR-47.
     fn is_mail_steer_suppressed(&self, _session: SessionId) -> bool {
         false
     }

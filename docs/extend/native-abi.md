@@ -332,6 +332,22 @@ pub trait HostRuntime: Send + Sync {
 | **`HostCatalogReader`** | `list_agents(session)`, `get_agent(name, session)`, `list_skills(session)`, `list_bundles()`, `get_bundle(id)`, `bundle_config(bundle_id)`, `global_config()`, `resolve_scope_catalog(session, directory)`, `authorize_workflow_agent(session, caller, agent)` | `BundleCatalogSummary`, `ScopeCatalogSnapshot`, `AgentDef`, `PreparedAgent`, `SkillCatalogEntry`, `Bundle` |
 | **`HostExtensionRegistry`** | `list_extensions(kind)`, `has_bundle(bundle_id)`, `invoke_bundle_api(call)`, `invoke_tool(session, tool_name, input, cancel)`, and bundle-declared hook dispatch: `has_hook(session, point)` and `invoke_hook(session, point, input) -> Option<Value>` (first answer wins; an undeclared point is `InvalidInput`) | `ExtensionKind`, `ExtensionEntry`, `BundleApiInvocation`, `BundleApiResult` |
 
+### Generic bundle host primitives
+
+Transient state lets a native bundle share per-session signals with host callbacks.
+Use the bundle ID from `NativePluginContext` and the session ID as the scope.
+Values live in the host process and disappear on restart.
+
+| Interface | Contract | Current consumer |
+| --- | --- | --- |
+| `bundle_storage().get_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<Option<Value>, HostError>`. | The unread-mail steer hook in `hya/agent-channels` reads `steer_suppressed` through its compatibility method. |
+| `bundle_storage().set_transient_state(bundle: &str, session: SessionId, key: &str, value: Option<Value>)` | Returns `Result<(), HostError>`. Pass `None` to remove the key. | The tool-result path sets and clears `steer_suppressed` for `hya/agent-channels` around after-hooks. |
+| `bundle_storage().subscribe_transient_state(bundle: &str, session: SessionId, key: &str)` | Returns `Result<watch::Receiver<Option<Value>>, HostError>`. The receiver exposes the current value and coalesces updates. Equal writes do not signal a change. | The state regression test observes the suppression key. The current unread-mail hook reads it synchronously. |
+
+For example, subscribe to a bundle's `"ready"` key, copy the value from
+`borrow_and_update()`, and await `changed()` for a later value. Release the
+borrow before waiting or writing to the key.
+
 ### 3.4 Native Extension Traits
 
 | Trait | Required Methods | Notes & Contracts |

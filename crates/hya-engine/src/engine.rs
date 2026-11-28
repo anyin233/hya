@@ -195,7 +195,8 @@ pub struct SessionEngine {
     /// Captured per-session lifecycle/event hooks ([`session_hooks`]).
     session_bundle_hooks: Arc<RwLock<session_hooks::SessionHookMap>>,
     session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
-    mail_steer_suppressed: Arc<RwLock<HashMap<SessionId, bool>>>,
+    // Shared bundle transient state. The legacy field name keeps constructor wiring intact.
+    mail_steer_suppressed: channel_host::TransientState,
     staged_mail_acks: Arc<RwLock<HashMap<SessionId, hya_runtime_abi::StagedMailAck>>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
@@ -658,28 +659,55 @@ impl SessionEngine {
         self
     }
 
+    /// Read a process-local bundle value scoped to one session.
+    pub fn get_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Option<Value> {
+        channel_host::get_transient(&self.mail_steer_suppressed, bundle, session, key)
+    }
+
+    /// Set a process-local bundle value or remove it with `None`.
+    pub fn set_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+        value: Option<Value>,
+    ) {
+        channel_host::set_transient(&self.mail_steer_suppressed, bundle, session, key, value);
+    }
+
+    /// Subscribe to changes of a process-local bundle value.
+    pub fn subscribe_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> tokio::sync::watch::Receiver<Option<Value>> {
+        channel_host::subscribe_transient(&self.mail_steer_suppressed, bundle, session, key)
+    }
+
     /// Suppress or re-enable in-turn unread-mail steering for `session`.
     pub fn set_mail_steer_suppressed(&self, session: SessionId, suppressed: bool) {
-        let mut map = self
-            .mail_steer_suppressed
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if suppressed {
-            map.insert(session, true);
-        } else {
-            map.remove(&session);
-        }
+        self.set_transient_state(
+            channel_host::STEER_STATE_BUNDLE,
+            session,
+            channel_host::STEER_SUPPRESSION_KEY,
+            suppressed.then_some(Value::Bool(true)),
+        );
     }
 
     /// Whether in-turn unread-mail steering is currently suppressed for `session`.
     #[must_use]
     pub fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.mail_steer_suppressed
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&session)
-            .copied()
-            .unwrap_or(false)
+        self.get_transient_state(
+            channel_host::STEER_STATE_BUNDLE,
+            session,
+            channel_host::STEER_SUPPRESSION_KEY,
+        ) == Some(Value::Bool(true))
     }
 
     /// Stage a `mail_consumed` acknowledgement from `UnreadMailSteerHook` to

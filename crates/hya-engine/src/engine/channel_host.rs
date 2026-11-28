@@ -26,7 +26,7 @@ use hya_runtime_abi::{
 use hya_store::{BundleClaim, SessionStore};
 use hya_tool::{AgentDef, SkillCatalogEntry};
 use serde_json::Value;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::member_control::ArchiveReviver;
@@ -35,6 +35,72 @@ use crate::bus::EventBus;
 use crate::resident::ResidentSupervisor;
 use crate::store_bridge::SessionStoreExt as _;
 
+pub(super) const STEER_STATE_BUNDLE: &str = "hya/agent-channels";
+pub(super) const STEER_SUPPRESSION_KEY: &str = "steer_suppressed";
+
+type TransientKey = (SessionId, String, String);
+pub(super) type TransientState = Arc<RwLock<HashMap<TransientKey, watch::Sender<Option<Value>>>>>;
+
+pub(super) fn get_transient(
+    state: &TransientState,
+    bundle: &str,
+    session: SessionId,
+    key: &str,
+) -> Option<Value> {
+    state
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&(session, bundle.to_owned(), key.to_owned()))
+        .and_then(|slot| slot.borrow().clone())
+}
+
+pub(super) fn set_transient(
+    state: &TransientState,
+    bundle: &str,
+    session: SessionId,
+    key: &str,
+    value: Option<Value>,
+) {
+    let mut entries = state
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let key = (session, bundle.to_owned(), key.to_owned());
+    let remove = value.is_none();
+    match entries.entry(key) {
+        std::collections::hash_map::Entry::Vacant(entry) if !remove => {
+            entry.insert(watch::channel(value).0);
+        }
+        std::collections::hash_map::Entry::Occupied(entry) => {
+            if remove && entry.get().receiver_count() == 0 {
+                entry.remove();
+            } else {
+                entry.get().send_if_modified(|current| {
+                    if *current == value {
+                        return false;
+                    }
+                    *current = value;
+                    true
+                });
+            }
+        }
+        std::collections::hash_map::Entry::Vacant(_) => {}
+    }
+}
+
+pub(super) fn subscribe_transient(
+    state: &TransientState,
+    bundle: &str,
+    session: SessionId,
+    key: &str,
+) -> watch::Receiver<Option<Value>> {
+    state
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .entry((session, bundle.to_owned(), key.to_owned()))
+        .or_insert_with(|| watch::channel(None).0)
+        .subscribe()
+}
+
 /// Minimal [`HostRuntime`] exposing store, bus, bundle claims, and turn-runner
 /// mailbox hooks directly from `SessionEngine`'s shared `Arc` fields.
 pub(crate) struct EngineChannelsHostRuntime {
@@ -42,7 +108,7 @@ pub(crate) struct EngineChannelsHostRuntime {
     pub(crate) bus: EventBus,
     pub(crate) runtime_owner: OwnerRunId,
     pub(crate) session_channel_policies: Arc<RwLock<HashMap<SessionId, ChannelPolicySnapshot>>>,
-    pub(crate) mail_steer_suppressed: Arc<RwLock<HashMap<SessionId, bool>>>,
+    pub(super) mail_steer_suppressed: TransientState,
     pub(crate) staged_mail_acks: Arc<RwLock<HashMap<SessionId, StagedMailAck>>>,
     pub(crate) reviver: Arc<RwLock<Option<Weak<ResidentSupervisor>>>>,
     pub(crate) turn_gate: Arc<TurnGate>,
@@ -217,6 +283,45 @@ impl HostSessionStore for EngineChannelsHostRuntime {
 
 #[async_trait]
 impl HostBundleStorage for EngineChannelsHostRuntime {
+    fn get_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(get_transient(
+            &self.mail_steer_suppressed,
+            bundle,
+            session,
+            key,
+        ))
+    }
+
+    fn set_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+        value: Option<Value>,
+    ) -> Result<(), HostError> {
+        set_transient(&self.mail_steer_suppressed, bundle, session, key, value);
+        Ok(())
+    }
+
+    fn subscribe_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<watch::Receiver<Option<Value>>, HostError> {
+        Ok(subscribe_transient(
+            &self.mail_steer_suppressed,
+            bundle,
+            session,
+            key,
+        ))
+    }
+
     async fn get_state(
         &self,
         bundle: &str,
@@ -451,13 +556,14 @@ impl HostTurnRunner for EngineChannelsHostRuntime {
             .is_some_and(|sup| sup.stopped_by_user(root, handle))
     }
 
+    // Adapter: removed in CHR-47.
     fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
-        self.mail_steer_suppressed
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&session)
-            .copied()
-            .unwrap_or(false)
+        get_transient(
+            &self.mail_steer_suppressed,
+            STEER_STATE_BUNDLE,
+            session,
+            STEER_SUPPRESSION_KEY,
+        ) == Some(Value::Bool(true))
     }
 
     fn stage_mail_steer_ack(&self, session: SessionId, ack: StagedMailAck) {
@@ -835,5 +941,53 @@ fn map_core_err(error: crate::CoreError) -> HostError {
             HostError::StaleClaim(error.to_string())
         }
         other => HostError::Internal(other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[tokio::test]
+    async fn transient_state_watches_only_its_bundle_session_and_key() {
+        let state = TransientState::default();
+        let session = SessionId::new();
+        let mut changes =
+            subscribe_transient(&state, STEER_STATE_BUNDLE, session, STEER_SUPPRESSION_KEY);
+        assert!(changes.borrow_and_update().is_none());
+        set_transient(
+            &state,
+            "other/bundle",
+            session,
+            STEER_SUPPRESSION_KEY,
+            Some(Value::Bool(true)),
+        );
+        set_transient(
+            &state,
+            STEER_STATE_BUNDLE,
+            SessionId::new(),
+            STEER_SUPPRESSION_KEY,
+            Some(Value::Bool(true)),
+        );
+        assert!(!changes.has_changed().unwrap());
+
+        for value in [Some(Value::Bool(true)), None] {
+            set_transient(
+                &state,
+                STEER_STATE_BUNDLE,
+                session,
+                STEER_SUPPRESSION_KEY,
+                value.clone(),
+            );
+            assert!(changes.has_changed().unwrap());
+            changes.changed().await.unwrap();
+            assert_eq!(*changes.borrow(), value);
+            assert_eq!(
+                get_transient(&state, STEER_STATE_BUNDLE, session, STEER_SUPPRESSION_KEY),
+                value,
+            );
+        }
     }
 }

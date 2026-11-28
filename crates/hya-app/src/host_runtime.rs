@@ -36,7 +36,7 @@ use hya_store::SessionStore;
 use hya_tool::{AgentDef, ReportOutcome, SkillCatalogEntry, SpawnMember};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::bundle_runtime::sidecar::environment::BundleSidecarEnvironment;
@@ -719,6 +719,38 @@ fn lease_to_store_claim(lease: &BundleClaimLease) -> hya_store::BundleClaim {
 
 #[async_trait]
 impl HostBundleStorage for AppHostRuntime {
+    fn get_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<Option<Value>, HostError> {
+        Ok(self.engine()?.get_transient_state(bundle, session, key))
+    }
+
+    fn set_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+        value: Option<Value>,
+    ) -> Result<(), HostError> {
+        self.engine()?
+            .set_transient_state(bundle, session, key, value);
+        Ok(())
+    }
+
+    fn subscribe_transient_state(
+        &self,
+        bundle: &str,
+        session: SessionId,
+        key: &str,
+    ) -> Result<watch::Receiver<Option<Value>>, HostError> {
+        Ok(self
+            .engine()?
+            .subscribe_transient_state(bundle, session, key))
+    }
+
     async fn get_state(
         &self,
         bundle: &str,
@@ -1318,6 +1350,7 @@ impl HostTurnRunner for AppHostRuntime {
             .is_some_and(|engine| engine.is_member_stopped_by_user(root, handle))
     }
 
+    // Adapter: removed in CHR-47.
     fn is_mail_steer_suppressed(&self, session: SessionId) -> bool {
         self.engine()
             .ok()
