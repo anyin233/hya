@@ -2,6 +2,7 @@ import { TextAttributes, type MouseEvent, type ScrollBoxRenderable } from "@open
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp, type PaneInputHandle } from "../app/context"
+import { extensionManager } from "../extensions/manager"
 import { createLayoutEditor, layoutEditorBack, layoutEditorChoose, layoutEditorHeading, layoutEditorHint, layoutEditorKey, layoutEditorPaste, layoutEditorPreview, layoutEditorRows, reconcileLayoutEditor, type LayoutEditorOutcome } from "../state/layoutEditor"
 import { paneLeaves, visiblePaneRoot } from "../state/panes"
 import { colors } from "../theme"
@@ -18,7 +19,7 @@ export function LayoutPane(props: PaneRenderProps) {
   const rows = createMemo(() => layoutEditorRows(store.state.paneLayout, state()))
   const treeVisible = () => state().stage.type === "tree" || state().stage.type === "wrap"
   const index = () => treeVisible() ? rows().findIndex((row) => row.id === state().selected) : Math.min(state().index, rows().length - 1)
-  const visible = createMemo(() => new Set(paneLeaves(visiblePaneRoot(store.state.paneLayout.root, store.state.columns, store.state.sidebar, store.state.projectsSidebar)).map((pane) => pane.id)))
+  const visible = createMemo(() => new Set(paneLeaves(visiblePaneRoot(store.state.paneLayout.root, store.state.columns, store.state.sidebar, store.state.projectsSidebar, extensionManager.visiblePaneOptions())).map((pane) => pane.id)))
   const detail = () => rows()[index()]?.detail ?? ""
   const hint = () => layoutEditorHint(state())
   // Keep at least two tree/menu rows when hints grow or the pane is narrow.

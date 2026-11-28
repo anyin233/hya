@@ -1286,8 +1286,13 @@ export class HyaClient {
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {
-    const result = await this.request<{ workflows?: WorkflowSummary[] }>("GET", this.scoped("/v2/bundles/hya%2Fworkflow/api/workflows"))
-    return result.workflows ?? []
+    try {
+      const result = await this.request<{ workflows?: WorkflowSummary[] }>("GET", this.scoped("/v2/bundles/hya%2Fworkflow/api/workflows"))
+      return result.workflows ?? []
+    } catch (error) {
+      if (error instanceof HttpError && (error.status === 404 || error.status === 501)) return []
+      throw error
+    }
   }
 
   async getWorkflowState(session: string): Promise<Record<string, unknown>> {

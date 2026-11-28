@@ -91,7 +91,7 @@ export function PaneWorkspace() {
   const displayed = createMemo(() => { const edit = live(); return edit ? setContainerBoundary(store.state.paneLayout, edit.id, edit.index, edit.ratio, edit.secondIndex) : store.state.paneLayout })
   const displayedRoot = createMemo(() => displayed().root)
   const savedRoot = createMemo(() => store.state.paneLayout.root)
-  const visibleRoot = createMemo(() => visiblePaneRoot(displayedRoot(), size().width, store.state.sidebar, store.state.projectsSidebar))
+  const visibleRoot = createMemo(() => visiblePaneRoot(displayedRoot(), size().width, store.state.sidebar, store.state.projectsSidebar, extensionManager.visiblePaneOptions()))
   const minimum = (node: PaneNode, direction: LayoutDirection): number => {
     if (node.type === "split") {
       const values = node.children.map((child) => minimum(child.node, direction))

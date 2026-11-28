@@ -188,6 +188,39 @@ describe("extension panes", () => {
   })
 })
 
+describe("bare mode (zero TUI bundles)", () => {
+  test("settled() resolves immediately on an empty catalog without waiting for hya/basic-tui-components, and hides unavailable bundled panes", async () => {
+    const extensions = manager()
+    expect(extensions.bare()).toBe(false)
+    expect(extensions.hasSurface("sessions")).toBe(true)
+
+    const waiter = extensions.settled()
+    const rejected = await extensions.load([], local)
+    expect(rejected).toEqual([])
+    await waiter
+    await extensions.settled()
+
+    expect(extensions.bare()).toBe(true)
+    expect(extensions.list()).toEqual([])
+    expect(extensions.hasSurface("projects")).toBe(false)
+    expect(extensions.hasSurface("sessions")).toBe(false)
+    expect(extensions.hasSurface("todos")).toBe(false)
+    expect(extensions.hasSurface("context")).toBe(false)
+    expect(extensions.visiblePaneOptions().hasExtensionPanel("acme/git#git")).toBe(false)
+    await extensions.stopAll()
+  })
+
+  test("settled() resolves immediately when catalogFailed() is reported", async () => {
+    const extensions = manager()
+    const waiter = extensions.settled()
+    extensions.catalogFailed("offline")
+    await waiter
+    await extensions.settled()
+    expect(extensions.bare()).toBe(true)
+    expect(extensions.catalogStatus()).toEqual({ loaded: true, error: "extension catalog unavailable: offline" })
+  })
+})
+
 describe("extension processes (real SDK, real bun)", () => {
   test("contributions reach every surface: panels, status, tool cards, composer, formatter, interceptor, actions", async () => {
     const notices: string[] = []

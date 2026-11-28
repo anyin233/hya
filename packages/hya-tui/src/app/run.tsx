@@ -197,8 +197,6 @@ export async function run(options: Options, launch: Launch = { argv: [] }): Prom
   }
   const refreshExtensions = async (): Promise<void> => {
     try {
-      // The host starts while the catalog is in flight.
-      void extensionManager.prewarm()
       const catalog = await client.listTuiExtensions()
       const { extensionEnabled = {}, extensionTrusted = {} } = loadPreferences(prefsPath).preferences
       const rejected = await extensionManager.load(catalog, { enabled: (id) => extensionEnabled[id], remote: remoteBackend(), trusted: (id) => extensionTrusted[id] })

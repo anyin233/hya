@@ -330,7 +330,9 @@ export function createController({ client, store, directory, remote: startedRemo
 
   async function refresh(): Promise<void> {
     const [sessions, interactions, models, agents, workflows, providers, commands, permissionModes, projects, skills] = await Promise.all([
-      client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
+      client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(),
+      // Optional: absent when `hya/workflow` is not loaded (e.g. `hya --bare`).
+      client.listWorkflows().catch(() => [] as Awaited<ReturnType<typeof client.listWorkflows>>),
       client.listProviders(),
       // The open session's catalog (its agent's bundle skills too), with the command diagnostics.
       client.listCommandCatalog
@@ -639,6 +641,10 @@ export function createController({ client, store, directory, remote: startedRemo
    * replacing it; components/Composer.tsx).
    */
   function focusProjects(): void {
+    if (!extensionManager.hasSurface("projects")) {
+      status("Projects sidebar unavailable: no TUI bundles loaded")
+      return
+    }
     // The single-column presets have no Projects pane: show the workspace for this session.
     if (!store.state.structure.sidebar.enabled && structure) structure.setEnabled("sidebar", true)
     if (!paneLeaves(store.state.paneLayout.root).some((pane) => pane.kind === "projects")) {
