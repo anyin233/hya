@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::{BundleCatalog, PreparedCatalog};
+use hya_bundle::{BuiltinBundleSelection, BundleCatalog, PreparedCatalog};
 use hya_engine::{
     CatalogScope, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, ScopeKey, ScopeOverlay,
 };
@@ -15,7 +15,9 @@ use hya_proto::ModelRef;
 use sha2::Digest as _;
 
 use crate::bundle_config::BundleConfigResolver;
-use crate::installed_bundle_refresh::{BaseCatalogs, InstalledBundleRefresh, SourceKey, compose};
+use crate::installed_bundle_refresh::{
+    BaseCatalogs, InstalledBundleRefresh, SourceKey, Unsatisfied, compose, retain_satisfied,
+};
 use crate::project_bundles::{
     directory_digest, directory_source, project_roots_digest, root_bundles_dir,
 };
@@ -32,6 +34,8 @@ pub struct ProjectScopeRefresh {
 struct ProjectSources {
     /// The messages of the sources the last refresh skipped.
     diagnostics: Vec<String>,
+    /// Project bundles the last composition left out for a missing prerequisite.
+    unsatisfied: Unsatisfied,
     base_revision: u64,
     roots: Vec<PathBuf>,
     attempted: Option<[u8; 32]>,
@@ -56,46 +60,6 @@ struct PublishedBundle {
 }
 
 impl ProjectScopeRefresh {
-    /// Prepare a fresh scope's inert bundle catalog without starting runtime
-    /// sources. Roots are ordered; failed sources are isolated and returned as
-    /// warnings. Pass no roots for a Directory or Global scope.
-    ///
-    /// # Errors
-    /// Returns catalog validation errors after selecting readable sources.
-    pub fn catalog_for_roots(
-        roots: &[PathBuf],
-        installed: &[PreparedCatalog],
-        first_party: &[PreparedCatalog],
-        disabled: &BTreeSet<String>,
-    ) -> Result<(BundleCatalog, Vec<String>), CoreError> {
-        let mut errors = Vec::new();
-        let dirs = project_bundle_dirs(roots, &BTreeMap::new(), &mut errors);
-        let mut ids = BTreeSet::new();
-        let mut namespaces = BTreeSet::new();
-        let mut project = Vec::new();
-        for dir in dirs {
-            if let Ok((id, namespace)) = hya_bundle::read_bundle_identity(&dir)
-                && !claim_bundle(&id, &namespace, disabled, &mut ids, &mut namespaces)
-            {
-                continue;
-            }
-            match prepare_bundle_catalog(&dir, disabled) {
-                Ok(bundle) => project.push(bundle.catalog),
-                Err(error) => errors.push((
-                    dir.display().to_string(),
-                    format!("project bundle {}: {error}", dir.display()),
-                )),
-            }
-        }
-        let (catalog, _) = compose_scope_catalog(
-            project.iter(),
-            installed.iter().chain(first_party),
-            disabled,
-        )?;
-        let warnings = errors.into_iter().map(|(_, message)| message).collect();
-        Ok((catalog, warnings))
-    }
-
     /// Compose Project sources on top of the installed base catalog.
     #[must_use]
     pub fn new(installed: Arc<InstalledBundleRefresh>) -> Self {
@@ -145,7 +109,9 @@ impl ProjectScopeRefresh {
         explicit: bool,
     ) -> Result<bool, CoreError> {
         let state = self.scope_state(&key);
-        let mut state = state.lock().await;
+        let mut guard = state.lock().await;
+        // Split field borrows: the composed catalogs borrow `state.bundles`.
+        let state = &mut *guard;
         let base_error = if self.installed.base_catalogs().revision == 0 {
             self.installed.refresh_if_changed(runtime).await.err()
         } else {
@@ -322,6 +288,9 @@ impl ProjectScopeRefresh {
                 namespaces.insert(bundle.namespace().to_string());
             }
         }
+        if !changed {
+            errors.extend(state.unsatisfied.iter().cloned());
+        }
         state.diagnostics = errors[..base_start]
             .iter()
             .chain(&errors[base_end..])
@@ -336,7 +305,7 @@ impl ProjectScopeRefresh {
         }
         // Select catalogs using the same first-root/id/namespace precedence as
         // project loading, then installed bundles, then first-party bundles.
-        let (bundles, project_catalogs) = compose_scope_catalog(
+        let (bundles, project_catalogs, unsatisfied) = compose_scope_catalog(
             dirs.iter().filter_map(|dir| {
                 state.bundles[dir]
                     .published
@@ -344,12 +313,16 @@ impl ProjectScopeRefresh {
                     .filter(|bundle| bundle.enabled)
                     .map(|bundle| &bundle.catalog)
             }),
-            base.installed
-                .iter()
-                .chain(&base.first_party)
-                .map(Arc::as_ref),
+            base.installed.iter().map(Arc::as_ref),
+            base.first_party.iter().map(Arc::as_ref),
             &base.disabled,
+            self.installed.builtin_selection(),
         )?;
+        state
+            .diagnostics
+            .extend(unsatisfied.iter().map(|(_, message)| message.clone()));
+        errors.extend(unsatisfied.iter().cloned());
+        state.unsatisfied = unsatisfied;
         let ids = bundles
             .bundles()
             .iter()
@@ -516,11 +489,34 @@ fn claim_bundle(
     true
 }
 
+/// Compose a scope's catalog and return it with the selected project catalogs
+/// and one `(bundle_id, warning)` per project bundle left out for a missing
+/// prerequisite.
 fn compose_scope_catalog<'a>(
     project: impl Iterator<Item = &'a PreparedCatalog>,
-    base: impl Iterator<Item = &'a PreparedCatalog>,
+    installed: impl Iterator<Item = &'a PreparedCatalog>,
+    first_party: impl Iterator<Item = &'a PreparedCatalog>,
     disabled: &BTreeSet<String>,
-) -> Result<(BundleCatalog, Vec<&'a PreparedCatalog>), CoreError> {
+    selection: &BuiltinBundleSelection,
+) -> Result<(BundleCatalog, Vec<&'a PreparedCatalog>, Unsatisfied), CoreError> {
+    let enabled =
+        |catalog: &&PreparedCatalog| !disabled.contains(&catalog.bundles()[0].identity().id);
+    // Installed prerequisites resolve at the process-wide tier, which reports
+    // its own drops; project bundles only add to that set.
+    let (installed, _) = retain_satisfied(selection, installed.filter(enabled).collect())
+        .map_err(CoreError::bundle)?;
+    let project = project.filter(enabled).collect::<Vec<_>>();
+    let (kept, unsatisfied) = retain_satisfied(
+        selection,
+        project
+            .iter()
+            .copied()
+            .chain(installed.iter().copied())
+            .collect(),
+    )
+    .map_err(CoreError::bundle)?;
+    let is_kept =
+        |catalog: &&PreparedCatalog| kept.iter().any(|kept| std::ptr::eq(*kept, *catalog));
     let mut ids = BTreeSet::new();
     let mut namespaces = BTreeSet::new();
     let mut select = |catalog: &&PreparedCatalog| {
@@ -529,12 +525,18 @@ fn compose_scope_catalog<'a>(
         !disabled.contains(id)
             && claim_bundle(id, bundle.namespace(), disabled, &mut ids, &mut namespaces)
     };
-    let mut catalogs = project.filter(&mut select).collect::<Vec<_>>();
+    let mut catalogs = project
+        .into_iter()
+        .filter(is_kept)
+        .filter(&mut select)
+        .collect::<Vec<_>>();
     let project_catalogs = catalogs.clone();
-    catalogs.extend(base.filter(select));
+    catalogs.extend(installed.into_iter().filter(is_kept).filter(&mut select));
+    catalogs.extend(first_party.filter(select));
     Ok((
         BundleCatalog::from_verified_catalogs(&catalogs).map_err(CoreError::bundle)?,
         project_catalogs,
+        unsatisfied,
     ))
 }
 
@@ -691,5 +693,55 @@ impl RuntimeCatalogRefresh for ProjectScopeRefresh {
             lines.extend(state.lock().await.diagnostics.iter().cloned());
         }
         lines
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn catalog(id: &str, body: &str) -> PreparedCatalog {
+        let manifest = format!(
+            "kind: Bundle\nschema_version: 2\nidentity: {{ id: {id}, version: 1.0.0, publisher: acme }}\n{body}"
+        );
+        hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+            id,
+            vec![hya_bundle::SourceFile::new("bundle.yaml", manifest)],
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn scope_composition_drops_project_bundles_missing_a_prerequisite() {
+        let installed = catalog("acme/installed", "");
+        let needs_project = catalog("acme/needs-project", "requires: [acme/satisfied]\n");
+        let satisfied = catalog("acme/satisfied", "requires: [acme/installed]\n");
+        let missing = catalog("acme/missing", "requires: [acme/absent]\n");
+        let (bundles, project, unsatisfied) = compose_scope_catalog(
+            [&satisfied, &missing].into_iter(),
+            [&installed, &needs_project].into_iter(),
+            std::iter::empty(),
+            &BTreeSet::new(),
+            &BuiltinBundleSelection::bare(),
+        )
+        .unwrap();
+        let ids = bundles
+            .bundles()
+            .iter()
+            .map(|bundle| bundle.identity().id.as_str())
+            .collect::<BTreeSet<_>>();
+        // Installed prerequisites resolve without the project tier.
+        assert_eq!(ids, BTreeSet::from(["acme/installed", "acme/satisfied"]));
+        assert_eq!(project.len(), 1);
+        assert!(std::ptr::eq(project[0], &satisfied));
+        assert_eq!(
+            unsatisfied
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["acme/missing"]
+        );
     }
 }
