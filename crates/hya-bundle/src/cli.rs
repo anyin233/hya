@@ -4,7 +4,7 @@
 //! them to its command line when the bundle is enabled and routes each
 //! invocation to the bundle's driver or BundleApi endpoint. An api route with
 //! `database: true` runs against `--db`, through the server that owns it when
-//! one does.
+//! one does; one with `database: read` only reads `--db`, without claiming it.
 
 use std::collections::BTreeSet;
 
@@ -35,10 +35,10 @@ pub struct CliCommand {
     /// Arguments, in help order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<CliArg>,
-    /// Run the `api` route against `--db` (claiming the database, or through
-    /// the server that owns it) instead of an in-memory store.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub database: bool,
+    /// How the `api` route uses `--db` (default: not at all, an in-memory
+    /// store).
+    #[serde(default, skip_serializing_if = "CliDatabase::is_none")]
+    pub database: CliDatabase,
     /// `database` routes only: refusals when the call would go through the
     /// owning server, checked in order; the first set one exits 75.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -46,6 +46,60 @@ pub struct CliCommand {
     /// Nested subcommands; a command with subcommands has no route itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subcommands: Vec<CliCommand>,
+}
+
+/// [`CliCommand::database`]: `false` (default), `true`, or `read`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(from = "DatabaseRepr", into = "DatabaseRepr")]
+pub enum CliDatabase {
+    /// `false`: a headless in-memory store.
+    #[default]
+    None,
+    /// `true`: claim `--db`, or go through the server that owns it.
+    Write,
+    /// `read`: never claim or route; resolve the working directory's Project
+    /// from an existing `--db` opened read-only, and run on an in-memory
+    /// store with the offline provider.
+    Read,
+}
+
+impl CliDatabase {
+    fn is_none(&self) -> bool {
+        *self == Self::None
+    }
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(untagged)]
+enum DatabaseRepr {
+    Flag(bool),
+    Mode(DatabaseMode),
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DatabaseMode {
+    Read,
+}
+
+impl From<DatabaseRepr> for CliDatabase {
+    fn from(repr: DatabaseRepr) -> Self {
+        match repr {
+            DatabaseRepr::Flag(false) => Self::None,
+            DatabaseRepr::Flag(true) => Self::Write,
+            DatabaseRepr::Mode(DatabaseMode::Read) => Self::Read,
+        }
+    }
+}
+
+impl From<CliDatabase> for DatabaseRepr {
+    fn from(database: CliDatabase) -> Self {
+        match database {
+            CliDatabase::None => Self::Flag(false),
+            CliDatabase::Write => Self::Flag(true),
+            CliDatabase::Read => Self::Mode(DatabaseMode::Read),
+        }
+    }
 }
 
 /// What a [`CliCommand`] adds to the command line.
@@ -248,16 +302,17 @@ fn validate_command(
         .iter()
         .filter(|arg| arg.value == CliValue::Session)
         .count();
-    if !command.database && (sessions > 0 || !command.routed_refuse.is_empty()) {
+    if command.database != CliDatabase::Write && (sessions > 0 || !command.routed_refuse.is_empty())
+    {
         return Err(invalid(format!(
             "cli command `{label}`: `value: session` and `routed_refuse` need `database: true`"
         )));
     }
-    if command.database
+    if command.database != CliDatabase::None
         && (command.api.is_none() || command.kind == CliCommandKind::Prompt || sessions > 1)
     {
         return Err(invalid(format!(
-            "cli command `{label}`: `database: true` needs an `api` route on `kind: command` and at most one `value: session` argument"
+            "cli command `{label}`: `database` needs an `api` route on `kind: command` and at most one `value: session` argument"
         )));
     }
     let mut ids = BTreeSet::new();
@@ -347,7 +402,7 @@ mod tests {
     - { id: max_iterations, long: max-iterations, value: integer, default: "6" }
 - name: workflow
   subcommands:
-    - { name: list, api: list, args: [{ id: json, long: json, value: flag }] }
+    - { name: list, api: list, database: read, args: [{ id: json, long: json, value: flag }] }
     - name: run
       api: run
       database: true
@@ -360,6 +415,18 @@ mod tests {
 "#,
         );
         validate_cli("acme/demo", &commands, &BTreeSet::new(), true).unwrap();
+        let workflow = &commands[2].subcommands;
+        assert_eq!(
+            [
+                workflow[0].database,
+                workflow[1].database,
+                commands[0].database
+            ],
+            [CliDatabase::Read, CliDatabase::Write, CliDatabase::None]
+        );
+        let round_trip: Vec<CliCommand> =
+            serde_norway::from_str(&serde_norway::to_string(&commands).unwrap()).unwrap();
+        assert_eq!(round_trip, commands);
     }
 
     #[test]
@@ -382,6 +449,15 @@ mod tests {
             ),
             ("- { name: a, driver: d, database: true }", true),
             ("- { kind: prompt, api: a, database: true }", true),
+            ("- { name: a, driver: d, database: read }", true),
+            (
+                "- { name: a, api: a, database: read, args: [{ id: s, long: s, value: session }] }",
+                true,
+            ),
+            (
+                "- { name: a, api: a, database: read, routed_refuse: [{ flag: yolo, reason: r }] }",
+                true,
+            ),
             (
                 "- { name: a, api: a, args: [{ id: s, long: s, value: session }] }",
                 true,
@@ -407,6 +483,10 @@ mod tests {
                 true,
             ),
         ];
+        assert!(
+            serde_norway::from_str::<Vec<CliCommand>>("- { name: a, api: a, database: write }")
+                .is_err()
+        );
         for (yaml, native) in cases {
             assert!(
                 validate_cli("acme/demo", &parse(yaml), &BTreeSet::new(), native).is_err(),

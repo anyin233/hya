@@ -392,6 +392,8 @@ async fn cmd_driver(
 }
 
 /// A `database: true` api route: on `--db` through the server that owns it
+/// A `database: read` one runs in process on [`read_scope_store`] with the
+/// offline runtime.
 /// (after its `routed_refuse` checks), else in process on the claimed store.
 async fn cmd_database_api(
     cli: &Cli,
@@ -402,6 +404,13 @@ async fn cmd_database_api(
     model: Option<String>,
 ) -> anyhow::Result<()> {
     hya_store::validate_database_arg(&cli.db)?;
+    if database.read {
+        let store = read_scope_store(&cli.db).await?;
+        return cmd_bundle_api(
+            bundle, api, args, store, None, command, model, cli.yolo, cli.bare, cli.pure, true,
+        )
+        .await;
+    }
     let command = database.command.as_str();
     let session = database
         .session(&args)
@@ -435,16 +444,45 @@ async fn cmd_database_api(
         }
         db_writer::Writer::Direct(store) => {
             cmd_bundle_api(
+                false,
                 bundle, api, args, store, session, command, model, cli.yolo, cli.bare, cli.pure,
             )
             .await
         }
     }
 }
+/// An in-memory store holding the Project the working directory resolves to
+/// in an existing `db` (opened read-only, never claimed), else a Project of
+/// the directory alone, so a `database: read` call sees that Project's roots.
+async fn read_scope_store(db: &str) -> anyhow::Result<SessionStore> {
+    let cwd = std::env::current_dir().context("resolve current directory")?;
+    let cwd = cwd.to_string_lossy();
+    let project = if !db.is_empty() && std::path::Path::new(db).try_exists()? {
+        SessionStore::connect_read_only(db)
+            .await
+            .with_context(|| format!("open existing database read-only at {db}"))?
+            .resolve_project_by_path(&cwd)
+            .await?
+    } else {
+        None
+    };
+    let store = open_store("").await?;
+    match project {
+        Some(project) => {
+            store.create_project(&project.name, &project.roots).await?;
+        }
+        None => {
+            store.ensure_project_for_path(&cwd).await?;
+        }
+    }
+    Ok(store)
+}
+
 
 /// Call a bundle's BundleApi endpoint `api` headlessly on `store` with
 /// `{"args": …, "cwd": …}` and print the reply's `{stdout, stderr,
 /// exit_code}`. A Session-scope endpoint gets `session` (`<command> Session …
+/// `offline` composes [`startup::HeadlessRuntime::start_offline`].
 /// was not found` when missing) or a new session; a Global one none.
 #[allow(clippy::too_many_arguments)]
 async fn cmd_bundle_api(
@@ -457,6 +495,7 @@ async fn cmd_bundle_api(
     model_override: Option<String>,
     yolo: bool,
     bare: bool,
+    offline: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("resolve current directory")?;
@@ -464,8 +503,11 @@ async fn cmd_bundle_api(
     let exit_store = store.clone();
     let mut signals = StopSignals::install()?;
     let started = async {
-        let mut runtime =
-            startup::HeadlessRuntime::start(store, model_override, yolo, bare, pure).await?;
+        let mut runtime = if offline {
+            startup::HeadlessRuntime::start_offline(store, model_override, bare, pure).await?
+        } else {
+            startup::HeadlessRuntime::start(store, model_override, yolo, bare, pure).await?
+        };
         let prepared = async {
             let endpoint = runtime
                 .built
@@ -656,6 +698,7 @@ async fn run_route(
                 model,
                 yolo,
                 bare,
+                false,
                 pure,
             )
             .await

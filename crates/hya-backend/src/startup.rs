@@ -26,12 +26,21 @@ pub(crate) async fn start(
             .await;
         return Err(error);
     }
-    let runtime = hya_app::resolve_runtime(model)
-        .await
-        .with_yolo(yolo)
-        .with_pure(pure)
-        .with_bare(bare);
+    let runtime = hya_app::resolve_runtime(model).await;
     hya_app::startup_trace::mark("runtime_resolved", None);
+    start_with(store, runtime, yolo, bare, pure).await
+}
+
+/// [`start`] on an already resolved runtime configuration.
+async fn start_with(
+    store: SessionStore,
+    runtime: hya_app::RuntimeConfig,
+    yolo: bool,
+    bare: bool,
+    pure: bool,
+) -> anyhow::Result<StartedEngine> {
+    let exit_store = store.clone();
+    let runtime = runtime.with_yolo(yolo).with_pure(pure).with_bare(bare);
     let agent = hya_app::agent_for_runtime(&runtime, None);
     let tool_config = (runtime.permission, runtime.settings);
     let built_res = if pure {
@@ -91,11 +100,32 @@ impl HeadlessRuntime {
         pure: bool,
     ) -> anyhow::Result<Self> {
         let explicit_model = model.is_some();
+        Self::from_started(start(store, model, yolo, bare, pure).await?, explicit_model).await
+    }
+
+    /// A runtime on the offline provider that reads no `config.yaml`
+    /// providers, MCP servers, or plugins and writes no config file.
+    pub(crate) async fn start_offline(
+        store: SessionStore,
+        model: Option<String>,
+        bare: bool,
+        pure: bool,
+    ) -> anyhow::Result<Self> {
+        let explicit_model = model.is_some();
+        let runtime = hya_app::offline_runtime(model, false);
+        Self::from_started(
+            start_with(store, runtime, false, bare, pure).await?,
+            explicit_model,
+        )
+        .await
+    }
+
+    async fn from_started(started: StartedEngine, explicit_model: bool) -> anyhow::Result<Self> {
         let StartedEngine {
             mut built,
             agent,
             default_agent,
-        } = start(store, model, yolo, bare, pure).await?;
+        } = started;
         let responder = match built.take_asks().context("asks receiver missing") {
             Ok(asks) => RejectResponder(hya_app::permission::spawn_reject_responder(asks)),
             Err(error) => {
@@ -209,8 +239,8 @@ impl HeadlessSession {
         shutdown(&mut self.built).await
     }
 
-    /// A [`HeadlessRuntime`] with [`HeadlessRuntime::open_session`]. Only
-    /// `hya workflow` (`workflow_cmd.rs`) passes `session` here.
+    /// A [`HeadlessRuntime`] with [`HeadlessRuntime::open_session`]: a new
+    /// root session, or the existing `session` reopened.
     pub(crate) async fn start(
         store: SessionStore,
         model: Option<String>,
@@ -220,7 +250,7 @@ impl HeadlessSession {
         session: Option<SessionId>,
     ) -> anyhow::Result<Self> {
         let mut runtime = HeadlessRuntime::start(store, model, yolo, bare, pure).await?;
-        let session = match runtime.open_session(session, "workflow").await {
+        let session = match runtime.open_session(session, "headless").await {
             Ok(session) => session,
             Err(error) => {
                 runtime.shutdown().await?;

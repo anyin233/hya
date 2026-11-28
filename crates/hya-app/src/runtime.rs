@@ -365,7 +365,12 @@ impl RuntimeConfig {
         self
     }
 }
-fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfig {
+
+/// The offline-provider runtime, built without reading `config.yaml`: no
+/// providers, MCP servers, or plugins. `strict` asks before every tool use
+/// (the fallback after a configuration error).
+#[must_use]
+pub fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfig {
     let (router, model) = offline_router(model_override);
     let catalog = Arc::new(ProviderCatalogSnapshot::build(
         Vec::new(),

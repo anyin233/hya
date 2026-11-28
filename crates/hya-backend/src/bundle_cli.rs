@@ -1,6 +1,7 @@
 //! `hya` commands contributed by enabled bundles (`cli:` in `bundle.yaml`,
 //! ADR-0040): built into the command line at startup and routed to the
-//! bundle's driver or BundleApi endpoint (on `--db` with `database: true`).
+//! bundle's driver or BundleApi endpoint (on `--db` with `database: true` or
+//! `read`).
 
 use std::ffi::OsString;
 
@@ -9,7 +10,9 @@ use clap::{
     Arg, ArgAction, ArgMatches, Command as ClapCommand, CommandFactory, FromArgMatches, Parser as _,
 };
 use hya_app::CliContribution;
-use hya_bundle::{CliArg, CliCommand, CliCommandKind, CliGlobalFlag, CliRoutedRefusal, CliValue};
+use hya_bundle::{
+    CliArg, CliCommand, CliCommandKind, CliDatabase, CliGlobalFlag, CliRoutedRefusal, CliValue,
+};
 use serde_json::{Map, Value};
 
 use crate::cli_args::Cli;
@@ -27,11 +30,13 @@ pub(crate) enum Route {
     },
 }
 
-/// A `database: true` api route.
+/// A `database: true` or `database: read` api route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Database {
     /// Top-level command name, for messages (`hya <command>: …`).
     pub(crate) command: String,
+    /// `database: read`: never claim `--db` or route to its server.
+    pub(crate) read: bool,
     /// Id of the `value: session` argument.
     session_arg: Option<String>,
     refuse: Vec<CliRoutedRefusal>,
@@ -228,8 +233,9 @@ fn route_of(bundle: &str, top: &str, command: &CliCommand) -> anyhow::Result<Rou
         (None, Some(api)) => Ok(Route::Api {
             bundle: bundle.to_string(),
             api: api.clone(),
-            database: command.database.then(|| Database {
+            database: (command.database != CliDatabase::None).then(|| Database {
                 command: top.to_string(),
+                read: command.database == CliDatabase::Read,
                 session_arg: command
                     .args
                     .iter()
@@ -401,6 +407,7 @@ mod tests {
         - { arg: revision, reason: "revision" }
         - { arg: input, reason: "input" }
         - { flag: yolo, reason: "yolo" }
+    - { name: list, api: list, database: read }
 "#,
         );
         let parse = |line: &str| {
@@ -418,8 +425,10 @@ mod tests {
             };
             (cli, database, args)
         };
+        assert!(parse("hya flow list").1.read);
         let (cli, database, args) = parse("hya flow run demo --session ses_1");
         assert_eq!(database.command, "flow");
+        assert!(!database.read);
         assert_eq!(database.session(&args), Some("ses_1"));
         assert_eq!(database.refusal(&args, &cli), None);
         for (line, reason) in [

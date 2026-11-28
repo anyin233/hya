@@ -240,6 +240,8 @@ By default an `api` route runs on a headless in-memory store. With `database: tr
 - A `value: session` argument names an existing Session: a Session-scope endpoint runs for it instead of a new one (``Error: <command> Session `<id>` was not found`` when it does not exist). It stays in `args` as the typed string.
 - `routed_refuse` lists what the owning server cannot take, in order. When the call would be routed and an entry's `arg` is given (a flag set, a string or integer present, a list non-empty) or its global `flag` (`bare`, `pure`, `yolo`) is set, `hya` prints ``hya <command>: database <db> is in use by hya server pid <pid> at <url>, and <reason>; stop it (`hya serve stop --db <db>`) or pass another --db`` and exits 75 before creating any session. In process the entries do not apply.
 
+With `database: read` the route only reads `--db`: `hya` never claims it or goes through its server, so the command works while either holds it. When `--db` names an existing file, `hya` opens it read-only to find the Project of the working directory; the call then runs in process on an in-memory store holding that Project (or, without one, a Project of the working directory alone), on the offline provider with no `config.yaml` providers, MCP servers, or plugins, and writes no config file. A Global endpoint sees the Project's roots through `resolve_scope_catalog(None, Some(cwd))`, whose `diagnostics` list the installed bundles that could not be read (`installed bundle <id>: <error>`) and the project bundles that failed to load (`project bundle <dir>: <error>`). `hya workflow list|info` (`hya/workflow`) prints them as `warning:` lines.
+
 ```yaml
 cli:
   - name: notes
@@ -289,12 +291,12 @@ cli:
 | `name` | string | Subcommand name (`kind: command` only). |
 | `about` | string | Help text. |
 | `driver` / `api` | string | The route of a leaf command (exactly one). |
-| `database` | bool (default `false`) | Run the `api` route against `--db` (in process or through the owning server) instead of an in-memory store. |
-| `routed_refuse[]` | list | `database` only: `{arg: <argument id>, reason}` or `{flag: bare\|pure\|yolo, reason}`; the first set entry exits 75 when the call would be routed. |
-| `args[]` | list | `id`, `long`, `short`, `value` (`string`, `integer`, `flag`, `list`, `session`), `required`, `default`, `help`, `value_name`, `aliases`, `conflicts_with` (argument ids). Missing optional values are `null` in the JSON arguments; a flag is `true`/`false`; a list is an array; a `session` is the typed Session id string (at most one, `database` only). |
+| `database` | `false` (default) \| `true` \| `read` | `true`: run the `api` route against `--db` (in process or through the owning server) instead of an in-memory store; `read`: read `--db` without claiming it (see above). |
+| `routed_refuse[]` | list | `database: true` only: `{arg: <argument id>, reason}` or `{flag: bare\|pure\|yolo, reason}`; the first set entry exits 75 when the call would be routed. |
+| `args[]` | list | `id`, `long`, `short`, `value` (`string`, `integer`, `flag`, `list`, `session`), `required`, `default`, `help`, `value_name`, `aliases`, `conflicts_with` (argument ids). Missing optional values are `null` in the JSON arguments; a flag is `true`/`false`; a list is an array; a `session` is the typed Session id string (at most one, `database: true` only). |
 | `subcommands[]` | list | Nested commands with the same shape (no `kind: prompt`). |
 
-Preparation rejects an invalid name, a leaf without exactly one route, a `driver` route on a non-native bundle, an `api` route to an undeclared endpoint of a JS bundle, duplicate names or flags, `conflicts_with` naming an unknown argument, `database` on a driver route or on `kind: prompt`, `value: session` or `routed_refuse` without `database`, more than one `value: session` argument, and a `routed_refuse` entry without exactly one known `arg` or `flag` and a `reason`. At startup `hya` rejects a command that shadows a core command or that two enabled bundles both contribute.
+Preparation rejects an invalid name, a leaf without exactly one route, a `driver` route on a non-native bundle, an `api` route to an undeclared endpoint of a JS bundle, duplicate names or flags, `conflicts_with` naming an unknown argument, `database` on a driver route or on `kind: prompt`, `value: session` or `routed_refuse` without `database: true`, more than one `value: session` argument, and a `routed_refuse` entry without exactly one known `arg` or `flag` and a `reason`. At startup `hya` rejects a command that shadows a core command or that two enabled bundles both contribute.
 
 A user-installed native bundle (`runtime.library`) contributes commands the same way, and keeps them under `--bare`; [`bundles/examples/cli-driver-example`](../../bundles/examples/cli-driver-example) routes one command to a driver, one to a native Global BundleApi endpoint, and two `database: true` commands to a Global and a Session-scope endpoint.
 
