@@ -12,10 +12,9 @@ use hya_tool::{
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
 use crate::common::{
-    RecordingLsp, RewritingFormatter, TempDirGuard, allow, ctx_with, ctx_with_planes, deny,
+    RecordingLsp, RewritingFormatter, TempDirGuard, allow, ctx_in_session, ctx_with, deny,
     error_diagnostics, tempdir,
 };
 
@@ -107,19 +106,15 @@ async fn apply_patch_formats_before_lsp_and_preserves_bom() {
         .unwrap();
     let diagnostics = error_diagnostics(&target, "bad patch");
     let touches = Arc::new(Mutex::new(Vec::new()));
-    let ctx = ctx_with_planes(
-        vec![allow(Action::Edit, "*")],
-        dir,
+    let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir);
+    let output = crate::registry_with_planes(
         FormatterPlane::new(Arc::new(RewritingFormatter)),
         LspPlane::new(Arc::new(RecordingLsp {
             touches: Arc::clone(&touches),
             diagnostics: diagnostics.clone(),
         })),
-        CancellationToken::new(),
-        None,
-    );
-    let output = crate::coding_extras_registry()
-        .get("apply_patch")
+    )
+    .get("apply_patch")
         .unwrap()
         .execute(
             &ctx,
@@ -138,6 +133,45 @@ async fn apply_patch_formats_before_lsp_and_preserves_bom() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].file, target);
     assert_eq!(calls[0].content, "\u{feff}formatted\n");
+}
+
+#[tokio::test]
+async fn apply_patch_formats_and_diagnoses_the_files_the_whole_patch_leaves() {
+    let dir = tempdir("patch-fmt-final");
+    let _guard = TempDirGuard::new(&dir);
+    tokio::fs::write(dir.join("a.txt"), "old\n").await.unwrap();
+    tokio::fs::write(dir.join("gone.txt"), "x\n").await.unwrap();
+    let touches = Arc::new(Mutex::new(Vec::new()));
+    let ctx = ctx_with(vec![allow(Action::Edit, "*")], dir.clone());
+    crate::registry_with_planes(
+        FormatterPlane::new(Arc::new(RewritingFormatter)),
+        LspPlane::new(Arc::new(RecordingLsp {
+            touches: Arc::clone(&touches),
+            diagnostics: json!({}),
+        })),
+    )
+    .get("apply_patch")
+    .unwrap()
+    .execute(
+        &ctx,
+        json!({ "patchText": "*** Begin Patch\n\
+*** Update File: a.txt\n@@\n-old\n+new\n\
+*** Update File: a.txt\n*** Move to: b.txt\n@@\n new\n\
+*** Update File: gone.txt\n@@\n-x\n+y\n\
+*** Delete File: gone.txt\n\
+*** End Patch\n" }),
+    )
+    .await
+    .unwrap();
+
+    assert!(!dir.join("a.txt").exists() && !dir.join("gone.txt").exists());
+    assert_eq!(
+        tokio::fs::read_to_string(dir.join("b.txt")).await.unwrap(),
+        "formatted\n"
+    );
+    let calls = touches.lock().await;
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].file, dir.join("b.txt"));
 }
 
 #[derive(Clone)]
@@ -161,8 +195,8 @@ impl LspProvider for FakeLsp {
 
 #[tokio::test]
 async fn lsp_schema_execution_no_server_and_permission_gate() {
-    let tool = crate::coding_extras_registry().get("lsp").unwrap();
-    let schema = tool.schema();
+    let unconfigured = crate::coding_extras_registry().get("lsp").unwrap();
+    let schema = unconfigured.schema();
     assert!(schema.description.contains("Supported operations"));
     assert_eq!(
         schema.input_schema["properties"]["line"]["description"],
@@ -184,14 +218,10 @@ async fn lsp_schema_execution_no_server_and_permission_gate() {
         result: expected.clone(),
         requests: requests.clone(),
     }));
-    let ctx = ctx_with_planes(
-        vec![allow(Action::Lsp, "*")],
-        dir.clone(),
-        FormatterPlane::default(),
-        lsp,
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
+    let tool = crate::registry_with_planes(FormatterPlane::default(), lsp)
+        .get("lsp")
+        .unwrap();
+    let ctx = ctx_in_session(vec![allow(Action::Lsp, "*")], dir.clone(), SessionId::new());
     let out = tool
         .execute(&ctx, json!({ "operation": "goToDefinition", "filePath": "src/main.rs", "line": 3, "character": 5 }))
         .await
@@ -206,26 +236,25 @@ async fn lsp_schema_execution_no_server_and_permission_gate() {
     // Disconnected plane reports no server.
     let no_lsp = ctx_with(vec![allow(Action::Lsp, "*")], dir.clone());
     assert!(matches!(
-        tool.execute(&no_lsp, json!({ "operation": "hover", "filePath": "src/main.rs", "line": 1, "character": 1 })).await,
+        unconfigured.execute(&no_lsp, json!({ "operation": "hover", "filePath": "src/main.rs", "line": 1, "character": 1 })).await,
         Err(ToolError::Other(m)) if m == "No LSP server available for this file type."
     ));
 
     // Permission denied blocks before calling provider.
     let denied_reqs = Arc::new(Mutex::new(Vec::new()));
-    let denied_ctx = ctx_with_planes(
-        vec![deny(Action::Lsp, "*")],
-        dir,
+    let denied_tool = crate::registry_with_planes(
         FormatterPlane::default(),
         LspPlane::new(Arc::new(FakeLsp {
             available: true,
             result: vec![],
             requests: denied_reqs.clone(),
         })),
-        CancellationToken::new(),
-        Some(SessionId::new()),
-    );
+    )
+    .get("lsp")
+    .unwrap();
+    let denied_ctx = ctx_in_session(vec![deny(Action::Lsp, "*")], dir, SessionId::new());
     assert!(matches!(
-        tool.execute(
+        denied_tool.execute(
             &denied_ctx,
             json!({ "operation": "hover", "filePath": "src/main.rs", "line": 1, "character": 1 })
         )
@@ -263,7 +292,6 @@ async fn lsp_dot_workdir_and_dot_file_reach_provider_as_current_dir() {
         return;
     };
 
-    let tool = crate::coding_extras_registry().get("lsp").unwrap();
     std::fs::remove_dir(child_dir).unwrap();
     assert!(std::env::current_dir().is_err());
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -276,16 +304,16 @@ async fn lsp_dot_workdir_and_dot_file_reach_provider_as_current_dir() {
     lsp.workspace_symbols(&dot.join("."), "symbol".into())
         .await
         .unwrap();
-    let ctx = ctx_with_planes(
+    let tool = crate::registry_with_planes(FormatterPlane::default(), lsp)
+        .get("lsp")
+        .unwrap();
+    let ctx = ctx_in_session(
         vec![
             allow(Action::Lsp, "*"),
             allow(Action::ExternalDirectory, "*"),
         ],
         dot.clone(),
-        FormatterPlane::default(),
-        lsp,
-        CancellationToken::new(),
-        Some(SessionId::new()),
+        SessionId::new(),
     );
     tool.execute(
         &ctx,

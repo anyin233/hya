@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use crate::lsp_post_edit;
 use crate::service::CodingExtrasState;
-use crate::utf8_bom;
 use hya_tool::{Action, ProjectScope, Resource};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
@@ -85,36 +84,28 @@ impl Tool for ApplyPatchTool {
             }
         }
 
-        let formatter = ctx
-            .extension::<hya_tool::FormatterPlane>()
-            .filter(|plane| plane.is_configured())
-            .cloned()
-            .unwrap_or_else(|| self.state.formatter());
-        let lsp = ctx
-            .extension::<hya_tool::LspPlane>()
-            .filter(|plane| plane.is_configured())
-            .cloned()
-            .unwrap_or_else(|| self.state.lsp());
         let mut summaries = Vec::with_capacity(hunks.len());
-        let mut lsp_paths = Vec::new();
         for hunk in hunks {
-            let summary = apply::apply_hunk(&ctx.workdir, hunk).await?;
-            if !matches!(summary.action, apply::FileAction::Delete) {
-                let path = resolve_workdir_path(&ctx.workdir, &summary.path)?;
-                let formatted = formatter
-                    .format_file(&ctx.workdir, &path)
-                    .await
-                    .map_err(|error| ToolError::Other(error.to_string()))?;
-                if formatted {
-                    utf8_bom::sync_file(&path, summary.bom).await?;
-                }
+            summaries.push(apply::apply_hunk(&ctx.workdir, hunk).await?);
+        }
+        // Format and diagnose the files as the whole patch left them: a later
+        // hunk may move or delete a file an earlier one wrote.
+        let mut lsp_paths: Vec<PathBuf> = Vec::new();
+        for summary in &summaries {
+            let path = resolve_workdir_path(&ctx.workdir, &summary.path)?;
+            if !lsp_paths.contains(&path) && tokio::fs::metadata(&path).await.is_ok() {
                 lsp_paths.push(path);
             }
-            summaries.push(summary);
         }
-        let diagnostics =
-            lsp_post_edit::touch_many_and_diagnostics_with_plane(&lsp, &ctx.workdir, &lsp_paths)
-                .await?;
+        let post_edit =
+            lsp_post_edit::format_and_diagnose(&self.state, &ctx.workdir, &lsp_paths).await;
+        if let Some(error) = post_edit.formatter_failures.into_iter().next() {
+            return Err(ToolError::Other(error));
+        }
+        let diagnostics = post_edit
+            .diagnostics
+            .transpose()?
+            .unwrap_or_else(|| json!({}));
 
         let mut output = format!(
             "Success. Updated the following files:\n{}",

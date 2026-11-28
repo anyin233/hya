@@ -18,7 +18,7 @@ pub struct LspTool {
 }
 
 impl LspTool {
-    /// Construct an `lsp` tool backed by `state` (falling back when no `LspPlane` extension is configured).
+    /// Construct an `lsp` tool backed by `state`'s language servers.
     #[must_use]
     pub fn new(state: Arc<CodingExtrasState>) -> Self {
         Self { state }
@@ -87,11 +87,7 @@ impl Tool for LspTool {
                 display_path(&file)
             )));
         }
-        let lsp = ctx
-            .extension::<hya_tool::LspPlane>()
-            .filter(|plane| plane.is_configured())
-            .cloned()
-            .unwrap_or_else(|| self.state.lsp());
+        let lsp = self.state.lsp();
         if !lsp
             .has_clients(&file)
             .await

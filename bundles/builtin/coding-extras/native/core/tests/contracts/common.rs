@@ -10,8 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use hya_proto::SessionId;
 use hya_tool::{
-    Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, LspError, LspPlane,
-    LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, ToolCtx,
+    Action, FormatterError, FormatterProvider, FormatterStatus, LspError, LspProvider, LspRequest,
+    Mode, PermissionPlane, PermissionRules, Rule, ToolCtx,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -56,23 +56,11 @@ pub fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     ToolCtx::new(workdir, permission, CancellationToken::new())
 }
 
-pub fn ctx_with_planes(
-    rules: Vec<Rule>,
-    workdir: PathBuf,
-    formatter: FormatterPlane,
-    lsp: LspPlane,
-    cancel: CancellationToken,
-    session: Option<SessionId>,
-) -> ToolCtx {
-    let mut ctx = ctx_with(rules, workdir)
-        .with_extension(formatter)
-        .with_extension(lsp);
-    ctx.cancel = cancel;
-    ctx.session = session;
-    if let Some(sid) = session {
-        ctx.permission = ctx.permission.for_session(sid);
-        ctx.interaction = ctx.interaction.for_session(sid);
-    }
+pub fn ctx_in_session(rules: Vec<Rule>, workdir: PathBuf, session: SessionId) -> ToolCtx {
+    let mut ctx = ctx_with(rules, workdir);
+    ctx.session = Some(session);
+    ctx.permission = ctx.permission.for_session(session);
+    ctx.interaction = ctx.interaction.for_session(session);
     ctx
 }
 

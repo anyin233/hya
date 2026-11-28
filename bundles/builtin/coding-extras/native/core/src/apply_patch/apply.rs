@@ -47,7 +47,6 @@ pub(crate) struct FileSummary {
     pub patch: String,
     pub additions: usize,
     pub deletions: usize,
-    pub bom: bool,
 }
 
 impl FileSummary {
@@ -70,12 +69,11 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
                 patch: diff.patch,
                 additions: diff.additions,
                 deletions: diff.deletions,
-                bom,
             })
         }
         Hunk::Delete { path } => {
             let target = workdir.join(&path);
-            let (bom, old) = utf8_bom::read_text(&target).await?;
+            let (_, old) = utf8_bom::read_text(&target).await?;
             let diff = file_diff::create(&target, &old, "");
             tokio::fs::remove_file(&target).await?;
             Ok(FileSummary {
@@ -85,7 +83,6 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
                 patch: diff.patch,
                 additions: diff.additions,
                 deletions: diff.deletions,
-                bom,
             })
         }
         Hunk::Update {
@@ -114,7 +111,6 @@ pub(crate) async fn apply_hunk(workdir: &Path, hunk: Hunk) -> Result<FileSummary
                 patch: diff.patch,
                 additions: diff.additions,
                 deletions: diff.deletions,
-                bom: new.bom,
             })
         }
     }
