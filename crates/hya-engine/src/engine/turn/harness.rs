@@ -10,7 +10,7 @@ use hya_proto::{
     SessionId, TokenUsage, ToolSchema,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderRetryClass, ProviderRouter};
-use hya_tool::{AgentDef, ReportLatch};
+use hya_tool::AgentDef;
 use tokio_util::sync::CancellationToken;
 
 use super::super::roots::SessionWorkspace;
@@ -22,7 +22,7 @@ use super::super::{
 use super::hooks::{self as turn_hooks, OpenRequest, TurnHook};
 use super::messages::{AttachmentData, prompt_digests, system_prompt};
 use super::rewrite_host::{HostErrors, TurnLog, TurnModels, TurnTranscript, model_window};
-use super::tool_gate::{TurnToolGate, can_report};
+use super::tool_gate::{ToolState, TurnToolGate};
 use super::{RequestLineage, TurnExecution, TurnRebindInputs};
 use crate::TurnBinding;
 use crate::error::CoreError;
@@ -197,7 +197,7 @@ impl SessionEngine {
             depth,
             defer_steer: false,
             recorded_digests,
-            report_latch: ReportLatch::new(),
+            tool_state: ToolState::default(),
             nested_engine: None,
             root_session_cache: None,
             rounds: 0,
@@ -259,9 +259,7 @@ struct EngineHarness<'a> {
     defer_steer: bool,
     /// Prompt digests last recorded in `TurnBindingRecorded`.
     recorded_digests: (String, String),
-    /// Set when a `report` of this turn is accepted: the turn ends right
-    /// after that tool round, and a second `report` is rejected.
-    report_latch: ReportLatch,
+    tool_state: ToolState,
     /// Engine handle for nested tool calls, cloned once per turn on first use.
     nested_engine: Option<Arc<SessionEngine>>,
     /// Root of this session's spawn tree, resolved on first hook use.
@@ -405,7 +403,7 @@ impl ToolGate for EngineHarness<'_> {
             actor_claim: self.actor_claim,
             guidance: &self.guidance,
             cancel: self.cancel,
-            report_latch: &self.report_latch,
+            state: &mut self.tool_state,
             nested_engine: &mut self.nested_engine,
             defer_steer: self.defer_steer,
             parent_session: self.parent_session,
@@ -800,16 +798,15 @@ impl Harness for EngineHarness<'_> {
     }
 
     fn done(&self) -> bool {
-        // An accepted `report` ends the member's episode: the round's other
-        // tool calls have completed and are recorded.
-        self.report_latch.is_set()
+        self.tool_state.done
     }
 
-    fn deadline_subagent(&self) -> Result<bool, CoreError> {
-        can_report(
+    fn deadline_delivery_tool(&self) -> Result<Option<&str>, CoreError> {
+        turn_hooks::delivery_tool(
             self.engine,
             &self.binding,
             &self.live_agent,
+            &self.resources,
             self.parent_session,
             &self.offered,
         )

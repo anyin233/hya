@@ -78,6 +78,35 @@ pub(super) fn entries<'a>(
     entries
 }
 
+/// Resolve the advertised delivery tool. The legacy report capability stays
+/// here until its bundle can declare it directly.
+pub(super) fn delivery_tool<'a>(
+    engine: &SessionEngine,
+    binding: &crate::TurnBinding,
+    agent: &super::super::AgentSpec,
+    resources: &crate::runtime_registry::CompiledResourceView,
+    parent: Option<SessionId>,
+    offered: &'a [hya_proto::ToolSchema],
+) -> Result<Option<&'a str>, CoreError> {
+    for schema in offered {
+        let name = schema.name.as_str();
+        let terminal = resources
+            .resolve_tool(name)
+            .is_some_and(|tool| tool.tool.ends_turn())
+            || (name == "report"
+                && crate::lifecycle::report_available(
+                    engine.lifecycle.is_connected(),
+                    binding,
+                    &agent.name,
+                    parent,
+                )?);
+        if terminal {
+            return Ok(Some(name));
+        }
+    }
+    Ok(None)
+}
+
 struct Claim<'a> {
     engine: &'a SessionEngine,
     claim: &'a ActorClaim,

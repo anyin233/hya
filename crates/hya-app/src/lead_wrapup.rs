@@ -140,7 +140,7 @@ async fn run_lead(
         let time = deadline.and_then(|deadline| {
             deadline
                 .take_notice(session)
-                .map(|stage| deadline.notice(stage, false))
+                .map(|stage| deadline.notice(stage, None))
         });
         let notice = pending.notice(time.as_deref(), stage >= Stage::WrapUp);
         drop(projection);

@@ -327,10 +327,9 @@ pub trait Harness: ToolGate {
     fn served_route(&self, _model: &ModelRef) -> Option<(ReasoningReplayPolicy, bool)> {
         None
     }
-    /// Whether the run's deadline notices take the text for an agent that
-    /// delivers by `report`.
-    fn deadline_subagent(&self) -> Result<bool, CoreError> {
-        Ok(false)
+    /// The offered tool through which the agent delivers its result.
+    fn deadline_delivery_tool(&self) -> Result<Option<&str>, CoreError> {
+        Ok(None)
     }
 }
 
@@ -494,7 +493,7 @@ impl Harness for Bare<'_> {
         if let Some(deadline) = hya_tool::deadline::current()
             && let Some(notice) = deadline
                 .take_notice(scope.session)
-                .map(|stage| deadline.notice(stage, false))
+                .map(|stage| deadline.notice(stage, None))
                 .or_else(|| deadline.take_clock(scope.session))
         {
             scope
@@ -880,9 +879,9 @@ pub async fn drive(
         if let Some(cut) = pending_cut.take() {
             // Minted after any compaction marker of that rewrite, which
             // would otherwise leave the notice out of the request.
-            let subagent = harness.deadline_subagent()?;
+            let delivery_tool = harness.deadline_delivery_tool()?;
             let stage_notice = hya_tool::deadline::current().map(|deadline| match cut.stage {
-                Some(stage) => deadline.notice(stage, subagent),
+                Some(stage) => deadline.notice(stage, delivery_tool),
                 None => deadline.clock_line(),
             });
             emit.emit(

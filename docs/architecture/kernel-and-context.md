@@ -46,6 +46,12 @@ Passing the global `--bare` flag (`hya --bare`, `hya serve --bare`, or `hya exec
 
 ---
 
+A tool may override `hya_tool::Tool::ends_turn(&self) -> bool` to end the turn
+after the calls in its current round finish. For example, a tool that submits
+a deliverable returns `true` from `ends_turn` and `Ok(output)` on successful
+submission. When a deadline notice addresses an agent with an offered
+turn-ending tool, it names the tool the model can call to deliver its result.
+
 ## 2a. The Seven Standard Kernel Tools (`hya_core::kernel::tools`)
 
 `hya-core` ships seven self-contained standard primitives so bare mode (`hya --bare`) and trimmed bundle profiles operate cleanly without requiring `hya/hashline`, LSP, formatters, or channel bundles:

@@ -360,6 +360,13 @@ pub trait Tool: Send + Sync {
     fn result_policy(&self) -> ToolResultPolicy {
         ToolResultPolicy::Default
     }
+    /// Whether a successful invocation ends the turn after all calls in the round.
+    ///
+    /// When offered to the model, a turn-ending tool can also be named in
+    /// deadline notices as the way to deliver the result.
+    fn ends_turn(&self) -> bool {
+        false
+    }
     /// Run the tool body with validated (or raw) `input` and the call context.
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
@@ -397,6 +404,10 @@ impl Tool for NamedTool {
 
     fn result_policy(&self) -> ToolResultPolicy {
         self.inner.result_policy()
+    }
+
+    fn ends_turn(&self) -> bool {
+        self.inner.ends_turn()
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
