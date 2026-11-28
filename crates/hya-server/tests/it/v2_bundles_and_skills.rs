@@ -123,7 +123,7 @@ async fn bundle_api_state() -> AppState {
         runtime,
         perm,
         EventBus::default(),
-    ));
+    ).with_legacy_coordination());
     state_of(engine, std::env::temp_dir())
 }
 

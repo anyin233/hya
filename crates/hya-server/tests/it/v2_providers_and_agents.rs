@@ -1135,7 +1135,7 @@ async fn member_fixture() -> (AppState, Arc<ResidentSupervisor>, SessionId, Sess
         support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         permission,
         EventBus::default(),
-    ));
+    ).with_legacy_coordination());
     let agent = Arc::new(AgentSpec {
         name: AgentName::new("build"),
         model: ModelRef::new("fake"),

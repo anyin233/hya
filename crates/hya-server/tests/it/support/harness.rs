@@ -176,7 +176,7 @@ pub fn engine_on<P: Provider + 'static>(
         support::test_runtime(Arc::new(hya_tool_loader::builtins())),
         perm,
         EventBus::default(),
-    ));
+    ).with_legacy_coordination());
     (engine, asks)
 }
 
