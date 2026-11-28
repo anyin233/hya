@@ -308,6 +308,10 @@ pub(crate) async fn bundle_api(
     let failed = |error: SdkError| anyhow::anyhow!("{bundle} {id}: {}", api(error));
     let (sdk, workdir) = client(url)?;
     let session = session.map(|session| session.to_string());
+    if let Some(session) = &session {
+        // A missing session is the caller's error, not the bundle's.
+        sdk.get_session(session).await.map_err(api)?;
+    }
     let endpoint = sdk
         .list_bundle_apis(session.as_deref())
         .await
