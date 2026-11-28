@@ -30,6 +30,8 @@ pub struct ProjectScopeRefresh {
 
 #[derive(Default)]
 struct ProjectSources {
+    /// The messages of the sources the last refresh skipped.
+    diagnostics: Vec<String>,
     base_revision: u64,
     roots: Vec<PathBuf>,
     attempted: Option<[u8; 32]>,
@@ -192,15 +194,16 @@ impl ProjectScopeRefresh {
             .into_iter()
             .map(|error| (key.to_string(), error))
             .collect::<Vec<_>>();
-        if let Some(error) = base_error {
-            match error {
-                CoreError::BundleRefresh(failures) => errors.extend(failures),
-                CoreError::BundleRuntime { bundle_id, source } => {
-                    errors.push((bundle_id, source.to_string()))
-                }
-                other => errors.push((key.to_string(), other.to_string())),
+        // Reported with this scope's errors but kept out of its diagnostics:
+        // the installed base reports its own.
+        let base_failures = match base_error {
+            Some(CoreError::BundleRefresh(failures)) => failures,
+            Some(CoreError::BundleRuntime { bundle_id, source }) => {
+                vec![(bundle_id, source.to_string())]
             }
-        }
+            Some(other) => vec![(key.to_string(), other.to_string())],
+            None => Vec::new(),
+        };
         changed |= plugins_changed;
         let dirs = if scan_bundles {
             project_bundle_dirs(roots, &state.bundles, &mut errors)
@@ -316,6 +319,8 @@ impl ProjectScopeRefresh {
                 namespaces.insert(bundle.namespace().to_string());
             }
         }
+        state.diagnostics = errors.iter().map(|(_, message)| message.clone()).collect();
+        errors.extend(base_failures);
         if !changed {
             return if errors.is_empty() {
                 Ok(false)
@@ -671,5 +676,14 @@ impl RuntimeCatalogRefresh for ProjectScopeRefresh {
             }
             CatalogScope::Global | CatalogScope::Directory(_) => Ok(false),
         }
+    }
+
+    async fn diagnostics(&self, scope: &CatalogScope) -> Vec<String> {
+        let mut lines = self.installed.diagnostics();
+        if matches!(scope, CatalogScope::Project { .. }) {
+            let state = self.scope_state(&scope.key());
+            lines.extend(state.lock().await.diagnostics.iter().cloned());
+        }
+        lines
     }
 }

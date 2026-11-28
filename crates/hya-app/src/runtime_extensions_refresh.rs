@@ -142,6 +142,10 @@ impl hya_engine::RuntimeCatalogRefresh for RuntimeExtensionsRefresh {
     ) -> Result<bool, hya_engine::CoreError> {
         self.catalogs.refresh_scope_explicit(runtime, scope).await
     }
+
+    async fn diagnostics(&self, scope: &hya_engine::CatalogScope) -> Vec<String> {
+        self.catalogs.diagnostics(scope).await
+    }
 }
 
 #[cfg(test)]

@@ -166,18 +166,16 @@ impl WorkflowService {
         Ok(catalog.summaries())
     }
 
-    /// Build the catalog `hya workflow list|info` show for the client's `cwd`.
-    pub(crate) async fn cli_catalog(
+    /// The scope `hya workflow list|info` show for the client's `cwd`.
+    pub(crate) async fn cli_scope(
         &self,
         cwd: &Path,
-    ) -> Result<WorkflowCatalog, WorkflowControlError> {
-        let scope = self
+    ) -> Result<hya_runtime_abi::ScopeCatalogSnapshot, WorkflowControlError> {
+        Ok(self
             .runtime()?
             .catalog_reader()
             .resolve_scope_catalog(None, Some(cwd))
-            .await?;
-        let roots = WorkflowCatalogRoots::for_scope(Some(cwd), &scope.project_roots);
-        WorkflowCatalog::from_bundles(roots, &scope.bundles)
+            .await?)
     }
 
     /// Execute one typed [`WorkflowCommand`] against `session`.

@@ -464,6 +464,16 @@ impl InstalledBundleRefresh {
     }
 
     /// Installed and first-party catalogs of the last base publication.
+    /// The installed rows the last base publication skipped, as
+    /// `installed bundle <id>: <error>` lines.
+    pub(crate) fn diagnostics(&self) -> Vec<String> {
+        self.base_catalogs()
+            .unreadable_errors
+            .iter()
+            .map(|(id, error)| format!("installed bundle {id}: {error}"))
+            .collect()
+    }
+
     pub(crate) fn base_catalogs(&self) -> Arc<BaseCatalogs> {
         Arc::clone(
             &self
@@ -775,5 +785,9 @@ impl RuntimeCatalogRefresh for InstalledBundleRefresh {
         } else {
             Err(CoreError::BundleRefresh(base.unreadable_errors.clone()))
         }
+    }
+
+    async fn diagnostics(&self, _scope: &hya_engine::CatalogScope) -> Vec<String> {
+        InstalledBundleRefresh::diagnostics(self)
     }
 }

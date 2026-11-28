@@ -14,6 +14,7 @@ use std::sync::Arc;
 use hya_runtime_abi::{DriverReport, NativeBundleApiReply, NativeBundleApiRequest};
 use serde_json::{Value, json};
 
+use crate::catalog::{WorkflowCatalog, WorkflowCatalogRoots};
 use crate::error::WorkflowControlError;
 use crate::model::{
     WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowInfo, WorkflowMemberRole,
@@ -29,7 +30,9 @@ pub(crate) async fn handle(
     endpoint: &str,
     request: &NativeBundleApiRequest,
 ) -> NativeBundleApiReply {
-    let report = match run(service, endpoint, request).await {
+    // Scope diagnostics print first, as `warning:` lines, even on failure.
+    let mut warnings = String::new();
+    let mut report = match run(service, endpoint, request, &mut warnings).await {
         Ok(report) => report,
         Err(message) => DriverReport {
             stdout: String::new(),
@@ -37,6 +40,7 @@ pub(crate) async fn handle(
             exit_code: 1,
         },
     };
+    report.stderr.insert_str(0, &warnings);
     NativeBundleApiReply {
         status: 200,
         body: json!(report),
@@ -47,13 +51,14 @@ async fn run(
     service: &Arc<WorkflowService>,
     endpoint: &str,
     request: &NativeBundleApiRequest,
+    warnings: &mut String,
 ) -> Result<DriverReport, String> {
     let args = &request.body["args"];
     let json = args["json"].as_bool().unwrap_or(false);
     let name = args["name"].as_str().map(str::to_owned);
     let (command, is_run) = match endpoint {
         "cli_list" => {
-            let catalog = service.cli_catalog(cwd(request)?).await.map_err(coded)?;
+            let catalog = cli_catalog(service, cwd(request)?, warnings).await?;
             return finish(
                 &WorkflowCommandResult::List {
                     workflows: catalog.summaries(),
@@ -64,7 +69,7 @@ async fn run(
         }
         "cli_info" => {
             let name = name.ok_or("workflow info requires NAME")?;
-            let catalog = service.cli_catalog(cwd(request)?).await.map_err(coded)?;
+            let catalog = cli_catalog(service, cwd(request)?, warnings).await?;
             let workflow = catalog.describe(&name).map_err(coded)?;
             return finish(&WorkflowCommandResult::Info { workflow }, json, false);
         }
@@ -116,6 +121,23 @@ async fn run(
             format!("{code}: {error}")
         })?;
     finish(&result, json, is_run)
+}
+
+/// The catalog of `cwd`'s scope; its diagnostics go to `warnings`.
+async fn cli_catalog(
+    service: &Arc<WorkflowService>,
+    cwd: &Path,
+    warnings: &mut String,
+) -> Result<WorkflowCatalog, String> {
+    let scope = service.cli_scope(cwd).await.map_err(coded)?;
+    for diagnostic in &scope.diagnostics {
+        let _ = writeln!(warnings, "warning: {diagnostic}");
+    }
+    WorkflowCatalog::from_bundles(
+        WorkflowCatalogRoots::for_scope(Some(cwd), &scope.project_roots),
+        &scope.bundles,
+    )
+    .map_err(coded)
 }
 
 fn cwd(request: &NativeBundleApiRequest) -> Result<&Path, String> {

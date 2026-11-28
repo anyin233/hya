@@ -1714,11 +1714,13 @@ impl HostCatalogReader for AppHostRuntime {
                 }
             }
             let runtime_fingerprint = hex_digest(&hasher.finalize());
+            let diagnostics = engine.catalog_diagnostics(binding.scope()).await;
             Ok(ScopeCatalogSnapshot {
                 workdir,
                 project_roots,
                 bundles,
                 runtime_fingerprint,
+                diagnostics,
             })
         })
         .await

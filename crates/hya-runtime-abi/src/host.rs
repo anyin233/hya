@@ -899,6 +899,9 @@ pub struct ScopeCatalogSnapshot {
     pub bundles: Vec<Bundle>,
     /// Stable runtime fingerprint covering active catalogs/bundles.
     pub runtime_fingerprint: String,
+    /// Sources the scope skipped, one line each (`installed bundle <id>:
+    /// <error>`, `project bundle <dir>: <error>`), in load order.
+    pub diagnostics: Vec<String>,
 }
 
 /// Read-only access to agents, skills, bundles, and effective configuration.

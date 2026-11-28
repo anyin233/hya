@@ -74,6 +74,8 @@ struct MockState {
     route_outcomes: Vec<TurnRouteOutcome>,
     activation_replies: Mutex<Vec<String>>,
     deny_agent: Option<String>,
+    project_roots: Vec<PathBuf>,
+    diagnostics: Vec<String>,
 }
 
 struct MockHostRuntime {
@@ -526,9 +528,10 @@ impl HostCatalogReader for MockHostRuntime {
             workdir: directory
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| st.workdir.clone()),
-            project_roots: Vec::new(),
+            project_roots: st.project_roots.clone(),
             bundles: st.bundles.clone(),
             runtime_fingerprint: "test-fingerprint-v1".to_string(),
+            diagnostics: st.diagnostics.clone(),
         })
     }
     async fn authorize_workflow_agent(
@@ -1243,6 +1246,41 @@ async fn cli_endpoints_print_what_hya_workflow_printed() {
         "{unknown:?}"
     );
 
+    service.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn cli_list_and_info_read_project_roots_from_a_subdirectory_and_print_diagnostics() {
+    let root = test_root("cli-scope");
+    let (first, second) = (root.join("first"), root.join("second"));
+    let nested = first.join("src/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let second_workflows = workflow_project_dir(&second);
+    std::fs::create_dir_all(&second_workflows).unwrap();
+    std::fs::write(second_workflows.join("demo.hya.md"), DEMO_WORKFLOW).unwrap();
+    let runtime = Arc::new(MockHostRuntime::new(root.clone()));
+    {
+        let mut st = runtime.state.lock().unwrap();
+        st.project_roots = vec![first.clone(), second.clone()];
+        st.diagnostics = vec!["project bundle /p/broken: invalid".into()];
+    }
+    let service = Arc::new(WorkflowService::new());
+    service.start(runtime.clone()).await.unwrap();
+    let api = WorkflowBundleApiHandler::new(Arc::clone(&service));
+
+    let list = cli_call(&api, "cli_list", None, json!({}), &nested).await;
+    assert_eq!(list.exit_code, 0, "{list:?}");
+    assert!(list.stdout.starts_with("demo\n"), "{}", list.stdout);
+    assert_eq!(list.stderr, "warning: project bundle /p/broken: invalid\n");
+    let missing = cli_call(&api, "cli_info", None, json!({ "name": "nope" }), &nested).await;
+    assert_eq!(
+        (missing.stderr.as_str(), missing.exit_code),
+        (
+            "warning: project bundle /p/broken: invalid\nError: WORKFLOW_NOT_FOUND: Workflow `nope` was not found\n",
+            1
+        )
+    );
     service.stop().await.unwrap();
     let _ = std::fs::remove_dir_all(&root);
 }
