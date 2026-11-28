@@ -164,7 +164,6 @@ jobs:
         env:
           CRATE_NAME: ${{ matrix.crate_name }}
           LIB_STEM: ${{ matrix.lib_stem }}
-          ABI_VERSION: ${{ matrix.abi_version }}
           BUNDLE_NAME: ${{ matrix.name }}
           BUNDLE_PATH: ${{ matrix.path }}
           ABI_VERSION: ${{ matrix.abi_version }}
@@ -355,7 +354,7 @@ jobs:
               exit 1
             fi
           done
-          echo "All 13 staged builtin bundles verified in bare-vs-full smoke."
+          echo "All 14 staged builtin bundles verified in bare-vs-full smoke."
 
   builtin-bundles-gate:
     name: builtin-bundles-gate
