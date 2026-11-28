@@ -29,18 +29,15 @@ use hya_plugin::protocol::Frame;
 use hya_plugin::{PluginHost, PreparedPlugin};
 use hya_proto::{
     Event, FinishReason, MailEndpoint, MailKind, MessageId, OwnerRunId, RosterStatus, SubagentMode,
-    ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision,
+    ToolName, ToolSchema,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
 };
-use hya_tool::extension::{
-    ExtensionEvent, projection_reducers, team_projection, workflow_projection,
-};
+use hya_tool::extension::{ExtensionEvent, team_projection};
 use hya_tool::{
     AgentDef, ArchiveReason, InlineAgent, InteractionPlane, Mode, PermissionModel, PermissionPlane,
     PermissionRules, Rule, SpawnMember, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
-    WorkflowRunStatus, WorkflowStagePlan,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -1189,8 +1186,8 @@ async fn built_shutdown_cancels_started_workflow_while_reads_stay_unblocked() {
     assert!(!engine.has_active_service_work(lead));
     let state = engine.read_projection(lead).await.unwrap();
     assert_eq!(
-        workflow_projection(&state).unwrap().run.unwrap().status,
-        WorkflowRunStatus::Cancelled
+        state.extensions["hya/workflow"]["run"]["status"],
+        "cancelled"
     );
 }
 
@@ -1293,29 +1290,27 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
     store
         .append_event(
             wf_session,
-            &ExtensionEvent::WorkflowRunStarted {
+            &Event::Extension {
                 session: wf_session,
-                run: hya_proto::WorkflowRunId::new(),
-                workflow: WorkflowIdentity {
-                    source: hya_proto::WorkflowSourceId::new("test:rebuild"),
-                    name: "rebuild".into(),
-                    revision: WorkflowRevision::from_bytes([1; 32]),
-                },
-                request_hash: "inputs".into(),
-                owner: first_owner,
-                stages: vec![WorkflowStagePlan {
-                    id: "stage".into(),
-                    title: None,
-                    agent: AgentName::new("general"),
-                    mode: "once".into(),
-                    level: 0,
-                    worker_model: None,
-                    selected_worker_model: None,
-                    verifier_model: None,
-                    selected_verifier_model: None,
-                }],
-            }
-            .into_event(),
+                bundle: "hya/workflow".into(),
+                kind: "workflow_run_started".into(),
+                payload: json!({
+                    "run": uuid::Uuid::now_v7(),
+                    "workflow": {
+                        "source": "test:rebuild",
+                        "name": "rebuild",
+                        "revision": "01".repeat(32),
+                    },
+                    "request_hash": "inputs",
+                    "owner": first_owner,
+                    "stages": [{
+                        "id": "stage",
+                        "agent": "general",
+                        "mode": "once",
+                        "level": 0,
+                    }],
+                }),
+            },
         )
         .await
         .unwrap();
@@ -1328,13 +1323,20 @@ async fn runtime_store_ownership_contention_and_startup_recovery() {
         Err(hya_store::StoreError::RuntimeOwnerBusy)
     ));
     assert_ne!(next.engine().runtime_owner(), first_owner);
-    let wf_proj = hya_proto::Projection::from_events_with(
-        &store.replay(wf_session).await.unwrap(),
-        &projection_reducers(),
-    );
-    let wf = workflow_projection(&wf_proj).unwrap().run.unwrap();
-    assert_eq!(wf.status, WorkflowRunStatus::Interrupted);
-    assert_eq!(wf.error.as_deref(), Some("backend startup recovery"));
+    let finished = store
+        .replay(wf_session)
+        .await
+        .unwrap()
+        .into_iter()
+        .find_map(|envelope| match envelope.event {
+            Event::Extension { kind, payload, .. } if kind == "workflow_run_finished" => {
+                Some(payload)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished["status"], "interrupted");
+    assert_eq!(finished["error"], "backend startup recovery");
     next.shutdown().await.unwrap();
     store.claim_runtime_owner(OwnerRunId::new()).unwrap();
 }

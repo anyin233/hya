@@ -56,15 +56,6 @@ mod skill;
 pub mod spawn;
 /// Tool trait, registry, and permission class metadata.
 pub mod tool;
-/// User-authored workflow plane and the `workflow` tool.
-pub mod workflow_plane;
-pub use workflow_plane::{
-    WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowHostError,
-    WorkflowMemberProjection, WorkflowMemberRole, WorkflowPlane, WorkflowProjection,
-    WorkflowRequest, WorkflowRequestSink, WorkflowRouteFailureClass, WorkflowRunProjection,
-    WorkflowRunResult, WorkflowRunStatus, WorkflowSendError, WorkflowStagePlan,
-    WorkflowStageProjection, WorkflowStageRouteOutcome, WorkflowStageStatus,
-};
 
 pub use agents::AgentDef;
 pub use hya_proto::mail::ChannelPolicySnapshot;
