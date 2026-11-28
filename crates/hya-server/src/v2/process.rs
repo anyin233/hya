@@ -161,7 +161,6 @@ async fn bootstrap(
         tools,
         interactions: Vec::new(),
         saved_rules: super::catalog::saved_rule_rows(&st).await,
-        formatter_available: !st.formatter_status.is_empty(),
         sessions_cursor: String::new(),
         context_files,
     }))

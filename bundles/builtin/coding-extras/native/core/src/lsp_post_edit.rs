@@ -129,7 +129,7 @@ pub(crate) async fn format_and_diagnose(
 }
 
 async fn touch_and_diagnose(
-    lsp: &hya_tool::LspPlane,
+    lsp: &crate::lsp_service::LspPlane,
     workdir: &Path,
     paths: &[PathBuf],
 ) -> Result<Value, ToolError> {

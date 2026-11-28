@@ -1213,8 +1213,6 @@ async fn build_session_engine_with_mcp_defer(
             },
         )
         .with_token_accounting(TokenAccounting::new(context_settings.token_accounting))
-        .with_formatter(settings.formatter())
-        .with_lsp(settings.lsp()?)
         .with_exclusive_tool(
             (settings.code_mode() == config::CodeMode::Only)
                 .then(|| config::CodeMode::TOOL.to_string()),

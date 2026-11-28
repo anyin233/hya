@@ -176,12 +176,6 @@ impl TurnToolGate<'_> {
                             if let Some(parent) = parent_session {
                                 extensions.insert(hya_tool::ParentSession(parent));
                             }
-                            if engine.lsp.is_configured() {
-                                extensions.insert(engine.lsp.clone());
-                            }
-                            if engine.formatter.is_configured() {
-                                extensions.insert(engine.formatter.clone());
-                            }
                             let mut ctx = ToolCtx {
                                 workdir: binding.workdir().to_path_buf(),
                                 roots: workspace.roots.clone(),

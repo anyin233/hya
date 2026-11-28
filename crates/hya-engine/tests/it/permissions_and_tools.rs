@@ -20,6 +20,7 @@ use hya_bundle::{
 use hya_engine::hooks::NativePermissionApproveInput;
 use hya_engine::hooks::{
     NativeCompactionAfterInput, NativeCompactionBeforeInput, NativeCompactionDecision,
+    ToolVisibilityInput, ToolVisibilityOutcome,
 };
 use hya_engine::{
     AgentCatalog, CreateSession, EventBus, NativeHook, RuntimePermissionMode, RuntimeRegistry,
@@ -485,6 +486,34 @@ impl Provider for RequestCaptureProvider {
     }
 }
 
+/// Hides `ask_user` from a turn no human can answer, as a bundle's
+/// `tool.visibility` hook would.
+struct HideAskUserWhenAlone;
+
+#[async_trait]
+impl NativeHook for HideAskUserWhenAlone {
+    fn id(&self) -> &str {
+        "test.hide-ask-user"
+    }
+
+    fn hook_points(&self) -> &[hya_runtime_abi::HookPoint] {
+        &[hya_runtime_abi::HookPoint::ToolVisibility]
+    }
+
+    async fn tool_visibility(
+        &self,
+        input: ToolVisibilityInput,
+    ) -> Result<ToolVisibilityOutcome, hya_runtime_abi::HostError> {
+        Ok(if input.interactive {
+            ToolVisibilityOutcome::Preserve
+        } else {
+            ToolVisibilityOutcome::Hide {
+                tools: vec!["ask_user".to_string()],
+            }
+        })
+    }
+}
+
 async fn capture_request(
     provider_id: &'static str,
     model: &str,
@@ -497,10 +526,7 @@ async fn capture_request(
     if !interactive {
         drop(questions);
     }
-    let mut hooks = hya_coding_extras_core::coding_extras_hooks(
-        Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
-        None,
-    );
+    let mut hooks: Vec<Arc<dyn NativeHook>> = vec![Arc::new(HideAskUserWhenAlone)];
     hooks.extend(
         hya_tool_loader::load_v2("hya/plan", hya_tool_loader::noop_host_runtime())
             .unwrap()
@@ -792,10 +818,7 @@ async fn nested_calls_run_in_callers_view_and_record_against_caller() {
     )
     .await
     .with_hook_list({
-        let mut hooks = hya_coding_extras_core::coding_extras_hooks(
-            Arc::new(hya_coding_extras_core::CodingExtrasState::new()),
-            None,
-        );
+        let mut hooks: Vec<Arc<dyn NativeHook>> = vec![Arc::new(HideAskUserWhenAlone)];
         hooks.extend(
             hya_tool_loader::load_v2("hya/plan", hya_tool_loader::noop_host_runtime())
                 .unwrap()

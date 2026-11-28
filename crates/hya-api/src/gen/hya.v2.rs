@@ -9928,9 +9928,6 @@ pub struct Bootstrap {
     /// Saved permission rules.
     #[prost(message, repeated, tag = "10")]
     pub saved_rules: ::prost::alloc::vec::Vec<SavedRule>,
-    /// Formatter availability advertised to the frontend.
-    #[prost(bool, tag = "11")]
-    pub formatter_available: bool,
     /// Cursor for the session list; fetch sessions with `Session.List`.
     #[prost(string, tag = "12")]
     pub sessions_cursor: ::prost::alloc::string::String,

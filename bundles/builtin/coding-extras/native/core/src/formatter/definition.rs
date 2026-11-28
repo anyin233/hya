@@ -2,10 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use hya_tool::{FormatterConfig, FormatterEntry};
-
 use super::catalog::{BuiltinSpec, CheckKind, builtins};
 use super::command::builtin_environment;
+use super::{FormatterConfig, FormatterEntry};
 
 #[derive(Clone, Debug)]
 pub(crate) struct FormatterDefinition {

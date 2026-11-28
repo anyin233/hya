@@ -176,36 +176,6 @@ impl EngineSettings {
     pub(crate) fn plugin_ids(&self) -> Vec<String> {
         self.file.plugins.keys().cloned().collect()
     }
-
-    pub(crate) fn formatter(&self) -> hya_tool::FormatterPlane {
-        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
-            return hya_tool::FormatterPlane::default();
-        }
-        let raw: hya_coding_extras_core::RawFormatterConfig = self
-            .read_bundle_config_value(&["hya/coding-extras"])
-            .and_then(|val| {
-                val.get("formatter")
-                    .cloned()
-                    .and_then(|sub| serde_norway::from_value(sub).ok())
-            })
-            .unwrap_or_default();
-        hya_coding_extras_core::build_formatter_plane(raw)
-    }
-
-    pub(crate) fn lsp(&self) -> anyhow::Result<hya_tool::LspPlane> {
-        if !self.file.bundles.builtin.is_enabled("hya/coding-extras") {
-            return Ok(hya_tool::LspPlane::default());
-        }
-        let selection = self
-            .read_bundle_config_value(&["hya/coding-extras"])
-            .and_then(|val| {
-                val.get("lsp")
-                    .cloned()
-                    .and_then(|sub| serde_norway::from_value(sub).ok())
-            });
-        hya_coding_extras_core::build_lsp_plane(selection)
-            .map_err(|error| anyhow::anyhow!("{error}"))
-    }
 }
 
 /// `catalog_scopes:` block: how many Project/Directory catalog scopes (and

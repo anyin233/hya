@@ -1521,9 +1521,6 @@ impl serde::Serialize for Bootstrap {
         if !self.saved_rules.is_empty() {
             len += 1;
         }
-        if self.formatter_available {
-            len += 1;
-        }
         if !self.sessions_cursor.is_empty() {
             len += 1;
         }
@@ -1561,9 +1558,6 @@ impl serde::Serialize for Bootstrap {
         if !self.saved_rules.is_empty() {
             struct_ser.serialize_field("savedRules", &self.saved_rules)?;
         }
-        if self.formatter_available {
-            struct_ser.serialize_field("formatterAvailable", &self.formatter_available)?;
-        }
         if !self.sessions_cursor.is_empty() {
             struct_ser.serialize_field("sessionsCursor", &self.sessions_cursor)?;
         }
@@ -1591,8 +1585,6 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
             "interactions",
             "saved_rules",
             "savedRules",
-            "formatter_available",
-            "formatterAvailable",
             "sessions_cursor",
             "sessionsCursor",
             "context_files",
@@ -1611,7 +1603,6 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
             Tools,
             Interactions,
             SavedRules,
-            FormatterAvailable,
             SessionsCursor,
             ContextFiles,
         }
@@ -1645,7 +1636,6 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                             "tools" => Ok(GeneratedField::Tools),
                             "interactions" => Ok(GeneratedField::Interactions),
                             "savedRules" | "saved_rules" => Ok(GeneratedField::SavedRules),
-                            "formatterAvailable" | "formatter_available" => Ok(GeneratedField::FormatterAvailable),
                             "sessionsCursor" | "sessions_cursor" => Ok(GeneratedField::SessionsCursor),
                             "contextFiles" | "context_files" => Ok(GeneratedField::ContextFiles),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -1677,7 +1667,6 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                 let mut tools__ = None;
                 let mut interactions__ = None;
                 let mut saved_rules__ = None;
-                let mut formatter_available__ = None;
                 let mut sessions_cursor__ = None;
                 let mut context_files__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -1742,12 +1731,6 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                             }
                             saved_rules__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::FormatterAvailable => {
-                            if formatter_available__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("formatterAvailable"));
-                            }
-                            formatter_available__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::SessionsCursor => {
                             if sessions_cursor__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("sessionsCursor"));
@@ -1773,7 +1756,6 @@ impl<'de> serde::Deserialize<'de> for Bootstrap {
                     tools: tools__.unwrap_or_default(),
                     interactions: interactions__.unwrap_or_default(),
                     saved_rules: saved_rules__.unwrap_or_default(),
-                    formatter_available: formatter_available__.unwrap_or_default(),
                     sessions_cursor: sessions_cursor__.unwrap_or_default(),
                     context_files: context_files__.unwrap_or_default(),
                 })

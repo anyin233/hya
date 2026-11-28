@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hya_tool::path::{absolutize, file_uri, normalize};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
-
-use crate::path::{absolutize, file_uri, normalize};
 
 /// LSP operation names advertised by the `lsp` tool (camelCase wire values).
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

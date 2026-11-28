@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use hya_runtime_abi::{HostRuntime, NativeHook, NativeService};
-use hya_tool::{FormatterPlane, LspPlane, Tool};
+use hya_tool::Tool;
 
 mod apply_patch;
 mod ask_user;
@@ -41,29 +41,13 @@ pub mod service;
 mod utf8_bom;
 
 pub use formatter::BuiltinFormatterProvider;
-pub use formatter::config::{RawFormatterConfig, RawFormatterEntry};
 pub use hooks::{
     ASK_USER_VISIBILITY_HOOK_ID, AskUserVisibilityHook, POST_EDIT_HOOK_ID, PostEditHook,
 };
 pub use lsp_api::LspApi;
-pub use lsp_service::config::{Selection as LspSelection, ServerConfig as LspServerConfig};
 pub use service::{
     BUNDLE_ID, CodingExtrasConfig, CodingExtrasService, CodingExtrasState, SERVICE_ID,
 };
-
-/// Build a [`FormatterPlane`] from a raw formatter configuration value.
-#[must_use]
-pub fn build_formatter_plane(config: RawFormatterConfig) -> FormatterPlane {
-    FormatterPlane::new(Arc::new(BuiltinFormatterProvider::new(config.into())))
-}
-
-/// Build an [`LspPlane`] from an optional LSP selection configuration.
-///
-/// # Errors
-/// Returns a diagnostic message when a configured LSP server entry is invalid.
-pub fn build_lsp_plane(selection: Option<LspSelection>) -> Result<LspPlane, String> {
-    lsp_service::plane_from_selection(selection)
-}
 
 /// Construct the seven coding-extras tools sharing `state`.
 #[must_use]
@@ -134,16 +118,17 @@ mod tests {
         SessionSummaryMeta, ToolVisibilityInput, ToolVisibilityOutcome, TurnOutcome,
         TurnSpawnRequest, TurnStartRequest, TurnStatus,
     };
-    use hya_tool::{
-        AgentDef, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
-        FormatterProvider, FormatterStatus, LspError, LspPlane, LspProvider, LspRequest,
-        SkillCatalogEntry, path::display_path,
-    };
+    use hya_tool::{AgentDef, SkillCatalogEntry, path::display_path};
     use serde_json::{Value, json};
     use tokio::sync::{Mutex, broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::formatter::{
+        FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
+        FormatterStatus,
+    };
+    use crate::lsp_service::{LspError, LspPlane, LspProvider, LspRequest};
 
     struct TempDir(PathBuf);
 

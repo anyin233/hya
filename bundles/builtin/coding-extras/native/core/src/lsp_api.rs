@@ -150,9 +150,9 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    use hya_tool::{FormatterPlane, LspError, LspOperation, LspPlane, LspProvider, LspRequest};
-
     use super::*;
+    use crate::formatter::FormatterPlane;
+    use crate::lsp_service::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 
     struct SymbolLsp {
         rows: Vec<Value>,

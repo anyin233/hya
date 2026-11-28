@@ -2573,7 +2573,6 @@ One-round-trip startup snapshot for frontends.
 | `tools` (8) | `repeated ToolSummary` | Tool catalog including hidden aliases for completion UIs. |
 | `interactions` (9) | `repeated Interaction` | Pending permission/question requests across sessions. |
 | `saved_rules` (10) | `repeated SavedRule` | Saved permission rules. |
-| `formatter_available` (11) | `bool` | Formatter availability advertised to the frontend. |
 | `sessions_cursor` (12) | `string` | Cursor for the session list; fetch sessions with `Session.List`. |
 | `context_files` (13) | `repeated ContextFile` | `AGENTS.md` files a full-mode session in this directory reads into its initial context, parent first (from the directory up to `$HOME`). Empty without a directory scope and with `hya serve --pure`. |
 

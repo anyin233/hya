@@ -62,7 +62,6 @@ pub use agent_model_control::{
 };
 pub use bundle_cli::{CliContribution, cli_contributions};
 pub use headless::prepare_driver;
-pub use hya_coding_extras_core::BuiltinFormatterProvider;
 pub use hya_tool::InvocationPolicy;
 pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs, first_party_catalogs_for,

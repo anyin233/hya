@@ -6,13 +6,12 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use hya_runtime_abi::{HostError, HostRuntime, NativeService, ServiceHealth};
-use hya_tool::{FormatterPlane, LspPlane};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::formatter::BuiltinFormatterProvider;
 use crate::formatter::config::RawFormatterConfig;
-use crate::lsp_service::{self, ProcessLspProvider};
+use crate::formatter::{BuiltinFormatterProvider, FormatterPlane};
+use crate::lsp_service::{self, LspPlane, ProcessLspProvider};
 
 /// Bundle identity owning the coding-extras service and hooks.
 pub const BUNDLE_ID: &str = "hya/coding-extras";

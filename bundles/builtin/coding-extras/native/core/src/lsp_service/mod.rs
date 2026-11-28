@@ -2,6 +2,7 @@
 
 /// Process LSP configuration types and server auto-detection.
 pub mod config;
+mod plane;
 mod transport;
 
 use std::collections::BTreeMap;
@@ -9,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_tool::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, OnceCell, watch};
 
 use config::ServerConfig;
+pub use plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub(crate) use transport::uri_to_file_path;
 use transport::{Client, file_uri};
 
@@ -40,14 +41,6 @@ pub fn from_selection(
         LspPlane::new(Arc::clone(&provider) as Arc<dyn LspProvider>),
         Some(provider),
     ))
-}
-
-/// Build an [`LspPlane`] from `selection`.
-///
-/// # Errors
-/// Returns a diagnostic message when a configured LSP server entry is invalid.
-pub fn plane_from_selection(selection: Option<config::Selection>) -> Result<LspPlane, String> {
-    from_selection(selection).map(|(plane, _)| plane)
 }
 
 /// Process-backed LSP provider managing stdio language server subprocesses.

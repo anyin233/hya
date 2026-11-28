@@ -112,8 +112,8 @@ message Bootstrap {
   repeated Interaction interactions = 9;
   // Saved permission rules.
   repeated SavedRule saved_rules = 10;
-  // Formatter availability advertised to the frontend.
-  bool formatter_available = 11;
+  reserved 11;
+  reserved "formatter_available";
   // Cursor for the session list; fetch sessions with `Session.List`.
   string sessions_cursor = 12;
   // `AGENTS.md` files a full-mode session in this directory reads into its

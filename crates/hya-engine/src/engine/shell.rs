@@ -541,12 +541,6 @@ impl SessionEngine {
                             if let Some(parent) = parent_session {
                                 extensions.insert(hya_tool::ParentSession(parent));
                             }
-                            if self.lsp.is_configured() {
-                                extensions.insert(self.lsp.clone());
-                            }
-                            if self.formatter.is_configured() {
-                                extensions.insert(self.formatter.clone());
-                            }
                             let ctx = ToolCtx {
                                 workdir: binding.workdir().to_path_buf(),
                                 roots: workspace.roots,

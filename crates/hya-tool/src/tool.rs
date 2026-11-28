@@ -101,9 +101,8 @@ impl ErasedPlane {
 /// Core `hya-bare` passes an empty [`ExtensionPlanes`]. Extension bundles and
 /// host adapters attach domain planes (such as [`crate::SpawnerPlane`],
 /// [`crate::LifecyclePlane`], [`crate::WorkflowPlane`],
-/// [`crate::ProjectActivityPlane`], [`crate::LspPlane`], [`crate::FormatterPlane`],
-/// agent rosters, or [`ParentSession`]) without coupling [`ToolCtx`] to domain
-/// subsystems (ADR-0039).
+/// [`crate::ProjectActivityPlane`], agent rosters, or [`ParentSession`])
+/// without coupling [`ToolCtx`] to domain subsystems (ADR-0039).
 #[derive(Clone, Default)]
 pub struct ExtensionPlanes {
     planes: Option<Arc<BTreeMap<String, Arc<ErasedPlane>>>>,

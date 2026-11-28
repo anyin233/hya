@@ -6,10 +6,10 @@ use hya_tool::tool::obj_schema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::lsp_service::{LspOperation, LspRequest};
 use crate::service::CodingExtrasState;
 use hya_tool::path::{absolutize, display_path, file_uri, normalize, resolve_file};
 use hya_tool::{Action, ProjectScope, Resource};
-use hya_tool::{LspOperation, LspRequest};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
 /// Read-only LSP code-intelligence tool (`lsp`).

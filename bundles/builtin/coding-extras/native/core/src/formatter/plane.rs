@@ -1,4 +1,4 @@
-//! External code-formatter plane used after write/edit/patch.
+//! Formatter plane the coding-extras tools and post-edit hook read.
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -1,7 +1,6 @@
 //! Real stdio boundary regressions for versioning, isolation, and process ownership.
 use super::*;
-use crate::lsp_service::ProcessLspProvider;
-use hya_tool::{LspOperation, LspProvider, LspRequest};
+use crate::lsp_service::{LspOperation, LspProvider, LspRequest, ProcessLspProvider};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

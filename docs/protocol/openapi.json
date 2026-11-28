@@ -4126,9 +4126,6 @@
               "$ref": "#/components/schemas/SavedRule"
             }
           },
-          "formatter_available": {
-            "type": "boolean"
-          },
           "sessions_cursor": {
             "type": "string"
           },

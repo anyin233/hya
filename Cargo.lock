@@ -1462,6 +1462,7 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "similar",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",

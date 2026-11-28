@@ -6,10 +6,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_proto::SessionId;
-use hya_tool::{
-    Action, FormatterPlane, LspError, LspOperation, LspPlane, LspProvider, LspRequest, ToolError,
+use hya_coding_extras_core::formatter::FormatterPlane;
+use hya_coding_extras_core::lsp_service::{
+    LspError, LspOperation, LspPlane, LspProvider, LspRequest,
 };
+use hya_proto::SessionId;
+use hya_tool::{Action, ToolError};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 

@@ -6,10 +6,7 @@ use hya_proto::{MessageId, ModelRef, SessionId, ToolCallId};
 use hya_provider::{ProviderRouter, ReasoningEffort};
 use hya_store::SessionStore;
 use hya_tool::handle::{ArtifactPlane, UriSchemaPlane};
-use hya_tool::{
-    FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, PermissionPlane, ResolvedTool,
-    ToolError,
-};
+use hya_tool::{InteractionPlane, LifecyclePlane, PermissionPlane, ResolvedTool, ToolError};
 use serde_json::Value;
 
 #[cfg(test)]
@@ -171,8 +168,6 @@ pub struct SessionEngine {
     artifacts: ArtifactPlane,
     /// Dynamic URI scheme handlers carried to every tool call.
     schemas: UriSchemaPlane,
-    formatter: FormatterPlane,
-    lsp: LspPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
     handoff_options: TerminalHandoffOptions,
@@ -231,8 +226,6 @@ impl Clone for SessionEngine {
             handle_namer: self.handle_namer.clone(),
             artifacts: self.artifacts,
             schemas: self.schemas.clone(),
-            formatter: self.formatter.clone(),
-            lsp: self.lsp.clone(),
             bus: self.bus.clone(),
             summarizer: self.summarizer.clone(),
             handoff_options: self.handoff_options,
@@ -280,8 +273,6 @@ impl SessionEngine {
         let spawner = BoundSpawnSender::disconnected();
         let lifecycle = LifecyclePlane::disconnected();
         let (project_activity, activity_rx) = hya_tool::ProjectActivityPlane::new();
-        let formatter = FormatterPlane::default();
-        let lsp = LspPlane::default();
         let session_channel_policies = Arc::new(RwLock::new(HashMap::new()));
         let reviver = Arc::new(RwLock::new(None));
         let runtime_owner = hya_proto::OwnerRunId::new();
@@ -310,8 +301,6 @@ impl SessionEngine {
             handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             artifacts,
             schemas: UriSchemaPlane::default(),
-            formatter,
-            lsp,
             bus,
             summarizer: None,
             handoff_options: TerminalHandoffOptions::default(),
@@ -806,20 +795,6 @@ impl SessionEngine {
         self.governor.as_ref()
     }
 
-    /// Replace the default disconnected LSP plane.
-    #[must_use]
-    pub fn with_lsp(mut self, lsp: LspPlane) -> Self {
-        self.lsp = lsp;
-        self
-    }
-
-    /// Replace the default disconnected formatter plane.
-    #[must_use]
-    pub fn with_formatter(mut self, formatter: FormatterPlane) -> Self {
-        self.formatter = formatter;
-        self
-    }
-
     /// Set the terminal handoff generator and its output budget.
     #[must_use]
     pub fn with_terminal_handoff(
@@ -864,23 +839,11 @@ impl SessionEngine {
         &self.store
     }
 
-    /// LSP plane used by tools and post-edit hooks.
-    #[must_use]
-    pub fn lsp(&self) -> &LspPlane {
-        &self.lsp
-    }
-
     /// Process permission plane. Remembered grants installed on it are shared
     /// with every session plane derived from it.
     #[must_use]
     pub fn permission_plane(&self) -> &PermissionPlane {
         &self.permission
-    }
-
-    /// Formatter plane used after write/edit/patch.
-    #[must_use]
-    pub fn formatter(&self) -> &FormatterPlane {
-        &self.formatter
     }
 }
 

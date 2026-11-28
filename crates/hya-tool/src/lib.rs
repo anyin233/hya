@@ -25,7 +25,6 @@ mod agents;
 pub mod deadline;
 /// Domain extension event codecs, projection structs, and reducers (v2 bridge).
 pub mod extension;
-mod formatter;
 /// Internal resource URLs (`artifact://`, `skill://`, `local://`) for
 /// agent-owned payloads. Ordinary filesystem paths are unaffected.
 pub mod handle;
@@ -34,7 +33,6 @@ pub mod interaction;
 /// Subagent lifecycle requests (`report`, `archive`, `wait`) to the supervisor.
 pub mod lifecycle;
 pub mod literal_span;
-mod lsp_plane;
 mod mail;
 pub mod media;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
@@ -69,10 +67,6 @@ pub use workflow_plane::{
 };
 
 pub use agents::AgentDef;
-pub use formatter::{
-    FormatterConfig, FormatterEntry, FormatterError, FormatterPlane, FormatterProvider,
-    FormatterStatus,
-};
 pub use hya_proto::mail::ChannelPolicySnapshot;
 pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
@@ -84,7 +78,6 @@ pub use lifecycle::{
     WAIT_OUTPUT_BUDGET_CHARS, WaitAckSlot, WaitMail, WaitMailAck, WaitMember, WaitMemberState,
     WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
 };
-pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mail::MailReceipt;
 pub use namespace::{InvalidNamespacedName, NAMESPACE_SEPARATOR, namespace_of, namespaced_name};
 pub use nested::{NestedToolPlane, NestedTools};

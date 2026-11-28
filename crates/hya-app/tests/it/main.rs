@@ -5,7 +5,6 @@ mod support;
 mod agent_model_control;
 mod bundle_registry;
 mod config_minimal_edit;
-mod formatter;
 mod hashline_fallback;
 mod installed_bundle_refresh;
 mod loop_driver;
