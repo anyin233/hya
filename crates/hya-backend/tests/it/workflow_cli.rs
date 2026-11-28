@@ -106,6 +106,22 @@ fn cli_use_run_and_state_share_durable_session_and_reject_bad_inputs() -> TestRe
         !unknown.status.success()
             && combined_text(&unknown).contains("Workflow input `ghost` is not declared")
     );
+    let malformed = wf(&s, Some(&db), &["run", "echo-input", "--input", "v"])?;
+    assert!(
+        !malformed.status.success()
+            && combined_text(&malformed).contains("--input expects KEY=VALUE, got `v`")
+    );
+    let root_sessions = || -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let out = s.hya().args(["sessions", "--db"]).arg(&db).output()?;
+        assert_success("sessions", &out);
+        Ok(String::from_utf8(out.stdout)?
+            .lines()
+            .filter(|l| l.starts_with("hysec_"))
+            .filter_map(|l| l.split_whitespace().next().map(str::to_owned))
+            .collect())
+    };
+    // A rejected run leaves no empty Session behind.
+    assert_eq!(root_sessions()?, Vec::<String>::new());
 
     let init = wf(
         &s,
@@ -115,14 +131,11 @@ fn cli_use_run_and_state_share_durable_session_and_reject_bad_inputs() -> TestRe
     assert_success("initial run", &init);
     assert!(!String::from_utf8(init.stdout)?.contains("a=b=c&d=e"));
 
-    let sess_out = s.hya().args(["sessions", "--db"]).arg(&db).output()?;
-    assert_success("sessions", &sess_out);
-    let sess_text = String::from_utf8(sess_out.stdout)?;
-    let session = sess_text
-        .lines()
-        .find(|l| l.starts_with("hysec_"))
-        .and_then(|l| l.split_whitespace().next())
-        .ok_or("missing root session")?;
+    let sessions = root_sessions()?;
+    let [session] = sessions.as_slice() else {
+        return Err(format!("expected one root session, got {sessions:?}").into());
+    };
+    let session = session.as_str();
 
     assert_eq!(
         wf_json(

@@ -481,7 +481,8 @@ async fn read_scope_store(db: &str) -> anyhow::Result<SessionStore> {
 /// Call a bundle's BundleApi endpoint `api` headlessly on `store` with
 /// `{"args": …, "cwd": …}` and print the reply's `{stdout, stderr,
 /// exit_code}`. A Session-scope endpoint gets `session` (`<command> Session …
-/// was not found` when missing) or a new session; a Global one none.
+/// was not found` when missing) or a new session, deleted again when the call
+/// fails without writing to it; a Global one none.
 /// `offline` composes [`startup::HeadlessRuntime::start_offline`].
 #[allow(clippy::too_many_arguments)]
 async fn cmd_bundle_api(
@@ -522,31 +523,41 @@ async fn cmd_bundle_api(
                         .find(|endpoint| endpoint.id == api)
                 })
                 .with_context(|| format!("bundle `{bundle}` serves no API endpoint `{api}`"))?;
-            let session = match endpoint.scope {
+            let (session, created) = match endpoint.scope {
                 hya_engine::ApiScope::Session => {
-                    Some(runtime.open_session(session, command).await?)
+                    let opened = runtime.open_session(session, command).await?;
+                    let created = match session {
+                        Some(_) => None,
+                        None => {
+                            let engine = runtime.built.engine();
+                            let projection = engine.read_projection_shared(opened).await?;
+                            Some((opened, projection.last_seq))
+                        }
+                    };
+                    (Some(opened), created)
                 }
-                hya_engine::ApiScope::Global => None,
+                hya_engine::ApiScope::Global => (None, None),
             };
-            Ok::<_, anyhow::Error>(hya_engine::BundleApiCall {
+            let call = hya_engine::BundleApiCall {
                 bundle: bundle.to_string(),
                 method: endpoint.method,
                 session,
                 path: endpoint.path.as_str().to_string(),
                 query: Default::default(),
                 body,
-            })
+            };
+            Ok::<_, anyhow::Error>((call, created))
         }
         .await;
         match prepared {
-            Ok(call) => Ok((runtime, call)),
+            Ok((call, created)) => Ok((runtime, call, created)),
             Err(error) => {
                 runtime.shutdown().await?;
                 Err(error)
             }
         }
     };
-    let (mut runtime, call) = tokio::select! {
+    let (mut runtime, call, created) = tokio::select! {
         started = started => started?,
         stop = signals.recv() => {
             eprintln!("hya: stopping — draining store before exit");
@@ -564,10 +575,31 @@ async fn cmd_bundle_api(
         engine.invoke_bundle_api(call),
     )
     .await;
+    // A failed call (a rejected run) leaves no empty Session behind: the
+    // session it was given goes again when the call wrote nothing to it. The
+    // delete waits for the runtime shutdown, which records its own activity.
+    let unused = match created {
+        Some((session, created_at))
+            if stop.is_none()
+                && reply
+                    .as_ref()
+                    .map_or(true, |reply| reply.body["exit_code"].as_i64() != Some(0)) =>
+        {
+            let projection = engine.read_projection_shared(session).await;
+            projection.map(|projection| (projection.last_seq == created_at).then_some(session))
+        }
+        _ => Ok(None),
+    };
     signals
         .finish_with_store_report(&exit_store, stop.is_some(), runtime.shutdown())
         .await?;
     exit_if_stopped(stop);
+    if let Some(session) = unused? {
+        exit_store
+            .delete_session(session)
+            .await
+            .context("delete the session the failed call left unused")?;
+    }
     let reply = reply.map_err(|error| anyhow::anyhow!("{bundle} {api}: {error}"))?;
     print_api_report(bundle, api, reply.body)
 }
