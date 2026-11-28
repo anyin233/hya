@@ -3812,7 +3812,7 @@ async fn bare_profile_builds_unified_session_engine_with_eight_bare_tools_and_hy
     };
 
     let rt = resolve_runtime(None).await.with_bare(true);
-    let resolved_agent = agent_base_for_runtime(&rt, None);
+    let resolved_agent = agent_base_for_runtime(&rt, None).unwrap();
     assert_eq!(resolved_agent.name.as_str(), hya_engine::BARE_AGENT_ID);
     assert!(!resolved_agent.system_prompt.is_empty());
     assert!(!resolved_agent.system_prompt.contains("hya-main"));
@@ -3965,11 +3965,10 @@ struct ChannelsSurface {
 
 async fn channels_surface(selection: hya_bundle::BuiltinBundleSelection) -> ChannelsSurface {
     let workdir = tempdir();
-    let agent_id = if core_agents_available(&selection) {
-        BUILTIN_DEFAULT_AGENT_ID
-    } else {
-        hya_engine::BARE_AGENT_ID
-    };
+    let agent_id = builtin_agent_catalog_for(&selection)
+        .unwrap()
+        .default_agent_id()
+        .to_string();
     let mut settings = config::EngineSettings::default();
     settings.set_builtin_bundles(selection);
     let agent = AgentSpec {

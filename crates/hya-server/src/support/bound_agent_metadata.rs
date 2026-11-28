@@ -1,7 +1,7 @@
 //! Map the single bound BundleCatalog into catalog agent metadata rows.
 //!
 //! Not a second catalog authority: binds once per request workdir and projects
-//! role → mode and private/reserved status → wire `hidden` from that catalog only.
+//! role → mode and private status → wire `hidden` from that catalog only.
 //!
 //! Also owns the sole `default_agent` fallback chain used by session create and
 //! list sorting — `ServerState.default_agent`, then the bound process agent. No
@@ -66,7 +66,7 @@ fn resolve_agent_from_binding(
         None => st
             .default_agent
             .clone()
-            .unwrap_or_else(|| st.agent.name.as_str().to_string()),
+            .unwrap_or_else(|| binding.agent_catalog().default_agent_id().to_string()),
     };
     let agent = binding.resolve_agent(&candidate).ok_or_else(|| {
         ApiError::from(CoreError::bundle(BundleError::UnknownAgentId {
@@ -134,7 +134,7 @@ pub(crate) async fn list(
     let binding = place.bind(st).await?;
     let catalog = binding.agent_catalog();
 
-    // Retain the complete catalog while marking private and reserved entries hidden.
+    // Retain the complete catalog while marking private entries hidden.
     let mut rows: Vec<BoundAgentRow> = catalog
         .all()
         .into_iter()
@@ -142,8 +142,8 @@ pub(crate) async fn list(
             let name = agent.stable_id;
             // Role determines selector mode (main → primary).
             let mode = agent.selector_mode().to_string();
-            // Private agents and reserved system subagents stay out of ordinary pickers.
-            let hidden = agent.private || (mode == "subagent" && catalog.is_reserved(name));
+            // Private agents (such as the `hya-title` system agent) stay out of pickers.
+            let hidden = agent.private;
             BoundAgentRow {
                 name: name.to_string(),
                 description: agent.description.map(str::to_string),

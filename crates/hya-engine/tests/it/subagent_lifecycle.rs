@@ -2611,7 +2611,8 @@ async fn resident_initial_task_survives_claim_takeover_and_parent_dm_policy() {
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_verified_catalogs(&[&pkg, multi_agent]).unwrap(),
+            BundleCatalog::from_verified_catalogs(&[&pkg, multi_agent, support::core_agents()])
+                .unwrap(),
         ))
         .unwrap(),
     );

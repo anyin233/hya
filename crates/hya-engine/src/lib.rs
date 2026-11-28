@@ -80,10 +80,7 @@ pub use hya_context::tokens;
 mod test_support;
 
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
-pub use builtin_agents::{
-    BARE_AGENT_ID, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, MAIN_AGENT_ID, SpawnScope,
-    TASK_AGENT_ID, builtin_agent_ids, core_agents_preset, preset_agent,
-};
+pub use builtin_agents::{BARE_AGENT_ID, MAIN_AGENT_ID, TASK_AGENT_ID};
 pub use bundle_apis::{
     ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,
     BundleApiProvider, BundleApiReply, BundleApiRequest, HostSessionReads,

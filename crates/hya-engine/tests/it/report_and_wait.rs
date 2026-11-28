@@ -201,7 +201,12 @@ async fn restricted_engine(channels: &str) -> Arc<SessionEngine> {
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_verified_catalogs(&[&prepared, multi_agent]).unwrap(),
+            BundleCatalog::from_verified_catalogs(&[
+                &prepared,
+                multi_agent,
+                support::core_agents(),
+            ])
+            .unwrap(),
         ))
         .unwrap(),
     );
@@ -1558,7 +1563,8 @@ async fn handoff_policy_deterministic_skips_summarizer_while_default_invokes_it(
         .unwrap();
         let catalog = Arc::new(
             AgentCatalog::new(Arc::new(
-                BundleCatalog::from_prepared(prepared.bundles()).unwrap(),
+                BundleCatalog::from_prepared(&support::with_core_agents(prepared.bundles()))
+                    .unwrap(),
             ))
             .unwrap(),
         );
@@ -1720,7 +1726,12 @@ async fn report_turn_team(provider: Arc<ReportTurnProvider>) -> ReportTurnTeam {
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").unwrap();
     let catalog = Arc::new(
         AgentCatalog::new(Arc::new(
-            BundleCatalog::from_verified_catalogs(&[&prepared, multi_agent]).unwrap(),
+            BundleCatalog::from_verified_catalogs(&[
+                &prepared,
+                multi_agent,
+                support::core_agents(),
+            ])
+            .unwrap(),
         ))
         .unwrap(),
     );

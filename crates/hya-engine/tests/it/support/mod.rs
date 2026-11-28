@@ -46,14 +46,36 @@ pub fn discover_local_skills(workdir: Option<&Path>, roots: &[PathBuf]) -> Skill
     discovery
 }
 
-/// One installed bundle per requested agent, over the compiled-in built-ins.
+/// The first-party `hya/core-agents` package (`hya-main`, `hya-title`).
+pub fn core_agents() -> &'static hya_bundle::PreparedCatalog {
+    hya_bundle::first_party_bundle("hya/core-agents").expect("first-party hya/core-agents")
+}
+
+/// `bundles` plus the first-party `hya/core-agents`.
+pub fn with_core_agents(bundles: &[Bundle]) -> Vec<Bundle> {
+    let mut all = bundles.to_vec();
+    all.extend(core_agents().bundles().iter().cloned());
+    all
+}
+
+fn is_core_agent(stable_id: &str) -> bool {
+    core_agents().bundles()[0]
+        .agents()
+        .iter()
+        .any(|agent| agent.id.as_str() == stable_id)
+}
+
+/// One installed bundle per requested agent, over the first-party
+/// `hya/core-agents` and (unless a fixture agent replaces one of its agents)
+/// `hya/multi-agent`.
 ///
 /// A bundle defines exactly one agent, so a fixture asking for N agents becomes
-/// N single-agent bundles.
+/// N single-agent bundles; a requested `hya-main` or `hya-title` is the
+/// first-party one.
 pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
     let mut bundles = agents
         .iter()
-        .filter(|(stable_id, _, _)| hya_engine::preset_agent(stable_id).is_none())
+        .filter(|(stable_id, _, _)| !is_core_agent(stable_id))
         .map(|(stable_id, role, can_spawn)| Bundle {
             check: None,
             format_version: 4,
@@ -117,6 +139,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
     {
         bundles.extend(multi_agent.bundles().iter().cloned());
     }
+    bundles.extend(core_agents().bundles().iter().cloned());
     let catalog = BundleCatalog::from_prepared(&bundles);
     let Ok(catalog) = catalog else {
         panic!("test catalog must be valid: {catalog:?}");
@@ -128,9 +151,10 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
     Arc::new(catalog)
 }
 
-/// Agent catalog with no installed bundles: the compiled-in built-ins only.
+/// Agent catalog of the first-party `hya/core-agents` alone.
 pub fn builtin_only_catalog() -> Arc<AgentCatalog> {
-    let bundles = BundleCatalog::from_verified_catalogs(&[]).expect("empty bundle catalog");
+    let bundles =
+        BundleCatalog::from_verified_catalogs(&[core_agents()]).expect("core-agents catalog");
     Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("builtin-only agent catalog"))
 }
 
@@ -158,14 +182,14 @@ impl From<Arc<RuntimeRegistry>> for TestRuntime {
 
 fn multi_agent_catalog() -> Arc<AgentCatalog> {
     let multi_agent = hya_bundle::first_party_bundle("hya/multi-agent").expect("hya/multi-agent");
-    let bundles =
-        BundleCatalog::from_verified_catalogs(&[multi_agent]).expect("multi-agent catalog");
+    let bundles = BundleCatalog::from_verified_catalogs(&[core_agents(), multi_agent])
+        .expect("multi-agent catalog");
     Arc::new(AgentCatalog::new(Arc::new(bundles)).expect("multi-agent agent catalog"))
 }
 
 /// Default runtime for root/main turn integration fixtures.
 ///
-/// Uses the compiled-in built-in roster plus `hya/multi-agent` and
+/// Uses the first-party `hya/core-agents` and `hya/multi-agent` rosters and
 /// workdir/root-only skill discovery (never reading `$HOME`) so tests stay
 /// hermetic and parallel-safe.
 pub fn test_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegistry> {
@@ -229,7 +253,7 @@ pub fn kernel_engine_with_registry(
     registry: ToolRegistry,
 ) -> SessionEngine {
     let bundles = Arc::new(BundleCatalog::from_verified_catalogs(&[]).unwrap());
-    let catalog = Arc::new(AgentCatalog::with_minimal_agent(bundles).unwrap());
+    let catalog = Arc::new(AgentCatalog::new(bundles).unwrap());
     let runtime = Arc::new(RuntimeRegistry::new(registry, catalog).with_pure_skills(true));
     SessionEngine::new(store, router, runtime, permission, EventBus::default())
         .with_pure_context(true)

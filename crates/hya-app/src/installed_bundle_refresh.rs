@@ -20,9 +20,11 @@ use crate::bundle_config::BundleConfigResolver;
 use crate::bundle_runtime::source::{bundle_schema_claims, prepared_static_bundle_source};
 
 /// First-party bundles published with the runtime catalog, including workflows,
-/// `hya/coding-extras`, `hya/multi-agent`, `hya/agent-channels`, `hya/plan`,
-/// `hya/goal`, `hya/loop`, and the TUI extension of the built-in panes.
-const FIRST_PARTY_CATALOG_BUNDLES: [&str; 8] = [
+/// `hya/core-agents`, `hya/coding-extras`, `hya/multi-agent`,
+/// `hya/agent-channels`, `hya/plan`, `hya/goal`, `hya/loop`, and the TUI
+/// extension of the built-in panes.
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 9] = [
+    "hya/core-agents",
     "hya/coding-extras",
     "hya/multi-agent",
     "hya/agent-channels",
@@ -765,11 +767,8 @@ impl InstalledBundleRefresh {
         };
         let static_sources = composition.runtime_sources();
         let agent_catalog = Arc::new(
-            crate::runtime::agent_catalog_for_selection(
-                Arc::clone(&composition.bundles),
-                &self.builtin_selection,
-            )
-            .map_err(CoreError::bundle)?,
+            hya_engine::AgentCatalog::new(Arc::clone(&composition.bundles))
+                .map_err(CoreError::bundle)?,
         );
         runtime
             .refresh(|candidate| {

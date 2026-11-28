@@ -69,15 +69,17 @@ fn inventory_exposes_immutable_noninstallable_presets_and_internal_bundles() {
         assert_eq!(preset.version, hya_version::BACKEND_VERSION);
     }
 
+    // `hya/core-agents` reaches the roster through the bundle catalog like any
+    // agent bundle: its declared default agent is the catalog's default.
     let public = hya_app::builtin_agent_catalog().expect("public catalog");
     assert!(
         public
             .bundles()
             .bundles()
             .iter()
-            .all(|bundle| bundle.identity().id != "hya/core-agents"),
-        "trusted presets must not enter the installable BundleCatalog"
+            .any(|bundle| bundle.identity().id == "hya/core-agents")
     );
+    assert_eq!(public.default_agent_id(), "hya-main");
 
     // Bare profile omits all built-in presets cleanly; selective enable/disable filters without panicking.
     let bare = hya_app::trusted_preset_inventory_for(&hya_bundle::BuiltinBundleSelection::bare())

@@ -94,25 +94,38 @@ impl TurnBinding {
         self
     }
 
-    /// Look up the user-file model for an Agent's original catalog origin.
+    /// Look up the user-file model of an Agent: the entry of the file
+    /// [`Self::agent_model_file_origin`] selects.
     ///
     /// Authored direct/category policy is intentionally not considered here;
-    /// this reports only the matching global built-in or owning-bundle file
-    /// entry captured when the binding was made.
+    /// this reports only the file entries captured when the binding was made.
     #[must_use]
     pub fn configured_agent_model(&self, stable_id: &str) -> Option<&ModelRef> {
         let definition = self.snapshot.catalog.resolve(stable_id)?;
-        match definition.origin {
-            AgentOrigin::Builtin => self
-                .agent_model_configuration
-                .builtin
-                .get(definition.stable_id),
-            AgentOrigin::Bundle { bundle_id } => self
-                .agent_model_configuration
+        let configuration = &self.agent_model_configuration;
+        match self.agent_model_file_origin(stable_id)? {
+            AgentOrigin::Builtin => configuration.builtin.get(definition.stable_id),
+            AgentOrigin::Bundle { bundle_id } => configuration
                 .bundles
                 .get(bundle_id)
                 .and_then(|models| models.get(definition.stable_id)),
         }
+    }
+
+    /// Which file owns an Agent's `agents.<id>.model`: the global Hya file
+    /// when it names the id (it applies by Agent id whatever the origin),
+    /// else the file of the Agent's origin. `None` for an unknown Agent.
+    #[must_use]
+    pub fn agent_model_file_origin(&self, stable_id: &str) -> Option<AgentOrigin<'_>> {
+        let definition = self.snapshot.catalog.resolve(stable_id)?;
+        if self
+            .agent_model_configuration
+            .builtin
+            .contains_key(definition.stable_id)
+        {
+            return Some(AgentOrigin::Builtin);
+        }
+        Some(definition.origin)
     }
 
     /// Look up a temporary Session-tree model override for an Agent.
@@ -252,16 +265,11 @@ impl TurnBinding {
         }
     }
 
-    /// Handoff policy declared by `stable_id`; built-ins use their preset's.
+    /// Handoff policy declared by `stable_id`; `hya-bare` uses the default.
     pub fn handoff_policy(&self, stable_id: &str) -> Result<HandoffPolicy, BundleError> {
         let definition = self.snapshot.catalog.require(stable_id)?;
         match definition.origin.bundle_id() {
-            None => Ok(self
-                .snapshot
-                .catalog
-                .preset_agent(stable_id)
-                .map(|agent| agent.handoff)
-                .unwrap_or_default()),
+            None => Ok(HandoffPolicy::default()),
             Some(id) => self
                 .snapshot
                 .catalog

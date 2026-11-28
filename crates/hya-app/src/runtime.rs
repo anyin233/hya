@@ -51,29 +51,6 @@ use crate::{InstalledBundleRefresh, bundle_registry_path, plugins};
 /// Catalog materialization and export validation for Bundle sidecars.
 pub use crate::bundle_runtime::sidecar;
 
-/// Whether `hya/core-agents` is both enabled by `selection` and present on disk.
-pub(crate) fn core_agents_available(selection: &hya_bundle::BuiltinBundleSelection) -> bool {
-    selection.is_enabled("hya/core-agents")
-        && hya_bundle::first_party_bundle_optional("hya/core-agents")
-            .ok()
-            .flatten()
-            .is_some()
-}
-
-/// Build an [`AgentCatalog`] over `bundles` honoring `selection`: uses
-/// `hya/core-agents` when enabled and present, otherwise the minimal compiled-in
-/// `hya-bare` default agent (zero first-party bundle loads).
-pub(crate) fn agent_catalog_for_selection(
-    bundles: Arc<BundleCatalog>,
-    selection: &hya_bundle::BuiltinBundleSelection,
-) -> Result<AgentCatalog, hya_bundle::BundleError> {
-    if core_agents_available(selection) {
-        AgentCatalog::new(bundles)
-    } else {
-        AgentCatalog::with_minimal_agent(bundles)
-    }
-}
-
 /// Agent catalog for a process before installed bundles are refreshed.
 ///
 /// Honors the active `config.yaml` [`hya_bundle::BuiltinBundleSelection`].
@@ -81,11 +58,10 @@ pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
     builtin_agent_catalog_for(&crate::config::configured_builtin_bundles())
 }
 
-/// Agent catalog for an explicit [`hya_bundle::BuiltinBundleSelection`].
+/// Agent catalog over the enabled first-party bundles of `selection`.
 ///
-/// Under `BuiltinBundleProfile::Bare` (or when `bundles/builtin/` is absent),
-/// loads zero first-party bundles and publishes only the minimal `hya-bare`
-/// default agent.
+/// With no enabled bundle declaring `default_agent` (an empty selection, or
+/// `bundles/builtin/` absent) the roster is the compiled-in `hya-bare`.
 pub fn builtin_agent_catalog_for(
     selection: &hya_bundle::BuiltinBundleSelection,
 ) -> anyhow::Result<Arc<AgentCatalog>> {
@@ -94,8 +70,8 @@ pub fn builtin_agent_catalog_for(
     let first_party_refs = first_party.iter().collect::<Vec<_>>();
     let bundles = BundleCatalog::from_verified_catalogs(&first_party_refs)
         .context("build first-party bundle catalog")?;
-    let catalog = agent_catalog_for_selection(Arc::new(bundles), selection)
-        .context("build agent catalog over built-ins")?;
+    let catalog =
+        AgentCatalog::new(Arc::new(bundles)).context("build agent catalog over built-ins")?;
     Ok(Arc::new(catalog))
 }
 
@@ -185,31 +161,35 @@ fn caller_workdir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Agent base for server and interactive TUI sessions using `runtime`'s active
-/// built-in bundle selection (`hya-bare` when `hya/core-agents` is disabled or
-/// absent, otherwise `hya-main`).
+/// Agent base for server and interactive TUI sessions: the default agent of
+/// the catalog `runtime`'s built-in bundle selection composes.
+///
+/// # Errors
+/// The first-party bundles of the selection fail to load or compose.
 pub fn agent_base_for_runtime(
     runtime: &RuntimeConfig,
     reasoning: Option<ReasoningEffort>,
-) -> AgentSpec {
-    let name = if core_agents_available(runtime.settings.builtin_bundles()) {
-        BUILTIN_DEFAULT_AGENT_ID
-    } else {
-        hya_engine::BARE_AGENT_ID
-    };
-    AgentSpec {
-        name: AgentName::new(name),
+) -> anyhow::Result<AgentSpec> {
+    let catalog = builtin_agent_catalog_for(runtime.settings.builtin_bundles())?;
+    Ok(AgentSpec {
+        name: AgentName::new(catalog.default_agent_id()),
         ..agent_base_with_model(&runtime.model, reasoning)
-    }
+    })
 }
 
-/// Agent base for direct-mode commands, honoring `runtime`'s active built-in
-/// bundle selection (`hya-bare` in bare mode, `hya-main` in full mode).
-pub fn agent_for_runtime(runtime: &RuntimeConfig, reasoning: Option<ReasoningEffort>) -> AgentSpec {
-    AgentSpec {
+/// [`agent_base_for_runtime`] with the caller's working directory, for
+/// direct-mode commands.
+///
+/// # Errors
+/// See [`agent_base_for_runtime`].
+pub fn agent_for_runtime(
+    runtime: &RuntimeConfig,
+    reasoning: Option<ReasoningEffort>,
+) -> anyhow::Result<AgentSpec> {
+    Ok(AgentSpec {
         workdir: caller_workdir(),
-        ..agent_base_for_runtime(runtime, reasoning)
-    }
+        ..agent_base_for_runtime(runtime, reasoning)?
+    })
 }
 
 /// Agent base for direct-mode commands, with the caller's working directory.
@@ -229,7 +209,7 @@ pub fn agent_with_model_pure(model: &str, reasoning: Option<ReasoningEffort>) ->
 /// Resolve which agent id a headless root session (`exec`/`run`, `-p` goal
 /// mode, `loop`, `rpc`) should use, mirroring `serve`'s own precedence:
 /// explicit override (a CLI flag, when the caller has one) first, then config
-/// `default_agent`, then the built-in [`BUILTIN_DEFAULT_AGENT_ID`].
+/// `default_agent`, then the bound catalog's default agent.
 ///
 /// Unlike `serve` (which resolves lazily per HTTP session-create request and
 /// can silently keep serving other sessions on failure), a headless run has
@@ -349,20 +329,30 @@ impl RuntimeConfig {
         self
     }
 
-    /// `--bare` mode (`BuiltinBundleProfile::Bare`): disable all built-in
-    /// first-party bundles, use the 8 standard bare tools (`read`, `write`,
-    /// `edit`, `bash`, `grep`, `todo`, `rewrite`, `skill`), core `code-mode`
-    /// without `agent()`, and the minimal `hya-bare` default agent while
-    /// keeping `AGENTS.md`, filesystem skills, MCP, and user/project bundles
-    /// and plugins active (unless `--pure` is also set).
+    /// `--bare`: the empty built-in bundle set ([`builtin_selection`]), so
+    /// the 8 standard bare tools (`read`, `write`, `edit`, `bash`, `grep`,
+    /// `todo`, `rewrite`, `skill`), core `code-mode` without `agent()`, and the
+    /// compiled-in `hya-bare` default agent, while keeping `AGENTS.md`,
+    /// filesystem skills, MCP, and user/project bundles and plugins active
+    /// (unless `--pure` is also set).
     #[must_use]
     pub fn with_bare(mut self, bare: bool) -> Self {
         if bare {
-            self.settings
-                .set_builtin_bundles(hya_bundle::BuiltinBundleSelection::bare());
+            self.settings.set_builtin_bundles(builtin_selection(true));
             self.default_agent = None;
         }
         self
+    }
+}
+
+/// The built-in bundle selection of a CLI invocation: the empty set under
+/// `--bare`, else `config.yaml` `bundles.builtin`.
+#[must_use]
+pub fn builtin_selection(bare: bool) -> hya_bundle::BuiltinBundleSelection {
+    if bare {
+        hya_bundle::BuiltinBundleSelection::bare()
+    } else {
+        config::configured_builtin_bundles()
     }
 }
 
@@ -1413,7 +1403,7 @@ pub struct ServerEngine {
     default_agent: Option<String>,
     pure: bool,
     builtin_selection: hya_bundle::BuiltinBundleSelection,
-    use_core_agents: bool,
+    auto_title: bool,
     use_core_commands: bool,
     pending_discovery: Vec<config::PendingCatalogDiscovery>,
 }
@@ -1423,13 +1413,18 @@ impl ServerEngine {
     pub async fn build(store: SessionStore, runtime: RuntimeConfig) -> anyhow::Result<Self> {
         // The server retains the base. Per-turn guidance is resolved by the harness.
         let builtin_selection = runtime.settings.builtin_bundles().clone();
-        let use_core_agents = core_agents_available(&builtin_selection);
         let use_core_commands = builtin_selection.is_enabled("hya/core-commands")
             && hya_bundle::first_party_bundle_optional("hya/core-commands")
                 .ok()
                 .flatten()
                 .is_some();
-        let agent = Arc::new(agent_base_for_runtime(&runtime, None));
+        let catalog = builtin_agent_catalog_for(&builtin_selection)?;
+        // Titling runs the `hya-title` agent, so it is on when the roster has one.
+        let auto_title = catalog.resolve("hya-title").is_some();
+        let agent = Arc::new(AgentSpec {
+            name: AgentName::new(catalog.default_agent_id()),
+            ..agent_base_with_model(&runtime.model, None)
+        });
         let tool_config = (runtime.permission, runtime.settings);
         let built = build_session_engine_with_mcp_defer(
             store,
@@ -1451,7 +1446,7 @@ impl ServerEngine {
             default_agent: runtime.default_agent,
             pure: runtime.pure,
             builtin_selection,
-            use_core_agents,
+            auto_title,
             use_core_commands,
             pending_discovery: runtime.pending_discovery,
         })
@@ -1476,7 +1471,7 @@ impl ServerEngine {
             .with_agent_model_control(Arc::new(self.built.agent_model_control()))
             .with_default_agent(self.default_agent)
             .with_pure_guidance(self.pure)
-            .with_auto_title(self.use_core_agents)
+            .with_auto_title(self.auto_title)
             .with_core_commands(self.use_core_commands)
             .with_allowed_hosts(hosts)
             .with_permission_requests(asks);

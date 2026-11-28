@@ -363,13 +363,8 @@ impl ProjectScopeRefresh {
                         && !project_bundle_dirs.contains_key(source.id().configured_id())
                 }),
         );
-        let catalog = Arc::new(
-            crate::runtime::agent_catalog_for_selection(
-                Arc::new(bundles),
-                self.installed.builtin_selection(),
-            )
-            .map_err(CoreError::bundle)?,
-        );
+        let catalog =
+            Arc::new(hya_engine::AgentCatalog::new(Arc::new(bundles)).map_err(CoreError::bundle)?);
         runtime
             .publish_scope(
                 key.clone(),
