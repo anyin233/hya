@@ -11,9 +11,9 @@
 //!   [`NativeRegistrations`], and [`export_native_bundle_v2!`].
 //!
 //! Native bundles link only this crate (and `hya-proto`, `hya-tool`,
-//! `hya-context`, `hya-bundle`, `hya-tool-error`, `hya-version`) and never
-//! depend on `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, or
-//! `tonic`.
+//! `hya-context`, `hya-bundle`, `hya-provider`, `hya-tool-error`,
+//! `hya-version`) and never depend on `hya-store`, `sqlx`, `hya-engine`,
+//! `hya-server`, `axum`, or `tonic`.
 
 mod abi;
 mod error;

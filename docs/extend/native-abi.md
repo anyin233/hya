@@ -48,7 +48,7 @@ If your bundle intentionally replaces core `hya-bare` primitives (`read`, `write
 
 Every native bundle crate MUST respect the **zero-linkage red line** (enforced in CI and crate boundaries):
 
-- **Allowed host/contract crates:** `hya-runtime-abi`, `hya-proto`, `hya-tool`, `hya-tool-error`, `hya-context`, `hya-bundle`, `hya-version` (and `hya-workflow` for workflow authoring/compilation).
+- **Allowed host/contract crates:** `hya-runtime-abi`, `hya-proto`, `hya-tool`, `hya-tool-error`, `hya-context`, `hya-bundle`, `hya-provider`, `hya-version` (and `hya-workflow` for workflow authoring/compilation).
 - **Forbidden host-internal crates:** `hya-store`, `sqlx`, `hya-engine`, `hya-server`, `axum`, `tonic`.
 
 > **Tip (rlib core + thin `cdylib` wrapper):** If a workspace test or another crate needs to import your bundle's Rust types directly alongside other native bundles, put the domain logic in a pure library crate (`crate-type = ["rlib"]`) and keep `export_native_bundle_v2!` inside a thin `cdylib`-only wrapper crate so two linked crates never export colliding `#[no_mangle]` ABI v2 C symbols.
@@ -258,6 +258,8 @@ The host loads native ABI v2 bundles via `hya-tool-loader` (`load_v2` / `NativeB
 3. Call `hya_native_share_deadline_v2` to adopt the host's process-lifetime run-deadline cell and bind `hya_native_with_runtime_v2` for Tokio TLS bridging across the `cdylib` boundary.
 4. Construct `NativePluginContext::new(bundle_id, Arc<dyn HostRuntime>)` and call `hya_native_register_v2`, returning a `NativeRegistrations` container wrapped in runtime-bridged adapters.
 
+A bundle that returns `providers` registrations without declaring `providers` in `runtime.capabilities` fails to load with `<bundle-id> registers providers but does not declare the providers capability`, so a provider kind is never dropped silently.
+
 ---
 
 ## 3. Interface Definitions
@@ -278,7 +280,7 @@ The block may return `()` or `Result<(), E>` (where `E: Display`, via `IntoRegis
 | `SYMBOL_SHARE_DEADLINE_V2` (`hya_native_share_deadline_v2`) | `unsafe extern "C" fn(cell: *const c_void)` (`ShareDeadlineFn`) | Adopts the host's process-lifetime deadline cell (`deadline_cell_v2()`) inside the bundle's `hya-tool` copy. |
 | `SYMBOL_REGISTER_V2` (`hya_native_register_v2`) | `unsafe extern "C" fn(ctx: *const NativePluginContext, out: *mut NativeRegistrations, error_out: *mut Option<String>) -> i32` (`RegisterV2Fn`) | Populates `NativeRegistrations`. Returns `0` on success, `-1` on null pointer, or `1` with `error_out` populated on registration failure. |
 
-**Lockstep digest coverage (`abi_digest_v2()`):** Covers the domain separator (`"hya.runtime.native-bundle-abi/v2"`), `ABI_VERSION_V2`, `hya_version::VERSION`, `hya_version::BACKEND_VERSION`, `hya_version::RUSTC`, `std::env::consts::{OS, ARCH}`, `hya_tool::native_bundle::abi_digest_v1()`, `size_of`/`align_of` of every ABI-crossing struct and trait object (`NativePluginContext`, `NativeRegistrations`, `HostError`, `AbiError`, `Arc<dyn HostRuntime>`, `Arc<dyn Tool>`, `Arc<dyn Rewriter>`, `Arc<dyn NativeService>`, `Arc<dyn NativeHook>`, `Arc<dyn NativeBundleApiHandler>`, `Arc<dyn ProjectionReducer>`, `Arc<dyn UriSchemaHandler>`, `Arc<dyn NativeDriver>`, `ToolCtx`, `ToolError`, `tokio::runtime::Handle`, `Option<String>`), plus raw source bytes of every `hya-runtime-abi`, `hya-tool-error`, and `hya-context` ABI file.
+**Lockstep digest coverage (`abi_digest_v2()`):** Covers the domain separator (`"hya.runtime.native-bundle-abi/v2"`), `ABI_VERSION_V2`, `hya_version::VERSION`, `hya_version::BACKEND_VERSION`, `hya_version::RUSTC`, `std::env::consts::{OS, ARCH}`, `hya_tool::native_bundle::abi_digest_v1()`, `size_of`/`align_of` of every ABI-crossing struct and trait object (`NativePluginContext`, `NativeRegistrations`, `HostError`, `AbiError`, `Arc<dyn HostRuntime>`, `Arc<dyn Tool>`, `Arc<dyn Rewriter>`, `Arc<dyn NativeService>`, `Arc<dyn NativeHook>`, `Arc<dyn NativeBundleApiHandler>`, `Arc<dyn ProjectionReducer>`, `Arc<dyn UriSchemaHandler>`, `Arc<dyn NativeDriver>`, `ProviderKindEntry`, `Arc<dyn Protocol>`, `&dyn CompactWire`, `Arc<dyn ProviderAuthFlow>`, `ToolCtx`, `ToolError`, `tokio::runtime::Handle`, `Option<String>`), plus raw source bytes of every `hya-runtime-abi`, `hya-tool-error`, `hya-context`, and `hya-provider` (`hya_provider::NATIVE_ABI_SOURCES`) ABI file.
 
 ### 3.2 `NativePluginContext` & `NativeRegistrations`
 
@@ -303,6 +305,8 @@ pub struct NativeRegistrations {
     pub hook_points: Vec<String>,
     /// Drivers that own a session run (namespaced `<bundle-id>:<name>`).
     pub drivers: Vec<Arc<dyn NativeDriver>>,
+    /// Provider kinds (config `kind` labels) and their optional OAuth flows.
+    pub providers: Vec<hya_provider::ProviderKindEntry>,
 }
 ```
 
@@ -450,6 +454,7 @@ waits for member teardown before deleting the session tree.
 | **`ProjectionReducer`** | `bundle_id`, `initial_state() -> Value`, `apply(&self, state: &mut Value, event: &ExtensionEventContext)`; optional `tool_output_overrides(&self, event: &ExtensionEventContext) -> Vec<ToolOutputOverride>` (default empty) and `observed_bundles() -> &[&str]` (default empty) | Deterministically folds `Event::Extension` records into `Projection::extensions[bundle_id]`. After `apply` succeeds, the host sets each returned `ToolOutputOverride { part: PartId, output: String }` as that tool part's `PartProjection::Tool::eviction_notice`, which later requests send in place of the output; replay rebuilds the same notices only while the reducer's bundle is enabled. Used by `hya/compaction` for `context_evicted`. |
 | **`UriSchemaHandler`** | `scheme`, `writable()`, `read(UriResolveCtx, uri) -> Result<UriContent, HostError>`, `write(UriResolveCtx, uri, content)` | Plugged into `HandleRouter` via `adapt_uri_schema_handler` (`UriSchemaHandleAdapter`). Internal schemes (`artifact`, `skill`, `local`) are protected. |
 | **`NativeDriver`** | `name`, `run(runtime, DriverRequest, cancel) -> Result<DriverReport, HostError>` | A run that owns a session until it returns. The host registers it as `<bundle-id>:<name>` and knows nothing else about it. `DriverRequest` carries `session`, `agent`, `model`, `workdir`, and JSON `args` (for a CLI command, its parsed arguments); `DriverReport` carries `stdout`, `stderr`, and `exit_code`, which the CLI prints and exits with. `DriverRunOutcome` is a shared terminal-outcome type for iterating drivers. Consumers: `hya/goal:goal` (`hya -p`) and `hya/loop:loop` (`hya loop`). |
+| **`ProviderKindEntry`** (`hya_provider`, capability `providers`) | `protocol: Arc<dyn Protocol>` (`kind`, `description`, `encode`, `decoder`, plus defaulted `aliases`, `auth_headers`, `compaction`, `min_output_tokens`, and the `models_*` / `parse_models` catalog adapter); `auth_flow: Option<Arc<dyn ProviderAuthFlow>>` (`oauth_type`, `default_base_url`, `default_model`, `supports_loopback`, `login(OAuthLoginRequest)`, `refresh(&OAuthCredential)`) | One model provider kind. The host keeps the HTTP+SSE transport, the catalog-discovery loop, and credential storage; the protocol is called synchronously and passed through unwrapped, while `login` and `refresh` are polled through `hya_native_with_runtime_v2` like every other async method. Labels, aliases, and OAuth types must be unique across the enabled bundles. |
 
 ### 3.5 `ErasedPlane` & `ExtensionPlanes` (`crates/hya-tool`)
 

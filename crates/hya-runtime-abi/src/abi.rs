@@ -4,6 +4,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 
 use hya_context::rewrite::Rewriter;
+use hya_provider::{CompactWire, Protocol, ProviderAuthFlow, ProviderKindEntry};
 use hya_tool::{Tool, ToolCtx, ToolError};
 use sha2::{Digest, Sha256};
 
@@ -121,6 +122,9 @@ pub struct NativeRegistrations {
     pub hook_points: Vec<String>,
     /// Drivers that own a session run (namespaced `<bundle-id>:<name>`).
     pub drivers: Vec<Arc<dyn NativeDriver>>,
+    /// Provider kinds: a config `kind` label's wire protocol and optional
+    /// OAuth flow.
+    pub providers: Vec<ProviderKindEntry>,
 }
 
 impl NativeRegistrations {
@@ -142,6 +146,7 @@ impl NativeRegistrations {
             && self.uri_schema_handlers.is_empty()
             && self.hook_points.is_empty()
             && self.drivers.is_empty()
+            && self.providers.is_empty()
     }
 
     /// Merge all registrations from `other` into `self`, preserving order.
@@ -155,6 +160,7 @@ impl NativeRegistrations {
         self.uri_schema_handlers.extend(other.uri_schema_handlers);
         self.hook_points.extend(other.hook_points);
         self.drivers.extend(other.drivers);
+        self.providers.extend(other.providers);
     }
 }
 
@@ -186,7 +192,8 @@ impl<E: Display> IntoRegistrationResult for Result<(), E> {
 /// - `std::env::consts::OS` and `std::env::consts::ARCH`,
 /// - `hya_tool::native_bundle::abi_digest_v1()`,
 /// - sizes and alignments of every ABI-crossing context, registration, and trait object type,
-/// - raw source bytes of every `hya-runtime-abi`, `hya-tool-error`, and `hya-context` ABI file.
+/// - raw source bytes of every `hya-runtime-abi`, `hya-tool-error`, `hya-context`, and
+///   `hya-provider` ABI file.
 #[must_use]
 pub fn abi_digest_v2() -> [u8; 32] {
     let mut hash = Sha256::new();
@@ -212,6 +219,10 @@ pub fn abi_digest_v2() -> [u8; 32] {
     record_layout::<Arc<dyn ProjectionReducer>>(&mut hash);
     record_layout::<Arc<dyn UriSchemaHandler>>(&mut hash);
     record_layout::<Arc<dyn NativeDriver>>(&mut hash);
+    record_layout::<ProviderKindEntry>(&mut hash);
+    record_layout::<Arc<dyn Protocol>>(&mut hash);
+    record_layout::<&dyn CompactWire>(&mut hash);
+    record_layout::<Arc<dyn ProviderAuthFlow>>(&mut hash);
     record_layout::<ToolCtx>(&mut hash);
     record_layout::<ToolError>(&mut hash);
     record_layout::<tokio::runtime::Handle>(&mut hash);
@@ -224,6 +235,9 @@ pub fn abi_digest_v2() -> [u8; 32] {
     hash.update(include_bytes!("abi.rs"));
     hash.update(hya_tool_error::NATIVE_ABI_SOURCE);
     for source in hya_context::NATIVE_ABI_SOURCES {
+        hash.update(source);
+    }
+    for source in hya_provider::NATIVE_ABI_SOURCES {
         hash.update(source);
     }
     hash.finalize().into()

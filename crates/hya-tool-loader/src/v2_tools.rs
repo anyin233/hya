@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use hya_bundle::{Bundle, first_party_bundle};
+use hya_bundle::{Bundle, PreparedNativeCapability, first_party_bundle};
 use hya_runtime_abi::{HostRuntime, NativeRegistrations};
 use hya_tool::{AliasVisibility, Tool, ToolPermission, ToolRegistry};
 use serde::Deserialize;
@@ -214,6 +214,27 @@ pub fn register_bundle_tools(
     Ok(())
 }
 
+/// Reject provider kinds from a bundle whose manifest does not declare the
+/// `providers` capability; provider kinds are collected only from bundles
+/// that declare it, so they would otherwise be dropped silently.
+pub(crate) fn check_declared_providers(
+    bundle: &Bundle,
+    regs: &NativeRegistrations,
+) -> Result<(), String> {
+    let declared = bundle.runtime().is_some_and(|runtime| {
+        runtime
+            .capabilities
+            .contains(&PreparedNativeCapability::Providers)
+    });
+    if regs.providers.is_empty() || declared {
+        return Ok(());
+    }
+    Err(format!(
+        "{} registers providers but does not declare the providers capability",
+        bundle.identity().id
+    ))
+}
+
 /// Load an installed (not first-party) native ABI v2 bundle from its prepared
 /// form: stage its packaged library, load it, and register its tools.
 ///
@@ -246,6 +267,7 @@ pub fn load_installed_native_bundle(
     let path = crate::native_bundle::stage_library(&payload, filename)?;
     let regs = crate::v2::load_v2_from_path(identity, &path, runtime)
         .map_err(|error| format!("load {identity}: {error}"))?;
+    check_declared_providers(bundle, &regs)?;
     // An installed bundle's tools stay registered for the process lifetime.
     let origin: &'static str = Box::leak(identity.to_string().into_boxed_str());
     register_bundle_tools(registry, bundle, origin, &regs)?;
@@ -267,4 +289,53 @@ pub fn load_and_register_v2_bundle(
     let regs = load_v2(identity, runtime).map_err(|error| format!("load {identity}: {error}"))?;
     register_v2_bundle_tools(registry, identity, &regs)?;
     Ok(regs)
+}
+
+#[cfg(test)]
+mod tests {
+    use hya_bundle::{Bundle, BundleError, BundleSource, SourceFile, prepare_package};
+    use hya_provider::ProviderKindEntry;
+    use hya_provider::test_support::stub_protocol;
+    use hya_runtime_abi::NativeRegistrations;
+
+    use super::check_declared_providers;
+
+    fn native_bundle(capabilities: &str) -> Result<Bundle, BundleError> {
+        let manifest = format!(
+            "kind: Bundle\nschema_version: 2\nidentity:\n  id: acme/provider-demo\n  version: 1.0.0\n  publisher: acme\nruntime:\n  kind: native\n  abi_version: 2\n  crate_dir: native\n  capabilities: [{capabilities}]\n"
+        );
+        let source = BundleSource::new(
+            "provider-demo",
+            vec![
+                SourceFile::new("bundle.yaml", manifest.into_bytes()),
+                SourceFile::new("native/Cargo.toml", b"[package]\nname = \"p\"\n".as_slice()),
+            ],
+        );
+        Ok(prepare_package(source)?.bundles()[0].clone())
+    }
+
+    #[test]
+    fn rejects_providers_without_declared_capability() -> Result<(), BundleError> {
+        let mut regs = NativeRegistrations::new();
+        assert_eq!(
+            check_declared_providers(&native_bundle("tools")?, &regs),
+            Ok(())
+        );
+        regs.providers.push(ProviderKindEntry {
+            protocol: stub_protocol("demo"),
+            auth_flow: None,
+        });
+        assert_eq!(
+            check_declared_providers(&native_bundle("tools")?, &regs),
+            Err(
+                "acme/provider-demo registers providers but does not declare the providers capability"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            check_declared_providers(&native_bundle("providers, tools")?, &regs),
+            Ok(())
+        );
+        Ok(())
+    }
 }

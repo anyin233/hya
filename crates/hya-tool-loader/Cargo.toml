@@ -16,6 +16,7 @@ futures = { workspace = true }
 hya-bundle = { workspace = true }
 hya-context = { workspace = true }
 hya-proto = { workspace = true }
+hya-provider = { workspace = true }
 hya-runtime-abi = { workspace = true }
 hya-tool = { workspace = true }
 libc = { workspace = true }
@@ -37,6 +38,7 @@ hya-goal = { workspace = true }
 hya-loop = { workspace = true }
 hya-workflow-bundle = { workspace = true }
 hya-tool-error = { workspace = true }
+hya-provider = { workspace = true, features = ["test-support"] }
 
 [[example]]
 name = "test_v2_bundle"

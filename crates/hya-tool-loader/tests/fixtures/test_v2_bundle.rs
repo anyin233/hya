@@ -9,6 +9,9 @@ use async_trait::async_trait;
 use hya_bundle::{ApiMethod, ApiScope};
 use hya_context::rewrite::{RewriteCtx, Rewriter};
 use hya_proto::{ToolName, ToolSchema};
+use hya_provider::{
+    OAuthCredential, OAuthError, OAuthLoginRequest, ProviderAuthFlow, ProviderKindEntry,
+};
 use hya_runtime_abi::{
     DriverReport, DriverRequest, ExtensionEventContext, HookPoint, HostError, HostRuntime,
     NativeApiEndpoint, NativeBundleApiHandler, NativeBundleApiReply, NativeBundleApiRequest,
@@ -371,6 +374,45 @@ impl NativeDriver for TestV2Driver {
     }
 }
 
+struct TestV2AuthFlow;
+
+#[async_trait]
+impl ProviderAuthFlow for TestV2AuthFlow {
+    fn oauth_type(&self) -> &str {
+        "probe-oauth"
+    }
+
+    fn default_base_url(&self) -> &str {
+        "https://probe.invalid/v1"
+    }
+
+    fn default_model(&self) -> &str {
+        "probe-model"
+    }
+
+    async fn login(&self, request: OAuthLoginRequest) -> Result<OAuthCredential, OAuthError> {
+        // A Tokio timer only resolves when the bridge entered this library's runtime.
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        Ok(OAuthCredential {
+            oauth_type: self.oauth_type().to_string(),
+            access_token: format!("access-loopback-{}", request.loopback),
+            refresh_token: "refresh".to_string(),
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
+            account_id: None,
+            id_token: None,
+        })
+    }
+
+    async fn refresh(&self, credential: &OAuthCredential) -> Result<OAuthCredential, OAuthError> {
+        tokio::time::sleep(Duration::from_millis(2)).await;
+        Err(OAuthError::needs_login(
+            "probe",
+            &credential.oauth_type,
+            "refresh revoked",
+        ))
+    }
+}
+
 hya_runtime_abi::export_native_bundle_v2!(|ctx, out| {
     if ctx.bundle_id() == "hya/fail-register" {
         return Err(HostError::InvalidInput(
@@ -401,6 +443,10 @@ hya_runtime_abi::export_native_bundle_v2!(|ctx, out| {
         .push(Arc::new(TestV2Reducer { bundle_id }));
     out.uri_schema_handlers.push(Arc::new(TestV2UriHandler));
     out.drivers.push(Arc::new(TestV2Driver));
+    out.providers.push(ProviderKindEntry {
+        protocol: hya_provider::test_support::stub_protocol("probe-kind"),
+        auth_flow: Some(Arc::new(TestV2AuthFlow)),
+    });
     let _unused: BTreeMap<String, String> = BTreeMap::new();
     Ok::<(), HostError>(())
 });

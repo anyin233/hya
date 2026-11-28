@@ -12,6 +12,7 @@ use hya_proto::{
     ActorClaim, AgentName, Envelope, Event, EventSeq, FinishReason, Message, MessageId, ModelRef,
     Projection, SessionId, ToolCallId, ToolSchema,
 };
+use hya_provider::{OAuthError, OAuthLoginRequest};
 use hya_runtime_abi::{
     AbiError, BundleApiInvocation, BundleApiResult, BundleCatalogSummary, BundleClaimLease,
     BundleClaimRequest, BundleStateEntry, DriverRequest, ExtensionEntry, ExtensionEventContext,
@@ -757,6 +758,45 @@ async fn cdylib_v2_registration_runtime_bridge_and_host_dispatch()
 
     // Ensure ToolSchema is valid
     let _schema: ToolSchema = regs.tools[0].schema();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn loads_provider_kind_and_bridges_auth_flow_login() -> Result<(), Box<dyn std::error::Error>>
+{
+    let lib_path = find_example_cdylib("test_v2_bundle")?;
+    let runtime: Arc<dyn HostRuntime> = Arc::new(MockHostRuntime::default());
+    let regs = load_v2_from_path("hya/probe-provider", &lib_path, runtime)?;
+    let [entry] = regs.providers.as_slice() else {
+        return Err(format!("expected one provider kind, got {}", regs.providers.len()).into());
+    };
+    assert_eq!(entry.protocol.kind(), "probe-kind");
+    let flow = entry.auth_flow.as_ref().ok_or("expected an auth flow")?;
+    assert_eq!(flow.oauth_type(), "probe-oauth");
+    assert_eq!(flow.default_base_url(), "https://probe.invalid/v1");
+    assert!(!flow.supports_loopback());
+
+    // Both async calls sleep on the bundle's Tokio timer, so they only
+    // complete when the adapter enters the bundle runtime on every poll.
+    let credential = flow
+        .login(OAuthLoginRequest {
+            loopback: true,
+            browser: None,
+            timeout: std::time::Duration::from_secs(5),
+        })
+        .await?;
+    assert_eq!(credential.oauth_type, "probe-oauth");
+    assert_eq!(credential.access_token, "access-loopback-true");
+    let refresh = flow
+        .refresh(&credential)
+        .await
+        .err()
+        .ok_or("expected refresh to need a login")?;
+    assert!(
+        matches!(&refresh, OAuthError::NeedsLogin { oauth_type, .. } if oauth_type == "probe-oauth"),
+        "{refresh}"
+    );
     Ok(())
 }
 
