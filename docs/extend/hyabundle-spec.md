@@ -141,6 +141,8 @@ version_ref: hya                # Optional: builtin bundles only; resolved to ve
 
 namespace: my-bundle            # Optional: defaults to <name>; reserved: mcp, harness, builtin, plugin
 overrides: hya/bare             # Optional: declare bundle-level override of another bundle (e.g. hya/bare)
+requires: [hya/agent-channels]  # Optional: bundles that must be enabled with this one (see "Prerequisites and default agent")
+default_agent: my-lead          # Optional: this bundle's `role: main` Agent that becomes the default primary agent
 
 # Unified runtime declaration: static (default) | js | native
 runtime:
@@ -193,7 +195,7 @@ agents:
   #   model_policy: { category: quick, reasoning: low }
   #   resource_view: { allow: [...], deny: [...], aliases: {...} }
   #   advertise: [...]
-  #   can_spawn: [...]
+  #   can_spawn: [...]         # Agent ids, or ["*"] for every non-private agent
   #   private: false
   #   handoff: model            # model | deterministic
   #   hook_refs: [tool.execute.before]
@@ -295,6 +297,29 @@ cli:
 Preparation rejects an invalid name, a leaf without exactly one route, a `driver` route on a non-native bundle, an `api` route to an undeclared endpoint of a JS bundle, duplicate names or flags, `conflicts_with` naming an unknown argument, `database` on a driver route or on `kind: prompt`, `value: session` or `routed_refuse` without `database`, more than one `value: session` argument, and a `routed_refuse` entry without exactly one known `arg` or `flag` and a `reason`. At startup `hya` rejects a command that shadows a core command or that two enabled bundles both contribute.
 
 A user-installed native bundle (`runtime.library`) contributes commands the same way, and keeps them under `--bare`; [`bundles/examples/cli-driver-example`](../../bundles/examples/cli-driver-example) routes one command to a driver, one to a native Global BundleApi endpoint, and two `database: true` commands to a Global and a Session-scope endpoint.
+
+#### Prerequisites and default agent (`requires:`, `default_agent:`, `can_spawn: ["*"]`)
+
+A bundle names the bundles it cannot work without in `requires:`, and may make one of its Agents the default primary agent with `default_agent:` ([ADR-0040](../adr/0040-context-kernel-is-the-only-core.md) §5: bare to full is composition).
+
+```yaml
+requires: [hya/agent-channels]  # bundle ids (<publisher>/<name>)
+default_agent: my-lead
+agents:
+  - id: my-lead
+    role: main
+    can_spawn: ["*"]            # may spawn every non-private agent of the catalog
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `requires` | list of `<publisher>/<name>` | Bundles that must be enabled with this one. A requirement is met by a bundle with that id or by a bundle that `overrides` it. Preparation sorts the list and removes duplicates. |
+| `default_agent` | Agent id | This bundle's Agent that becomes the default primary agent while the bundle is enabled. |
+| `agents[].can_spawn` | list of Agent ids, or `["*"]` | `"*"` grants spawning every non-private agent in the catalog, including agents installed later. |
+
+Preparation rejects a `requires` entry that is not a `<publisher>/<name>` id or names the bundle itself; a `default_agent` that does not name a non-private `role: main` Agent of the same bundle; `"*"` combined with other `can_spawn` entries; and `"*"` in a bundle with a `workflow:` (a Workflow's Agent closure needs explicit ids). When the enabled set misses a prerequisite, a built-in bundle fails startup with a message naming the missing bundle, and an installed or project bundle is left out with a warning; nothing is enabled implicitly. At most one enabled bundle may declare `default_agent`; with none, the core's `hya-bare` agent is the default.
+
+Prepared bundles carry both fields only when they are declared, so the digest of a bundle that uses neither does not change.
 
 ---
 
@@ -439,7 +464,7 @@ model_policy:
   reasoning: low                # Optional: low | medium | high
 handoff: deterministic          # model (default) | deterministic
 private: false                  # true = internal to workflows or explicit callers
-can_spawn: []                   # Allowed child agent IDs
+can_spawn: []                   # Allowed child agent IDs, or ["*"] for every non-private agent
 advertise: []                   # Optional subset of tools advertised to the model
 hook_refs: []                   # Local hook IDs from this bundle only
 resource_view:
