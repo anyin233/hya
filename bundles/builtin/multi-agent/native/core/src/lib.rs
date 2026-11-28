@@ -54,8 +54,8 @@ pub use handoff::{
 pub use hook::{MULTI_AGENT_LIFECYCLE_HOOK_ID, MultiAgentLifecycleHook};
 pub use reducer::{MultiAgentProjectionReducer, decode_multi_agent_projection};
 pub use service::{
-    MULTI_AGENT_SERVICE_ID, MemberTarget, MembersSnapshot, MultiAgentService, USER_STEER_PREFIX,
-    resolve_member_target,
+    ArchivedAgentRow, MULTI_AGENT_SERVICE_ID, MemberTarget, MembersSnapshot, MultiAgentService,
+    USER_STEER_PREFIX, resolve_member_target,
 };
 pub use tools::{ArchiveTool, ListAgentsTool, SearchAgentTool, TaskTool};
 
@@ -69,7 +69,7 @@ pub fn register_bundle(out: &mut hya_runtime_abi::NativeRegistrations) {
     out.tools
         .push(Arc::new(TaskTool) as Arc<dyn hya_tool::Tool>);
     out.tools
-        .push(Arc::new(SearchAgentTool) as Arc<dyn hya_tool::Tool>);
+        .push(Arc::new(SearchAgentTool::new(Arc::clone(&service))) as Arc<dyn hya_tool::Tool>);
     out.tools
         .push(Arc::new(ArchiveTool) as Arc<dyn hya_tool::Tool>);
     out.tools

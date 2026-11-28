@@ -7,11 +7,13 @@ use async_trait::async_trait;
 use hya_proto::ToolSchema;
 use hya_tool::tool::obj_schema;
 use hya_tool::{
-    Action, AgentDef, InlineAgent, LifecyclePlane, MailboxPlane, Resource, SpawnError, SpawnMember,
-    SpawnerPlane, Tool, ToolCtx, ToolError,
+    Action, AgentDef, InlineAgent, LifecyclePlane, Resource, SpawnError, SpawnMember, SpawnerPlane,
+    Tool, ToolCtx, ToolError,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+
+use crate::MultiAgentService;
 
 /// List available agent definitions that the caller can spawn via `task`.
 pub struct ListAgentsTool;
@@ -510,7 +512,17 @@ fn render_single(result: TaskResult) -> Value {
 }
 
 /// Search archived direct subagents by their final state handoff.
-pub struct SearchAgentTool;
+pub struct SearchAgentTool {
+    service: Arc<MultiAgentService>,
+}
+
+impl SearchAgentTool {
+    /// Build the tool over the bundle's managed service.
+    #[must_use]
+    pub fn new(service: Arc<MultiAgentService>) -> Self {
+        Self { service }
+    }
+}
 
 #[derive(Deserialize)]
 struct SearchAgentInput {
@@ -541,11 +553,11 @@ impl Tool for SearchAgentTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: SearchAgentInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let mailbox = ctx
-            .extension::<MailboxPlane>()
-            .cloned()
-            .unwrap_or_else(MailboxPlane::disconnected);
-        let rows = mailbox.search_agents(input.query).await?;
+        let session = ctx
+            .session
+            .ok_or_else(|| ToolError::Input("search_agent runs only inside a session".into()))?;
+        let runtime = self.service.runtime()?;
+        let rows = MultiAgentService::search_archived(&*runtime, session, &input.query).await?;
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {

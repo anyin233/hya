@@ -30,14 +30,14 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ArchiveTool, HandleNamer, HandleRng, ListAgentsTool, MAX_SUBAGENT_DEPTH, MULTI_AGENT_BUNDLE_ID,
-    MultiAgentBundleApiHandler, MultiAgentLifecycleHook, MultiAgentProjectionReducer,
-    MultiAgentService, SearchAgentTool, SubagentGovernor, SubagentLimits, TaskTool, TeamCheckpoint,
-    TerminalHandoffOptions, acquire_actor_claim, build_handoff_messages,
-    decode_multi_agent_projection, generate_terminal_handoff, list_active_actor_claims,
-    load_team_checkpoint, mint_leaf, operator_names, read_actor_claim, recover_stale_actor_claims,
-    release_actor_claim, renew_actor_claim, resolve_member_target, save_team_checkpoint,
-    team_leaves,
+    ArchiveTool, ArchivedAgentRow, HandleNamer, HandleRng, ListAgentsTool, MAX_SUBAGENT_DEPTH,
+    MULTI_AGENT_BUNDLE_ID, MultiAgentBundleApiHandler, MultiAgentLifecycleHook,
+    MultiAgentProjectionReducer, MultiAgentService, SearchAgentTool, SubagentGovernor,
+    SubagentLimits, TaskTool, TeamCheckpoint, TerminalHandoffOptions, acquire_actor_claim,
+    build_handoff_messages, decode_multi_agent_projection, generate_terminal_handoff,
+    list_active_actor_claims, load_team_checkpoint, mint_leaf, operator_names, read_actor_claim,
+    recover_stale_actor_claims, release_actor_claim, renew_actor_claim, resolve_member_target,
+    save_team_checkpoint, team_leaves,
 };
 
 struct MockHost {
@@ -1164,7 +1164,7 @@ async fn service_lifecycle_bundle_api_and_wait_work_over_host_runtime() {
 async fn native_tools_validate_schemas_and_execute() {
     let list = ListAgentsTool;
     let task = TaskTool;
-    let search = SearchAgentTool;
+    let search = SearchAgentTool::new(Arc::new(MultiAgentService::new()));
     let archive = ArchiveTool;
     assert_eq!(list.name(), "list_agents");
     assert_eq!(task.name(), "task");
@@ -1202,9 +1202,7 @@ async fn native_tools_validate_schemas_and_execute() {
 
 #[tokio::test]
 async fn search_archived_lists_own_archived_direct_children_by_query() {
-    use crate::service::ArchivedAgentRow;
-
-    let host = MockHost::new();
+    let host = Arc::new(MockHost::new());
     let root = SessionId::new();
     let worker = SessionId::new();
     let scout = SessionId::new();
@@ -1288,37 +1286,37 @@ async fn search_archived_lists_own_archived_direct_children_by_query() {
 
     // The root (unregistered, so `main`) sees only its own archived children,
     // sorted by handle; the live lead and the grandchild are excluded.
-    let all = MultiAgentService::search_archived(&host, root, "  ")
+    let all = MultiAgentService::search_archived(&*host, root, "  ")
         .await
         .unwrap();
     assert_eq!(all, vec![scout_row.clone(), worker_row.clone()]);
     // The query matches goal/pending digests and the agent type, case-insensitively.
     assert_eq!(
-        MultiAgentService::search_archived(&host, root, "QUARTZ")
+        MultiAgentService::search_archived(&*host, root, "QUARTZ")
             .await
             .unwrap(),
         vec![worker_row.clone()]
     );
     assert_eq!(
-        MultiAgentService::search_archived(&host, root, "wire")
+        MultiAgentService::search_archived(&*host, root, "wire")
             .await
             .unwrap(),
         vec![worker_row]
     );
     assert_eq!(
-        MultiAgentService::search_archived(&host, root, "scout")
+        MultiAgentService::search_archived(&*host, root, "scout")
             .await
             .unwrap(),
         vec![scout_row]
     );
     assert!(
-        MultiAgentService::search_archived(&host, root, "nothing")
+        MultiAgentService::search_archived(&*host, root, "nothing")
             .await
             .unwrap()
             .is_empty()
     );
     // A live member sees its own archived children only.
-    let lead_rows = MultiAgentService::search_archived(&host, lead, "")
+    let lead_rows = MultiAgentService::search_archived(&*host, lead, "")
         .await
         .unwrap();
     assert_eq!(
@@ -1330,7 +1328,33 @@ async fn search_archived_lists_own_archived_direct_children_by_query() {
     );
     // A session with no team handle is rejected.
     assert!(matches!(
-        MultiAgentService::search_archived(&host, stray, "").await,
+        MultiAgentService::search_archived(&*host, stray, "").await,
         Err(HostError::InvalidInput(_))
     ));
+
+    // The `search_agent` tool reads the same rows through the started service.
+    let service = Arc::new(MultiAgentService::new());
+    service.start(host.clone()).await.unwrap();
+    let permission = PermissionPlane::new(PermissionRules::new(Vec::new()))
+        .0
+        .with_invocation_model(PermissionModel::Danger);
+    let mut ctx = ToolCtx::new(std::env::temp_dir(), permission, CancellationToken::new());
+    ctx.session = Some(root);
+    let out = SearchAgentTool::new(Arc::clone(&service))
+        .execute(&ctx, json!({ "query": "wire" }))
+        .await
+        .unwrap();
+    assert_eq!(out["title"], json!("1 archived agent(s)"));
+    assert_eq!(
+        out["agents"],
+        json!([{
+            "handle": "main/hya-task-amiya",
+            "agent_type": "hya-task",
+            "session": worker.to_string(),
+            "goal": "Goal Fix the quartz parser",
+            "pending": "Pending tasks wire tests",
+            "degraded": false,
+        }])
+    );
+    service.stop().await.unwrap();
 }
